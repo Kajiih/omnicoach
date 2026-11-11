@@ -1,6 +1,9 @@
 //! Language-agnostic architectural component specification (`ArchitectureSpec`) and per-file
 //! conformance evaluators (`CodeLintProject`).
 
+use super::config::{
+    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, compile_glob,
+};
 use super::layout::{
     PathOrigin, ProjectLayout, ROOT_MODULE_TAG, is_in_module_subtree, is_python_package_init,
     is_rust_crate_root, resolve_inherited_component_with_root, resolve_relative_python_package,
@@ -13,9 +16,6 @@ use crate::code_lint::ast::python::{
     summarize_python_file,
 };
 use crate::code_lint::ast::rust::{DefinedComponentEntry, RustFileSummary, summarize_rust_file};
-use crate::config::{
-    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, compile_glob,
-};
 use crate::diagnostic::{Language, SourceSpan};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;

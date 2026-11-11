@@ -8,7 +8,8 @@ use super::facts::{
 use super::index::{DirectedEdge, GraphIndex};
 use super::model::{AbstractionGraph, DeclarationKind, DeclarationNode, NodeId};
 use crate::code_lint::ast::Visibility;
-use crate::config::{ArchitectureConfig, Config};
+use crate::code_lint::project::ArchitectureConfig;
+use crate::config::Config;
 use crate::diagnostic::Language;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -67,7 +68,7 @@ pub fn run_slice_query(options: &SliceQueryOptions, config: &Config) -> anyhow::
         &options.symbols,
         options.hops.max(1),
         options.budget.max(100),
-        config.architecture.as_ref(),
+        config.project.architecture.as_ref(),
     )
 }
 
@@ -86,7 +87,7 @@ pub fn run_find_query(options: &FindQueryOptions, config: &Config) -> anyhow::Re
         &sources,
         &options.pattern,
         options.limit.max(1),
-        config.architecture.as_ref(),
+        config.project.architecture.as_ref(),
     )
 }
 

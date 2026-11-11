@@ -6,7 +6,7 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{AnyCodeRule, RuleTarget};
 use crate::code_lint::project::{
     ArchitectureError, DiskFileSource, OverlayFileSource, ProjectContext, ProjectIndex,
-    ProjectLayout, configured_source_roots,
+    ProjectLayout, is_rooted_path, lexical_normalize,
 };
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::suppression::{
@@ -58,7 +58,7 @@ pub fn lint_virtual_file(
     virtual_content: &str,
     config: &Config,
 ) -> Result<Vec<Diagnostic>, ArchitectureError> {
-    let raw_root = if crate::config::is_rooted_path(project_root) {
+    let raw_root = if is_rooted_path(project_root) {
         project_root.to_path_buf()
     } else {
         std::env::current_dir().map_or_else(
@@ -66,15 +66,15 @@ pub fn lint_virtual_file(
             |working_dir| working_dir.join(project_root),
         )
     };
-    let normalized_root = crate::config::lexical_normalize(&raw_root);
-    let raw_target = if crate::config::is_rooted_path(target_path) {
+    let normalized_root = lexical_normalize(&raw_root);
+    let raw_target = if is_rooted_path(target_path) {
         target_path.to_path_buf()
     } else if let Ok(stripped) = target_path.strip_prefix(project_root) {
         normalized_root.join(stripped)
     } else {
         normalized_root.join(target_path)
     };
-    let resolved_target = crate::config::lexical_normalize(&raw_target);
+    let resolved_target = lexical_normalize(&raw_target);
     let display_path = target_path
         .strip_prefix(project_root)
         .or_else(|_| resolved_target.strip_prefix(&normalized_root))
@@ -83,8 +83,8 @@ pub fn lint_virtual_file(
         return Ok(Vec::new());
     };
     let mut effective_config = config.clone();
-    if effective_config.root_dir.is_none() {
-        effective_config.root_dir = Some(normalized_root);
+    if effective_config.project.root_dir.is_none() {
+        effective_config.project.root_dir = Some(normalized_root);
     }
     let is_test = effective_config.is_test_path(&resolved_target);
     let may_have_inline_tests = lang == Language::Rust;
@@ -108,7 +108,7 @@ pub fn lint_virtual_file(
         DiskFileSource,
         HashMap::from([(resolved_target.clone(), virtual_content.to_owned())]),
     );
-    let configured_roots = configured_source_roots(&effective_config);
+    let configured_roots = effective_config.project.configured_source_roots();
     let layout = ProjectLayout::discover(&resolved_target, &overlay, &configured_roots);
     let index =
         attach_configured_architecture(ProjectIndex::new(layout, &overlay), &effective_config);
@@ -221,7 +221,7 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
         rule.requires_project_context() && !config.disabled_rules.contains(&rule.name())
     });
     let disk = DiskFileSource;
-    let configured_roots = configured_source_roots(config);
+    let configured_roots = config.project.configured_source_roots();
     let mut project_indices: Vec<ProjectIndex<'_>> = Vec::new();
     let mut target_project_idx: Vec<Option<usize>> = Vec::with_capacity(targets.len());
     if has_project_rules {
@@ -432,12 +432,12 @@ fn attach_configured_architecture<'a>(
     index: ProjectIndex<'a>,
     config: &Config,
 ) -> ProjectIndex<'a> {
-    let applies_to_project = config.root_dir.as_deref().map_or_else(
-        || config.architecture.is_some(),
+    let applies_to_project = config.project.root_dir.as_deref().map_or_else(
+        || config.project.architecture.is_some(),
         |config_root| index.layout().project_root.starts_with(config_root),
     );
     if applies_to_project {
-        index.with_architecture_config(config.architecture.clone())
+        index.with_architecture_config(config.project.architecture.clone())
     } else {
         index
     }
@@ -1254,17 +1254,32 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let service_path = write_protocol_project(temp.path());
         let virtual_content = fs::read_to_string(&service_path).expect("read service.py");
-        let mut config = config_enabling(&["uninherited-protocol"]);
-        config.per_file_ignores = vec![(
-            crate::config::compile_glob("pkg/**")
+        let unignored_config = config_enabling(&["uninherited-protocol"]);
+        let mut ignored_config = unignored_config.clone();
+        ignored_config.per_file_ignores = vec![(
+            crate::code_lint::project::compile_glob("pkg/**")
                 .expect("valid glob")
                 .compile_matcher(),
             HashSet::from([RuleName("uninherited-protocol")]),
         )];
 
-        let diagnostics = lint_virtual_file(temp.path(), &service_path, &virtual_content, &config)
-            .expect("project without architecture declarations lints");
-        assert_eq!(diagnostics, Vec::new());
+        let unignored = lint_virtual_file(
+            temp.path(),
+            &service_path,
+            &virtual_content,
+            &unignored_config,
+        )
+        .expect("unignored control lints");
+        let ignored = lint_virtual_file(
+            temp.path(),
+            &service_path,
+            &virtual_content,
+            &ignored_config,
+        )
+        .expect("ignored target lints");
+
+        assert_eq!(unignored.len(), 1);
+        assert_eq!(ignored, Vec::new());
     }
 
     #[test]
@@ -1340,8 +1355,8 @@ mod tests {
         let engine_py = app_src.join("core/engine.py");
         fs::write(&engine_py, "from app.api.handler import handle\n").expect("write engine.py");
         let mut config = config_enabling(&["undeclared-component-dependency"]);
-        config.root_dir = Some(root.to_path_buf());
-        config.architecture = Some(
+        config.project.root_dir = Some(root.to_path_buf());
+        config.project.architecture = Some(
             toml::from_str(indoc::indoc! {r#"
                 source-roots = ["packages/app/src"]
 
@@ -1397,8 +1412,8 @@ mod tests {
 
         let mut config =
             config_enabling(&["unowned-external-dependency", "private-component-import"]);
-        config.root_dir = Some(root.to_path_buf());
-        config.architecture = Some(
+        config.project.root_dir = Some(root.to_path_buf());
+        config.project.architecture = Some(
             toml::from_str(indoc::indoc! {r#"
                 [[components]]
                 name = "HttpA"

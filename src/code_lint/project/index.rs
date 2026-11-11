@@ -5,6 +5,7 @@ use super::architecture::{
     evaluate_file_architecture_with_summary, evaluate_stray_rust_component_markers,
     resolve_architecture_spec,
 };
+use super::config::{ArchitectureConfig, CONFIG_FILE_NAME};
 use super::layout::{ProjectLayout, is_python_package_init, resolve_relative_python_module};
 use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
@@ -13,7 +14,6 @@ use crate::code_lint::ast::python::{
     summarize_python_file,
 };
 use crate::code_lint::ast::rust::{RustFileSummary, summarize_rust_module_header};
-use crate::config::{ArchitectureConfig, CONFIG_FILE_NAME};
 use crate::diagnostic::Language;
 use rayon::prelude::*;
 use serde::Deserialize;

@@ -1,8 +1,8 @@
 //! Project boundary, source-root layout, and module-path resolution (`ProjectLayout`).
 
+use super::config::{is_rooted_path, lexical_normalize};
 use super::source::FileSource;
 use crate::code_lint::ast::rust::ExternalModDeclaration;
-use crate::config::{Config, is_rooted_path, lexical_normalize};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -351,30 +351,6 @@ pub fn resolve_relative_python_module(
         (None, Some(tail)) => Some(tail.to_owned()),
         (None, None) => Some(String::new()),
     }
-}
-
-/// Collects deduplicated Python source roots configured in `[context]` and `[architecture]`.
-///
-/// Like the other paths of `.omnicoach.toml`, the roots are anchored at the configuration root
-/// (`Config::root_dir`), so that they name the same directories from every sub-package; without
-/// a configuration root they stay relative to the discovered project root.
-#[must_use]
-pub fn configured_source_roots(config: &Config) -> Vec<PathBuf> {
-    let architecture_roots = config
-        .architecture
-        .iter()
-        .flat_map(|architecture| &architecture.source_roots);
-    let mut roots: Vec<PathBuf> = Vec::new();
-    for relative in config.context.source_roots.iter().chain(architecture_roots) {
-        let root = config.root_dir.as_deref().map_or_else(
-            || PathBuf::from(relative),
-            |config_root| lexical_normalize(&config_root.join(relative)),
-        );
-        if !roots.contains(&root) {
-            roots.push(root);
-        }
-    }
-    roots
 }
 
 /// Computes the crate-relative `::`-separated module path of a Rust source file path.
@@ -802,15 +778,15 @@ mod tests {
                 ("packages/app/src/app/main.py", ""),
             ],
         );
-        let config = Config {
+        let config = super::super::config::ProjectConfig {
             context: toml::from_str(r#"source-roots = ["packages/app/src"]"#).unwrap(),
             root_dir: Some(root.to_path_buf()),
-            ..Config::default()
+            ..super::super::config::ProjectConfig::default()
         };
         let layout = ProjectLayout::discover(
             &root.join("packages/app/src/app/main.py"),
             &source,
-            &configured_source_roots(&config),
+            &config.configured_source_roots(),
         );
 
         assert_eq!(layout.project_root, root.join("packages/app"));

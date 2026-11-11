@@ -181,7 +181,9 @@ fn test_code_lint_with_violations() {
 fn test_code_lint_invalid_config() {
     let temp_dir = tempfile::tempdir().unwrap();
     fs::write(
-        temp_dir.path().join(omnicoach::config::CONFIG_FILE_NAME),
+        temp_dir
+            .path()
+            .join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         "select = [invalid syntax]",
     )
     .unwrap();
@@ -451,7 +453,9 @@ fn test_cli_select_and_ignore_override_toml_and_explain() {
         "},
     );
     fs::write(
-        temp_dir.path().join(omnicoach::config::CONFIG_FILE_NAME),
+        temp_dir
+            .path()
+            .join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         "select = [\"nested-function\"]\n",
     )
     .unwrap();
@@ -493,7 +497,9 @@ fn test_cli_select_and_ignore_override_toml_and_explain() {
 fn test_selector_without_effect_is_warned_about_on_stderr() {
     let temp_dir = create_temp_file("test.py", "VALUE = 1\n");
     fs::write(
-        temp_dir.path().join(omnicoach::config::CONFIG_FILE_NAME),
+        temp_dir
+            .path()
+            .join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         "select = [\"testing\", \"test-timing\"]\n",
     )
     .unwrap();
@@ -762,7 +768,7 @@ fn test_global_config_fallback_for_code_and_repo_precedence() {
     let output_fallback = command_fallback.output().unwrap();
 
     fs::write(
-        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        repo_dir.join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         "select = [\"nested-function\"]\n",
     )
     .unwrap();
@@ -790,7 +796,7 @@ fn test_global_config_precedence_for_command() {
 
     // Repo config selects only python, which would disable command rules if repo config won
     fs::write(
-        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        repo_dir.join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         "select = [\"python\"]\n",
     )
     .unwrap();
@@ -823,7 +829,7 @@ fn test_hook_global_config_precedence_for_command() {
 
     // Repo config selects only python, which would disable command rules if repo config won
     fs::write(
-        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        repo_dir.join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         "select = [\"python\"]\n",
     )
     .unwrap();
@@ -870,7 +876,7 @@ fn test_global_config_precedence_for_explain() {
 
     // Repo config selects only python, which would disable command rules if repo config won
     fs::write(
-        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        repo_dir.join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         "select = [\"python\"]\n",
     )
     .unwrap();
@@ -900,7 +906,7 @@ fn test_subdirectory_invocation_discovers_ancestor_config_and_anchors_globs() {
     fs::create_dir_all(&tests_dir).unwrap();
 
     fs::write(
-        repo_dir.join(omnicoach::config::CONFIG_FILE_NAME),
+        repo_dir.join(omnicoach::code_lint::project::CONFIG_FILE_NAME),
         indoc! {r#"
             [per-file-ignores]
             "tests/**" = ["single-letter-name"]

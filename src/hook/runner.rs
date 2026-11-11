@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::{VirtualFile, apply_virtual_edit};
+use crate::code_lint::project::{is_rooted_path, lexical_normalize};
 use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
 use crate::command_lint::runner::run_command_lint_with_client;
 use crate::command_lint::vcs::{JjCliClient, JjClient};
-use crate::config::{Config, is_rooted_path, lexical_normalize};
+use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Language, RuleName};
 use crate::rule_selection::{
     ConfigOverrides, discover_project_root, load_command_config_from_root, load_config_from_root,

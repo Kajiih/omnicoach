@@ -106,8 +106,6 @@ define_architecture! {
     Diff                => [],
     /// What every rule states about itself: name, template, languages, options, classification and doc (`rule_declaration`).
     RuleDeclaration     => [Diagnostic],
-    /// Project configuration resolved from `.omnicoach.toml` (`config`).
-    Config              => [Diagnostic, RuleDeclaration],
 
     // --- Static Code Analysis Domain (`code_lint`) ---
     /// Parsed files and the syntax queries rules share, with parser crates encapsulated behind them (`code_lint::ast`).
@@ -115,9 +113,11 @@ define_architecture! {
     /// Cross-language facts computed over the AST: bindings, calls, comments (`code_lint::semantic`).
     CodeLintSemantic    => [CodeLintAst],
     /// Multi-file project facts, cross-module symbol resolution, and component/path conformance (`code_lint::project`).
-    CodeLintProject     => [CodeLintAst, Config, Diagnostic],
+    CodeLintProject     => [CodeLintAst, Diagnostic],
     /// The code rule contract: a declaration, a file target and a check function (`code_lint::contract`).
     CodeLintContract    => [CodeLintProject, CodeLintSemantic, CodeLintAst, RuleDeclaration],
+    /// Rule-selection and per-rule override configuration resolved from `.omnicoach.toml` (`config`).
+    Config              => [CodeLintProject, Diagnostic, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeLintSuppression => [CodeLintContract, CodeLintSemantic, RuleDeclaration, Config],
     /// Policy shared by several code rules or by a rule and the test harness, built from AST facts (`code_lint::policy`).

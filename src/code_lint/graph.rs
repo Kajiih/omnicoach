@@ -112,7 +112,7 @@ fn generate_project_graphs(
             &title,
             lang,
             &lang_files,
-            config.architecture.as_ref(),
+            config.project.architecture.as_ref(),
         );
         let graph = build_project_graph(&project_facts, depth)?;
         sections.push(render_graph(&graph, format));

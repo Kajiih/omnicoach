@@ -851,7 +851,7 @@ fn validate_and_parse_project_files<'a>(
                 "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': stub file '{relative_path}' has a syntax error:\n{content}",
             );
             parsed_files.push((relative_path, parsed));
-        } else if relative_path == crate::config::CONFIG_FILE_NAME
+        } else if relative_path == crate::code_lint::project::CONFIG_FILE_NAME
             && let Err(error) = toml::from_str::<VirtualProjectToml>(content)
         {
             panic!(
@@ -999,16 +999,18 @@ fn discover_virtual_project_layout(
 ) -> ProjectLayout {
     let parsed_config = files
         .iter()
-        .find_map(|&(path, content)| (path == crate::config::CONFIG_FILE_NAME).then_some(content))
+        .find_map(|&(path, content)| {
+            (path == crate::code_lint::project::CONFIG_FILE_NAME).then_some(content)
+        })
         .and_then(|content| toml::from_str::<VirtualProjectToml>(content).ok())
-        .map(|virtual_toml| crate::config::Config {
+        .map(|virtual_toml| crate::code_lint::project::ProjectConfig {
             context: virtual_toml.context,
             architecture: virtual_toml.architecture,
-            ..crate::config::Config::default()
+            ..crate::code_lint::project::ProjectConfig::default()
         });
     let root_refs = parsed_config
         .as_ref()
-        .map(crate::code_lint::project::configured_source_roots)
+        .map(crate::code_lint::project::ProjectConfig::configured_source_roots)
         .unwrap_or_default();
     ProjectLayout::discover(root, memory, &root_refs)
 }
@@ -1017,8 +1019,8 @@ fn discover_virtual_project_layout(
 #[serde(rename_all = "kebab-case")]
 struct VirtualProjectToml {
     #[serde(default)]
-    context: crate::config::ContextConfig,
-    architecture: Option<crate::config::ArchitectureConfig>,
+    context: crate::code_lint::project::ContextConfig,
+    architecture: Option<crate::code_lint::project::ArchitectureConfig>,
 }
 
 #[track_caller]

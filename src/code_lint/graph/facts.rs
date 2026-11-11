@@ -7,12 +7,12 @@ use crate::code_lint::ast::{
     collect_intra_file_references, collect_scope_facts, enclosing_scope_symbol,
 };
 use crate::code_lint::project::{
-    ArchitectureSpec, DiskFileSource, FileSource as _, MemoryFileSource, ProjectIndex,
-    ProjectLayout, ResolvedPythonTarget, configured_source_roots, is_python_package_init,
-    is_rust_crate_root, normalize_relative_path, resolve_relative_python_module,
-    resolve_rust_reference_path, rust_module_path,
+    ArchitectureConfig, ArchitectureSpec, DiskFileSource, FileSource as _, MemoryFileSource,
+    ProjectIndex, ProjectLayout, ResolvedPythonTarget, is_python_package_init, is_rust_crate_root,
+    normalize_relative_path, resolve_relative_python_module, resolve_rust_reference_path,
+    rust_module_path,
 };
-use crate::config::{ArchitectureConfig, Config};
+use crate::config::Config;
 use crate::diagnostic::Language;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -727,7 +727,7 @@ pub(super) fn collect_project_source_files(
                 continue;
             };
             let source = fs::read_to_string(path)?;
-            let configured_roots = configured_source_roots(config);
+            let configured_roots = config.project.configured_source_roots();
             let layout = ProjectLayout::discover(path, &DiskFileSource, &configured_roots);
             let resolved_path = layout.resolve_query_path(path);
             let relative_path = resolved_path
@@ -791,7 +791,7 @@ pub(super) fn derive_project_title(paths: &[PathBuf]) -> String {
 }
 
 fn collect_directory_source_files(dir: &Path, config: &Config, out: &mut Vec<CollectedSourceFile>) {
-    let configured_roots = configured_source_roots(config);
+    let configured_roots = config.project.configured_source_roots();
     let layout = ProjectLayout::discover(dir, &DiskFileSource, &configured_roots);
     let resolved_dir = layout.resolve_query_path(dir);
     let walk_root = if resolved_dir == layout.project_root

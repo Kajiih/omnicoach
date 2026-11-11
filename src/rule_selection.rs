@@ -21,10 +21,11 @@ use strum::IntoEnumIterator as _;
 
 pub use self::taxonomy::{AnalyzedInput, Derived, Facet, RegisteredRule, Tag, registered_topics};
 use self::taxonomy::{REGISTERED_RULES, Selector};
-use crate::config::{
-    ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, Config, ContextConfig,
+use crate::code_lint::project::{
+    ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig,
     compile_glob,
 };
+use crate::config::Config;
 use crate::diagnostic::RuleName;
 use crate::diff::detect_vcs_at;
 use crate::rule_declaration::{RuleOptionsError, RuleOverrides};
@@ -357,11 +358,13 @@ pub fn parse_config_with_overrides(
     Ok(Config {
         disabled_rules,
         rule_overrides,
-        context: raw.context,
+        project: ProjectConfig {
+            context: raw.context,
+            root_dir: None,
+            architecture: raw.architecture,
+        },
         per_file_ignores,
-        root_dir: None,
         warnings,
-        architecture: raw.architecture,
     })
 }
 
@@ -427,7 +430,7 @@ fn load_domain_config(
 ) -> Result<Config, ConfigError> {
     let resolved = resolve_domain_config(start_directory, overrides, domain)?;
     let mut config = parse_config_with_overrides(&resolved.content, overrides)?;
-    config.root_dir = Some(resolved.root_dir);
+    config.project.root_dir = Some(resolved.root_dir);
     Ok(config)
 }
 

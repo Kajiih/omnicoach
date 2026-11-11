@@ -1,6 +1,6 @@
 //! Filesystem abstraction for disk, hermetic in-memory tests, and unsaved hook buffer overlays.
 
-use crate::config::{is_rooted_path, lexical_normalize};
+use super::config::{is_rooted_path, lexical_normalize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
