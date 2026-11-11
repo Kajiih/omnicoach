@@ -302,6 +302,15 @@ pub fn is_rooted_path(path: &Path) -> bool {
     path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_)))
 }
 
+/// Resolves `path` against `cwd` when `path` is relative, normalizing `.` and `..` lexically.
+#[must_use]
+pub fn resolve_against_cwd(path: &Path, cwd: Option<&Path>) -> PathBuf {
+    cwd.filter(|_| !is_rooted_path(path)).map_or_else(
+        || lexical_normalize(path),
+        |base| lexical_normalize(&base.join(path)),
+    )
+}
+
 /// Compiles `pattern` with `*` matching across `/`, as all config globs do.
 ///
 /// # Errors

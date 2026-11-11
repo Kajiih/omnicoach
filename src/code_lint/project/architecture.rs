@@ -13,8 +13,7 @@ use super::layout::{
 use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    PythonFileSummary, PythonImportReference, collect_python_import_references,
-    summarize_python_file,
+    PythonImportReference, collect_python_import_references, summarize_python_file,
 };
 use crate::code_lint::ast::rust::{DefinedComponentEntry, RustFileSummary, summarize_rust_file};
 use crate::diagnostic::{Language, SourceSpan};
@@ -314,22 +313,18 @@ pub struct FileArchitectureFindings {
     pub reexported_public_items: Vec<ReexportedPublicItemFinding>,
 }
 
-/// Evaluates the component-level architectural conformance rules for `file` (`path`), reusing an
-/// optional pre-computed [`PythonFileSummary`] when `file` is a Python module.
+/// Evaluates the component-level architectural conformance rules for `file` (`path`).
 #[must_use]
-pub(super) fn evaluate_file_architecture_with_summary(
+pub(super) fn evaluate_file_architecture(
     file: &ParsedFile,
     path: &Path,
     layout: &ProjectLayout,
     source: &dyn FileSource,
     spec: &ArchitectureSpec,
-    python_summary: Option<&PythonFileSummary>,
 ) -> FileArchitectureFindings {
     match file.lang() {
         Language::Rust => evaluate_rust_file_architecture(file, path, layout, spec),
-        Language::Python => {
-            evaluate_python_file_architecture(file, path, layout, source, spec, python_summary)
-        }
+        Language::Python => evaluate_python_file_architecture(file, path, layout, source, spec),
     }
 }
 
@@ -801,7 +796,6 @@ fn evaluate_python_file_architecture(
     layout: &ProjectLayout,
     source: &dyn FileSource,
     spec: &ArchitectureSpec,
-    python_summary: Option<&PythonFileSummary>,
 ) -> FileArchitectureFindings {
     if spec.from_rust_macros {
         return FileArchitectureFindings::default();
@@ -818,7 +812,6 @@ fn evaluate_python_file_architecture(
             path,
             &module_path,
             spec,
-            python_summary,
             &mut findings.unmapped_architecture_modules,
         );
     }
@@ -1302,20 +1295,9 @@ fn collect_python_unmapped_findings(
     path: &Path,
     module_path: &str,
     spec: &ArchitectureSpec,
-    cached_summary: Option<&PythonFileSummary>,
     out: &mut Vec<UnmappedArchitectureModuleFinding>,
 ) {
-    let owned_summary;
-    #[expect(
-        clippy::option_if_let_else,
-        reason = "closure cannot return reference to outer delayed-init binding"
-    )]
-    let py_summary = if let Some(existing) = cached_summary {
-        existing
-    } else {
-        owned_summary = summarize_python_file(file);
-        &owned_summary
-    };
+    let py_summary = summarize_python_file(file);
     if py_summary.non_routing_items.is_empty() {
         let is_pure_package_router = is_python_package_init(path)
             && (module_path == ROOT_MODULE_TAG
@@ -1858,7 +1840,6 @@ mod tests {
             &layout,
             &source,
             &spec,
-            None,
         );
 
         assert_eq!(

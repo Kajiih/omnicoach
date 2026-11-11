@@ -1,6 +1,6 @@
 //! Filesystem abstraction for disk, hermetic in-memory tests, and unsaved hook buffer overlays.
 
-use super::config::{is_rooted_path, lexical_normalize};
+use super::config::{lexical_normalize, resolve_against_cwd};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
@@ -88,9 +88,21 @@ impl FileSource for DiskFileSource {
                 directory.display().to_string(),
             ));
         }
+        // Disable host global gitignore (`~/.config/git/ignore`) so developer-machine patterns
+        // (such as ignoring `/tmp` or scratch prefixes) never hide target project source files.
         let mut files: Vec<PathBuf> = ignore::WalkBuilder::new(directory)
             .require_git(false)
-            .filter_entry(|entry| entry.depth() == 0 || !should_skip_walk_entry(entry.file_name()))
+            .git_global(false)
+            .filter_entry(|entry| {
+                entry.depth() == 0
+                    || !should_skip_entry(
+                        entry.path(),
+                        entry
+                            .file_type()
+                            .is_some_and(|file_type| file_type.is_dir()),
+                        &Self,
+                    )
+            })
             .build()
             .filter_map(Result::ok)
             .map(ignore::DirEntry::into_path)
@@ -156,11 +168,7 @@ impl MemoryFileSource {
     }
 
     fn resolve_path(&self, path: &Path) -> PathBuf {
-        if is_rooted_path(path) {
-            lexical_normalize(path)
-        } else {
-            lexical_normalize(&self.root.join(path))
-        }
+        resolve_against_cwd(path, Some(&self.root))
     }
 }
 
@@ -294,9 +302,7 @@ impl<B: FileSource> FileSource for OverlayFileSource<B> {
         for path in self.overlays.keys() {
             if let Ok(relative) = path.strip_prefix(&norm_dir)
                 && !relative.as_os_str().is_empty()
-                && relative
-                    .components()
-                    .all(|component| !should_skip_walk_entry(component.as_os_str()))
+                && !should_skip_overlay_path(&norm_dir, relative, self)
             {
                 files.insert(path.clone());
             }
@@ -309,14 +315,24 @@ impl<B: FileSource> FileSource for OverlayFileSource<B> {
     }
 }
 
-fn resolve_against_cwd(path: &Path, cwd: Option<&Path>) -> PathBuf {
-    if is_rooted_path(path) {
-        lexical_normalize(path)
-    } else if let Some(cwd) = cwd {
-        lexical_normalize(&cwd.join(path))
-    } else {
-        lexical_normalize(path)
+fn should_skip_overlay_path<S: FileSource + ?Sized>(
+    base_dir: &Path,
+    relative: &Path,
+    source: &S,
+) -> bool {
+    if should_skip_entry(relative, false, source) {
+        return true;
     }
+    let mut cursor = base_dir.to_path_buf();
+    if let Some(parent) = relative.parent() {
+        for component in parent.components() {
+            cursor.push(component.as_os_str());
+            if should_skip_entry(&cursor, true, source) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn walk_file_source_recursive<S: FileSource + ?Sized>(
@@ -328,10 +344,11 @@ fn walk_file_source_recursive<S: FileSource + ?Sized>(
         return;
     };
     for entry in entries {
-        if entry.file_name().is_some_and(should_skip_walk_entry) {
+        let is_dir = source.is_dir(&entry);
+        if should_skip_entry(&entry, is_dir, source) {
             continue;
         }
-        if source.is_dir(&entry) {
+        if is_dir {
             walk_file_source_recursive(source, &entry, out);
         } else if source.is_file(&entry) {
             out.push(entry);
@@ -339,10 +356,23 @@ fn walk_file_source_recursive<S: FileSource + ?Sized>(
     }
 }
 
-fn should_skip_walk_entry(file_name: &OsStr) -> bool {
-    file_name.to_str().is_some_and(|name| {
-        name.starts_with('.') || matches!(name, "target" | "__pycache__" | "node_modules" | "venv")
-    })
+fn should_skip_entry<S: FileSource + ?Sized>(path: &Path, is_dir: bool, source: &S) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    if name.starts_with('.') && name != "." && name != ".." {
+        return true;
+    }
+    is_dir
+        && (matches!(name, "__pycache__" | "node_modules" | "venv")
+            || (name == "target" && is_cargo_target_dir(path, source)))
+}
+
+fn is_cargo_target_dir<S: FileSource + ?Sized>(directory: &Path, source: &S) -> bool {
+    source.is_file(&directory.join("CACHEDIR.TAG"))
+        || directory
+            .parent()
+            .is_some_and(|parent| source.is_file(&parent.join("Cargo.toml")))
 }
 
 #[cfg(test)]
@@ -387,6 +417,7 @@ mod tests {
             root,
             &[
                 (".git/config", "ignored"),
+                ("target/CACHEDIR.TAG", "Signature: 8a477f59"),
                 ("target/debug/out.rs", "ignored"),
                 ("pkg/__init__.py", "X = 1"),
                 ("pkg/a.py", "A = 1"),
@@ -410,5 +441,28 @@ mod tests {
             vec![root.join("pkg/sub/b.py")]
         );
         assert!(overlay.walk_files(Path::new("nonexistent")).is_err());
+    }
+
+    #[test]
+    fn walk_files_keeps_source_target_modules_while_skipping_cargo_target_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::create_dir_all(root.join("src/target")).unwrap();
+        fs::create_dir_all(root.join("pkg/target")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        fs::write(root.join("target/debug/generated.rs"), "pub fn gen() {}\n").unwrap();
+        fs::write(root.join("src/target/mod.rs"), "pub fn compile() {}\n").unwrap();
+        fs::write(root.join("pkg/target/deploy.py"), "def deploy(): pass\n").unwrap();
+
+        let disk_walked = DiskFileSource.walk_files(root).unwrap();
+        assert_eq!(
+            disk_walked,
+            vec![
+                root.join("Cargo.toml"),
+                root.join("pkg/target/deploy.py"),
+                root.join("src/target/mod.rs"),
+            ]
+        );
     }
 }

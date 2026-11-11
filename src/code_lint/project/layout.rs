@@ -1,6 +1,6 @@
 //! Project boundary, source-root layout, and module-path resolution (`ProjectLayout`).
 
-use super::config::{is_rooted_path, lexical_normalize};
+use super::config::{is_rooted_path, lexical_normalize, resolve_against_cwd};
 use super::source::FileSource;
 use crate::code_lint::ast::rust::ExternalModDeclaration;
 use serde::Deserialize;
@@ -11,6 +11,7 @@ const INIT_STEM: &str = "__init__";
 const INIT_PY: &str = "__init__.py";
 const INIT_PYI: &str = "__init__.pyi";
 const CARGO_TOML: &str = "Cargo.toml";
+const PYPROJECT_TOML: &str = "pyproject.toml";
 const PYTHON_EXTENSION: &str = "py";
 const PYTHON_STUB_EXTENSION: &str = "pyi";
 const RUST_EXTENSION: &str = "rs";
@@ -103,10 +104,7 @@ impl ProjectLayout {
     ) -> Self {
         let is_relative_anchor = !is_rooted_path(anchor);
         let working_directory = is_relative_anchor.then(|| source.current_dir()).flatten();
-        let resolved_anchor = match (&working_directory, is_relative_anchor) {
-            (Some(base), true) => lexical_normalize(&base.join(anchor)),
-            _ => lexical_normalize(anchor),
-        };
+        let resolved_anchor = resolve_against_cwd(anchor, working_directory.as_deref());
         let start_directory = if source.is_dir(&resolved_anchor) {
             resolved_anchor
         } else {
@@ -294,15 +292,11 @@ impl ProjectLayout {
     /// absolute) when `path` is relative.
     #[must_use]
     pub(super) fn resolve_query_path(&self, path: &Path) -> PathBuf {
-        if is_rooted_path(path) {
-            lexical_normalize(path)
-        } else {
-            let base = self
-                .working_directory
-                .as_deref()
-                .unwrap_or(&self.project_root);
-            lexical_normalize(&base.join(path))
-        }
+        let base = self
+            .working_directory
+            .as_deref()
+            .unwrap_or(&self.project_root);
+        resolve_against_cwd(path, Some(base))
     }
 
     /// Merges additional discovered Python source roots into this layout in specificity order
@@ -583,6 +577,15 @@ pub(super) fn is_python_package_init(path: &Path) -> bool {
     )
 }
 
+/// Returns true if `directory` contains a `.jj` or `.git` repository/worktree boundary.
+#[must_use]
+pub(super) fn is_vcs_boundary(directory: &Path, source: &dyn FileSource) -> bool {
+    let git_marker = directory.join(".git");
+    source.is_dir(&directory.join(".jj"))
+        || source.is_dir(&git_marker)
+        || source.is_file(&git_marker)
+}
+
 /// Normalizes `path` using forward slashes, stripping any leading `./` prefix.
 #[must_use]
 pub(super) fn normalize_relative_path(path: &Path) -> String {
@@ -645,12 +648,13 @@ struct CargoLibTarget {
 }
 
 fn find_project_root(start_directory: &Path, source: &dyn FileSource) -> Option<PathBuf> {
-    let markers = [".omnicoach.toml", "pyproject.toml", CARGO_TOML];
+    let markers = [".omnicoach.toml", PYPROJECT_TOML, CARGO_TOML];
     let mut current = Some(start_directory);
     while let Some(directory) = current {
         if markers
             .iter()
             .any(|marker| source.is_file(&directory.join(marker)))
+            || is_vcs_boundary(directory, source)
         {
             return Some(directory.to_path_buf());
         }
@@ -697,22 +701,41 @@ fn infer_python_source_roots(
             roots.push(cursor.to_path_buf());
         }
     }
-    if !source.is_file(&project_root.join(CARGO_TOML)) {
-        for candidate_name in [SOURCE_DIRECTORY, "python", "Lib"] {
-            let candidate = project_root.join(candidate_name);
-            if source.is_dir(&candidate)
-                && !source.is_file(&candidate.join(INIT_PY))
-                && !source.is_file(&candidate.join(INIT_PYI))
-                && !roots.contains(&candidate)
-            {
-                roots.push(candidate);
-            }
+    let has_cargo_toml = source.is_file(&project_root.join(CARGO_TOML));
+    let has_pyproject_toml = source.is_file(&project_root.join(PYPROJECT_TOML));
+    for candidate_name in [SOURCE_DIRECTORY, "python", "Lib"] {
+        let candidate = project_root.join(candidate_name);
+        let allow_candidate = candidate_name != SOURCE_DIRECTORY
+            || !has_cargo_toml
+            || (has_pyproject_toml && directory_contains_python_package(&candidate, source));
+        if allow_candidate
+            && is_non_package_directory(&candidate, source)
+            && !roots.contains(&candidate)
+        {
+            roots.push(candidate);
         }
     }
     if !roots.contains(&project_root.to_path_buf()) {
         roots.push(project_root.to_path_buf());
     }
     roots
+}
+
+fn is_non_package_directory(directory: &Path, source: &dyn FileSource) -> bool {
+    source.is_dir(directory)
+        && !source.is_file(&directory.join(INIT_PY))
+        && !source.is_file(&directory.join(INIT_PYI))
+}
+
+fn directory_contains_python_package(directory: &Path, source: &dyn FileSource) -> bool {
+    source
+        .read_dir(directory)
+        .unwrap_or_default()
+        .into_iter()
+        .any(|entry| {
+            source.is_dir(&entry)
+                && (source.is_file(&entry.join(INIT_PY)) || source.is_file(&entry.join(INIT_PYI)))
+        })
 }
 
 fn python_module_from_resolved(
@@ -887,5 +910,46 @@ mod tests {
             Some("lib".to_owned())
         );
         assert_eq!(rust_module_path(r"src\sub\mod.rs"), "sub");
+    }
+
+    #[test]
+    fn discover_stops_at_vcs_boundary_and_infers_maturin_python_roots() {
+        let outer = Path::new("/outer");
+        let worktree_source = MemoryFileSource::from_relative_files(
+            outer,
+            &[
+                ("Cargo.toml", "[package]\nname = \"outer\"\n"),
+                ("worktree/.jj/repo", ""),
+                ("worktree/pkg/__init__.py", ""),
+                ("worktree/pkg/mod.py", ""),
+            ],
+        );
+        let maturin_root = Path::new("/maturin");
+        let maturin_source = MemoryFileSource::from_relative_files(
+            maturin_root,
+            &[
+                ("Cargo.toml", "[package]\nname = \"ext\"\n"),
+                ("pyproject.toml", "[project]\nname = \"ext\"\n"),
+                ("src/lib.rs", ""),
+                ("src/src_pkg/__init__.py", ""),
+                ("src/src_pkg/core.py", ""),
+                ("python/py_pkg/__init__.py", ""),
+                ("python/py_pkg/api.py", ""),
+            ],
+        );
+
+        let worktree_layout =
+            ProjectLayout::discover(&outer.join("worktree/pkg/mod.py"), &worktree_source, &[]);
+        let maturin_layout = ProjectLayout::discover(maturin_root, &maturin_source, &[]);
+
+        assert_eq!(worktree_layout.project_root, outer.join("worktree"));
+        assert_eq!(
+            maturin_layout.python_module_of_path(&maturin_root.join("src/src_pkg/core.py")),
+            Some("src_pkg.core".to_owned())
+        );
+        assert_eq!(
+            maturin_layout.python_module_of_path(&maturin_root.join("python/py_pkg/api.py")),
+            Some("py_pkg.api".to_owned())
+        );
     }
 }

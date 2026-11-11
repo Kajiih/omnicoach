@@ -2,13 +2,12 @@
 
 use super::architecture::{
     ArchitectureError, ArchitectureSpec, FileArchitectureFindings, RUST_ARCHITECTURE_MODULE,
-    evaluate_file_architecture_with_summary, evaluate_stray_rust_component_markers,
-    resolve_architecture_spec,
+    evaluate_file_architecture, evaluate_stray_rust_component_markers, resolve_architecture_spec,
 };
 use super::config::{CONFIG_FILE_NAME, ProjectConfig, ProjectTomlError};
 use super::layout::{
-    LIB_CRATE_ROOT, ProjectLayout, is_python_package_init, resolve_relative_python_module,
-    resolve_rust_reference_path,
+    LIB_CRATE_ROOT, ProjectLayout, is_python_package_init, is_vcs_boundary,
+    resolve_relative_python_module, resolve_rust_reference_path,
 };
 use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
@@ -20,6 +19,7 @@ use crate::code_lint::ast::rust::{RustFileSummary, summarize_rust_module_header}
 use crate::diagnostic::Language;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -99,6 +99,7 @@ pub(super) enum ResolvedPythonTarget {
 
 type PythonSlot = Arc<OnceLock<Option<Arc<PythonFileSummary>>>>;
 type RustSlot = Arc<OnceLock<Option<Arc<RustFileSummary>>>>;
+type CachedArchitectureFindings = (SourceFingerprint, Arc<FileArchitectureFindings>);
 
 /// Memoized cross-file summary index for a single CLI, hook, or test invocation.
 pub struct ProjectIndex<'s> {
@@ -109,7 +110,7 @@ pub struct ProjectIndex<'s> {
     rust_slots: Mutex<HashMap<String, RustSlot>>,
     all_rust_headers: OnceLock<BTreeMap<String, Arc<RustFileSummary>>>,
     resolved_architecture: OnceLock<Result<Option<ArchitectureSpec>, ArchitectureError>>,
-    architecture_findings_cache: Mutex<HashMap<PathBuf, Arc<FileArchitectureFindings>>>,
+    architecture_findings_cache: Mutex<HashMap<PathBuf, CachedArchitectureFindings>>,
 }
 
 impl<'s> ProjectIndex<'s> {
@@ -730,10 +731,10 @@ impl<'s> ProjectIndex<'s> {
         if self.architecture_error().is_some() {
             return None;
         }
+        let source_text = file.source_text();
         let spec = match file.lang() {
             Language::Python => Some(resolved?),
             Language::Rust => {
-                let source_text = file.source_text();
                 if resolved.is_none()
                     && !source_text.contains(ARCHITECTURE_COMPONENT_CALL_PREFIX)
                     && !source_text.contains("use")
@@ -744,48 +745,23 @@ impl<'s> ProjectIndex<'s> {
                 resolved
             }
         };
+        let fingerprint = source_fingerprint(&source_text);
         let normalized_path = self.layout.resolve_query_path(path);
         {
             let guard = self
                 .architecture_findings_cache
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(cached) = guard.get(&normalized_path) {
+            if let Some((cached_fingerprint, cached)) = guard.get(&normalized_path)
+                && *cached_fingerprint == fingerprint
+            {
                 return Some(Arc::clone(cached));
             }
         }
         let evaluated = Arc::new(spec.map_or_else(
             || evaluate_stray_rust_component_markers(file, &normalized_path, &self.layout),
             |spec| {
-                let cached_python_summary = if file.lang() == Language::Python {
-                    self.layout
-                        .python_module_of_path(&normalized_path)
-                        .filter(|module| {
-                            self.layout
-                                .python_module_file(module, self.source)
-                                .as_deref()
-                                == Some(normalized_path.as_path())
-                        })
-                        .and_then(|module| {
-                            let guard = self
-                                .python_slots
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            guard
-                                .get(&module)
-                                .and_then(|slot| slot.get().and_then(Option::clone))
-                        })
-                } else {
-                    None
-                };
-                evaluate_file_architecture_with_summary(
-                    file,
-                    &normalized_path,
-                    &self.layout,
-                    self.source,
-                    spec,
-                    cached_python_summary.as_deref(),
-                )
+                evaluate_file_architecture(file, &normalized_path, &self.layout, self.source, spec)
             },
         ));
         {
@@ -793,7 +769,7 @@ impl<'s> ProjectIndex<'s> {
                 .architecture_findings_cache
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard.insert(normalized_path, Arc::clone(&evaluated));
+            guard.insert(normalized_path, (fingerprint, Arc::clone(&evaluated)));
         }
         Some(evaluated)
     }
@@ -1376,16 +1352,27 @@ fn find_external_config_file(start_dir: &Path, source: &dyn FileSource) -> Optio
         if source.is_file(&candidate) {
             return Some(candidate);
         }
-        let git_marker = directory.join(".git");
-        if source.is_dir(&directory.join(".jj"))
-            || source.is_dir(&git_marker)
-            || source.is_file(&git_marker)
-        {
+        if is_vcs_boundary(directory, source) {
             break;
         }
         current = directory.parent();
     }
     None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceFingerprint {
+    hash: u64,
+    byte_len: usize,
+}
+
+fn source_fingerprint(source: &str) -> SourceFingerprint {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    SourceFingerprint {
+        hash: hasher.finish(),
+        byte_len: source.len(),
+    }
 }
 
 struct SplitModulePath {
@@ -2138,5 +2125,43 @@ mod tests {
             find_external_config_file(&outer.join("worktree/pkg"), &source),
             None
         );
+    }
+
+    #[test]
+    fn file_architecture_findings_recomputes_when_buffer_changes_at_same_path() {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                (
+                    ".omnicoach.toml",
+                    indoc::indoc! {r#"
+                        [[architecture.components]]
+                        name = "Core"
+                        roots = ["pkg.core"]
+
+                        [[architecture.components]]
+                        name = "Api"
+                        roots = ["pkg.api"]
+                    "#},
+                ),
+                ("pkg/__init__.py", ""),
+                ("pkg/core.py", "def run() -> None: pass\n"),
+                ("pkg/api.py", ""),
+            ],
+        );
+        let index =
+            ProjectIndex::discover_with_config(root, &source, &ProjectConfig::default()).unwrap();
+        let api_path = root.join("pkg/api.py");
+        let clean = ParsedFile::new("x = 1\n", Language::Python);
+        let violating = ParsedFile::new("from pkg.core import run\n", Language::Python);
+
+        let clean_findings = index.file_architecture_findings(&clean, &api_path).unwrap();
+        let fresh_findings = index
+            .file_architecture_findings(&violating, &api_path)
+            .unwrap();
+
+        assert_eq!(clean_findings.undeclared_component_dependencies.len(), 0);
+        assert_eq!(fresh_findings.undeclared_component_dependencies.len(), 1);
     }
 }

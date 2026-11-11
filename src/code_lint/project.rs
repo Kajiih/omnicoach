@@ -22,6 +22,7 @@ pub(crate) use self::config::compile_glob;
 pub use self::config::{
     ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME,
     ContextConfig, ProjectConfig, ProjectTomlError, is_rooted_path, lexical_normalize,
+    resolve_against_cwd,
 };
 pub use self::context::{DocumentedOverrideMethod, ProjectContext};
 #[cfg(test)]
