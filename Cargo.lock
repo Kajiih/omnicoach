@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "omnicoach"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "omnicoach-py"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "omnicoach",
  "pyo3",

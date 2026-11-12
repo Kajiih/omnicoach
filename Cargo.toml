@@ -31,7 +31,7 @@ members = [".", "crates/omnicoach-py", "playground"]
 default-members = ["."]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
 repository = "https://github.com/Kajiih/omnicoach"
