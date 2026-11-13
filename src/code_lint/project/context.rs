@@ -48,11 +48,12 @@ impl<'a> ProjectContext<'a> {
         self.index.layout()
     }
 
-    /// Maps `path` to its canonical dotted Python module path (`"pkg.service"`), if inside a
-    /// Python source root.
+    /// Maps `path` to its canonical dotted Python module path (`"pkg.service"`), or to its
+    /// project-relative fallback module path when `path` is inside the project root outside
+    /// configured Python source roots.
     #[must_use]
     pub fn python_module_of_path(&self, path: &Path) -> Option<String> {
-        self.index.layout().python_module_of_path(path)
+        self.index.layout().python_context_module_of_path(path)
     }
 
     /// Maps `path` to its crate-relative Rust module path (`"code_lint::ast"`), if inside the

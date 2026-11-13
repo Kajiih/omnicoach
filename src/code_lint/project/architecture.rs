@@ -8,6 +8,7 @@ use super::config::{
 use super::layout::ProjectLayout;
 use super::paths::{
     // TODO: Is this the right abstraction to contain language specific components?
+    INIT_STEM,
     PathOrigin,
     ROOT_MODULE_TAG,
     is_in_python_module_subtree,
@@ -167,6 +168,24 @@ impl ArchitectureSpec {
         self.allowed_dependencies
             .get(from_component)
             .is_some_and(|allowed| allowed.contains(target_component))
+    }
+
+    /// Returns true if `module_path` is a root initializer (`"<root>"` or `"__init__"`) or a
+    /// package ancestor of any declared Python component root.
+    // TODO: Is it normal to have python specific logic in this module/component?
+    #[must_use]
+    pub(super) fn routes_to_python_component(&self, module_path: &str) -> bool {
+        if self.from_rust_macros || self.components.is_empty() {
+            return false;
+        }
+        module_path == ROOT_MODULE_TAG
+            || module_path == INIT_STEM
+            || self.components.iter().any(|component| {
+                component
+                    .roots
+                    .iter()
+                    .any(|root| is_in_python_module_subtree(root, module_path))
+            })
     }
 
     fn component_spec(&self, name: &str) -> Option<&ComponentSpec> {
@@ -1338,13 +1357,8 @@ fn collect_python_unmapped_findings(
 ) {
     let py_summary = summarize_python_file(file);
     if py_summary.non_routing_items.is_empty() {
-        let is_pure_package_router = is_python_package_init(path)
-            && (module_path == ROOT_MODULE_TAG
-                || spec.components.iter().any(|comp| {
-                    comp.roots
-                        .iter()
-                        .any(|root| is_in_python_module_subtree(root, module_path))
-                }));
+        let is_pure_package_router =
+            is_python_package_init(path) && spec.routes_to_python_component(module_path);
         if !is_pure_package_router {
             out.push(UnmappedArchitectureModuleFinding {
                 span: default_file_header_span(file),

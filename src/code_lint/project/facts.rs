@@ -435,9 +435,31 @@ fn collect_python_project_facts(
     index: &ProjectIndex<'_>,
     scope: ProjectGraphScope,
 ) -> Result<ProjectFacts, ArchitectureError> {
+    let spec = index.architecture_spec();
+    if let Some(error) = index.architecture_error() {
+        return Err(error.clone());
+    }
     let python_files: Vec<&ProjectSourceFile> = files
         .iter()
-        .filter(|file| file.lang == Language::Python)
+        .filter(|file| {
+            file.lang == Language::Python
+                && !(scope == ProjectGraphScope::FullProject
+                    && spec.is_some()
+                    && index
+                        .layout()
+                        .python_architecture_module_of_path(&file.full_path)
+                        .is_none()
+                    && spec.is_none_or(|resolved| {
+                        let fallback = index.layout().fallback_python_module_path(
+                            &file.full_path,
+                            &file.relative_path,
+                            is_python_package_init(&file.full_path),
+                        );
+                        resolved
+                            .resolve_component_of_module(&fallback, Language::Python)
+                            .is_none()
+                    }))
+        })
         .collect();
     let module_paths = resolved_python_module_paths(&python_files, index.layout());
     let entries: Vec<PythonModuleEntry> = python_files
@@ -445,31 +467,40 @@ fn collect_python_project_facts(
         .zip(module_paths)
         .map(|(file, module_path)| parse_python_module(file, module_path, index))
         .collect();
-    let spec = index.architecture_spec();
-    if let Some(error) = index.architecture_error() {
-        return Err(error.clone());
-    }
-    let cross_module_refs = resolve_python_cross_module_refs(&entries, index);
+    let mut cross_module_refs = resolve_python_cross_module_refs(&entries, index);
     let mut modules = Vec::with_capacity(entries.len());
 
     for entry in entries {
-        let component = spec
-            .and_then(|resolved| {
-                resolved.resolve_component_of_module(&entry.module_path, Language::Python)
-            })
-            .map_or_else(
+        let declared_component = spec.and_then(|resolved| {
+            resolved.resolve_component_of_module(&entry.module_path, Language::Python)
+        });
+        let is_unmapped_pure_router = declared_component.is_none()
+            && entry.is_package_init
+            && !entry.has_non_routing_items
+            && spec.is_some_and(|resolved| resolved.routes_to_python_component(&entry.module_path));
+        if !is_unmapped_pure_router {
+            let component = declared_component.map_or_else(
                 || python_component_name(&entry.module_path, title),
                 str::to_owned,
             );
-        modules.push(ModuleFact {
-            module_path: entry.module_path,
-            path: entry.path,
-            component,
-            scopes: entry.scopes,
-            intra_file_refs: entry.intra_file_refs,
-        });
+            modules.push(ModuleFact {
+                module_path: entry.module_path,
+                path: entry.path,
+                component,
+                scopes: entry.scopes,
+                intra_file_refs: entry.intra_file_refs,
+            });
+        }
     }
 
+    let retained_module_paths: HashSet<&str> = modules
+        .iter()
+        .map(|module| module.module_path.as_str())
+        .collect();
+    cross_module_refs.retain(|reference| {
+        retained_module_paths.contains(reference.source_module.as_str())
+            && retained_module_paths.contains(reference.target_module.as_str())
+    });
     let finalized = finalize_components(spec, &modules, scope);
     Ok(ProjectFacts {
         title: title.to_owned(),
@@ -484,6 +515,7 @@ struct PythonModuleEntry {
     path: String,
     module_path: String,
     is_package_init: bool,
+    has_non_routing_items: bool,
     references: Vec<RawSymbolReference>,
     scopes: Vec<ScopeFacts>,
     intra_file_refs: Vec<IntraFileReference>,
@@ -518,7 +550,8 @@ fn parse_python_module(
 ) -> PythonModuleEntry {
     let is_package_init = is_python_package_init(&file.full_path);
     let parsed = ParsedFile::new(&file.source, Language::Python);
-    index.seed_python_module(&file.full_path, &module_path, &parsed);
+    let summary = index.seed_python_module(&file.full_path, &module_path, &parsed);
+    let has_non_routing_items = !summary.non_routing_items.is_empty();
     let scopes = collect_scope_facts(&parsed);
     let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
     let references = collect_path_references(&parsed)
@@ -533,6 +566,7 @@ fn parse_python_module(
         path: file.relative_path.clone(),
         module_path,
         is_package_init,
+        has_non_routing_items,
         references,
         scopes,
         intra_file_refs,
@@ -760,14 +794,13 @@ fn determine_graph_scope(
     let covers_project_or_rust_root = resolved_dirs.iter().any(|resolved_dir| {
         *resolved_dir == layout.project_root || *resolved_dir == layout.rust_source_root
     });
-    let covers_configured_python_roots = index.project_config().has_configured_python_roots()
-        && !layout.python_source_roots.is_empty()
+    let covers_python_source_roots = !layout.python_source_roots.is_empty()
         && layout.python_source_roots.iter().all(|python_root| {
             resolved_dirs
                 .iter()
                 .any(|resolved_dir| python_root.starts_with(resolved_dir))
         });
-    if covers_project_or_rust_root || covers_configured_python_roots {
+    if covers_project_or_rust_root || covers_python_source_roots {
         ProjectGraphScope::FullProject
     } else {
         ProjectGraphScope::Subset
@@ -1435,6 +1468,95 @@ mod tests {
                 Some(Path::new("/workspace/omnicoach/src"))
             ),
             "omnicoach"
+        );
+    }
+
+    #[test]
+    fn python_project_facts_skip_pure_package_routers_and_out_of_root_scripts_under_architecture() {
+        let files = [
+            (
+                "pyproject.toml",
+                indoc::indoc! {r#"
+                    [project]
+                    name = "polybot"
+                "#},
+            ),
+            (
+                ".omnicoach.toml",
+                indoc::indoc! {r#"
+                    [[architecture.components]]
+                    name = "Core"
+                    roots = ["polybot.core"]
+
+                    [[architecture.components]]
+                    name = "Api"
+                    roots = ["polybot.api"]
+                    depends-on = ["Core"]
+                "#},
+            ),
+            ("src/polybot/__init__.py", "from .core import compute\n"),
+            (
+                "src/polybot/core.py",
+                "def compute() -> int:\n    return 1\n",
+            ),
+            (
+                "src/polybot/api.py",
+                indoc::indoc! {"
+                    from polybot import compute
+
+                    def serve() -> int:
+                        return compute()
+                "},
+            ),
+            ("dev/scripts/__init__.py", ""),
+            (
+                "dev/scripts/check.py",
+                indoc::indoc! {"
+                    from polybot.core import compute
+
+                    def main() -> int:
+                        return compute()
+                "},
+            ),
+        ];
+
+        let project = collect_virtual_facts(
+            "polybot",
+            Language::Python,
+            &files,
+            &ProjectConfig::default(),
+        );
+        let module_paths: Vec<&str> = project
+            .modules
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect();
+        let component_names: Vec<&str> = project
+            .components
+            .iter()
+            .map(|component| component.name.as_str())
+            .collect();
+
+        assert_eq!(module_paths, ["polybot.api", "polybot.core"]);
+        assert_eq!(component_names, ["Core", "Api"]);
+        assert_eq!(
+            project.cross_module_refs,
+            vec![
+                CrossModuleRefFact {
+                    source_module: "polybot.api".to_owned(),
+                    source_symbol: None,
+                    target_module: "polybot.core".to_owned(),
+                    target_symbol: Some("compute".to_owned()),
+                    line: 1,
+                },
+                CrossModuleRefFact {
+                    source_module: "polybot.api".to_owned(),
+                    source_symbol: Some("serve".to_owned()),
+                    target_module: "polybot.core".to_owned(),
+                    target_symbol: Some("compute".to_owned()),
+                    line: 4,
+                },
+            ]
         );
     }
 

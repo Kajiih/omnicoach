@@ -3,7 +3,7 @@
 use super::config::{CONFIG_FILE_NAME, is_rooted_path, lexical_normalize, resolve_against_cwd};
 use super::paths::{
     INIT_PY, INIT_PYI, INIT_STEM, LIB_CRATE_ROOT, MAIN_CRATE_ROOT, ROOT_MODULE_TAG,
-    python_dotted_path, rust_module_from_relative,
+    is_python_package_init, normalize_relative_path, python_dotted_path, rust_module_from_relative,
 };
 use super::source::FileSource;
 use serde::Deserialize;
@@ -104,6 +104,30 @@ impl ProjectLayout {
             &self.python_source_roots,
             false,
         )
+    }
+
+    /// Maps a Python file path to its canonical source-root module path, or to its
+    /// project-relative fallback module path when `path` is inside [`Self::project_root`] outside
+    /// [`Self::python_source_roots`] (such as `tests/*.py` or `scripts/*.py` in a `src/`-layout
+    /// repository).
+    #[must_use]
+    pub(super) fn python_context_module_of_path(&self, path: &Path) -> Option<String> {
+        if let Some(module) = self.python_module_of_path(path) {
+            return Some(module);
+        }
+        let resolved = self.resolve_query_path(path);
+        if !has_python_extension(&resolved) {
+            return None;
+        }
+        let relative = resolved.strip_prefix(&self.project_root).ok()?;
+        let normalized = normalize_relative_path(relative);
+        (!normalized.is_empty()).then(|| {
+            self.fallback_python_module_path(
+                &resolved,
+                &normalized,
+                is_python_package_init(&resolved),
+            )
+        })
     }
 
     /// Maps a Python file path to its canonical dotted module path, returning `"<root>"` when
@@ -249,7 +273,10 @@ impl ProjectLayout {
         directory: &Path,
         source: &dyn FileSource,
     ) -> Option<PathBuf> {
-        if !directory.starts_with(&self.project_root) || directory == self.project_root {
+        if !self.python_source_roots.contains(&self.project_root)
+            || !directory.starts_with(&self.project_root)
+            || directory == self.project_root
+        {
             return None;
         }
         let mut ancestor = directory;
@@ -362,25 +389,29 @@ fn infer_python_source_roots(
     start_directory: &Path,
     source: &dyn FileSource,
 ) -> Vec<PathBuf> {
+    let has_cargo_toml = source.is_file(&project_root.join(CARGO_TOML));
+    let has_pyproject_toml = source.is_file(&project_root.join(PYPROJECT_TOML));
+    let mut container_roots = Vec::new();
+    for candidate_name in [SOURCE_DIRECTORY, "python", "Lib"] {
+        let candidate = project_root.join(candidate_name);
+        let allow_candidate =
+            candidate_name != SOURCE_DIRECTORY || !has_cargo_toml || has_pyproject_toml;
+        if allow_candidate
+            && is_non_package_directory(&candidate, source)
+            && directory_contains_python_source(&candidate, source)
+        {
+            container_roots.push(candidate);
+        }
+    }
+    if !container_roots.is_empty() {
+        return container_roots;
+    }
+
     let mut roots = Vec::new();
     if let Some(inferred) =
         infer_enclosing_package_source_root(project_root, start_directory, source)
     {
         roots.push(inferred);
-    }
-    let has_cargo_toml = source.is_file(&project_root.join(CARGO_TOML));
-    let has_pyproject_toml = source.is_file(&project_root.join(PYPROJECT_TOML));
-    for candidate_name in [SOURCE_DIRECTORY, "python", "Lib"] {
-        let candidate = project_root.join(candidate_name);
-        let allow_candidate = candidate_name != SOURCE_DIRECTORY
-            || !has_cargo_toml
-            || (has_pyproject_toml && directory_contains_python_package(&candidate, source));
-        if allow_candidate
-            && is_non_package_directory(&candidate, source)
-            && !roots.contains(&candidate)
-        {
-            roots.push(candidate);
-        }
     }
     if !roots.contains(&project_root.to_path_buf()) {
         roots.push(project_root.to_path_buf());
@@ -392,12 +423,27 @@ fn is_non_package_directory(directory: &Path, source: &dyn FileSource) -> bool {
     source.is_dir(directory) && !is_python_package_dir(directory, source)
 }
 
-fn directory_contains_python_package(directory: &Path, source: &dyn FileSource) -> bool {
+fn directory_contains_python_source(directory: &Path, source: &dyn FileSource) -> bool {
     source
         .read_dir(directory)
         .unwrap_or_default()
         .into_iter()
-        .any(|entry| source.is_dir(&entry) && is_python_package_dir(&entry, source))
+        .any(|entry| {
+            has_python_extension(&entry)
+                || (source.is_dir(&entry)
+                    && source
+                        .read_dir(&entry)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .any(|nested| has_python_extension(&nested)))
+        })
+}
+
+fn has_python_extension(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some(PYTHON_EXTENSION | PYTHON_STUB_EXTENSION)
+    )
 }
 
 fn python_module_from_resolved(
@@ -603,6 +649,32 @@ mod tests {
         assert_eq!(
             maturin_layout.python_module_of_path(&maturin_root.join("python/py_pkg/api.py")),
             Some("py_pkg.api".to_owned())
+        );
+    }
+
+    #[test]
+    fn infer_python_source_roots_prefers_container_root_over_sibling_dev_packages() {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                ("pyproject.toml", "[project]\nname = \"polybot\"\n"),
+                ("src/polybot/__init__.py", ""),
+                ("src/polybot/core.py", ""),
+                ("dev/scripts/__init__.py", ""),
+                ("dev/scripts/check.py", ""),
+            ],
+        );
+        let from_dev = ProjectLayout::discover(&root.join("dev/scripts/check.py"), &source, &[]);
+
+        assert_eq!(from_dev.python_source_roots, vec![root.join("src")]);
+        assert_eq!(
+            from_dev.python_module_of_path(&root.join("dev/scripts/check.py")),
+            None
+        );
+        assert_eq!(
+            from_dev.infer_package_source_root(&root.join("dev/scripts"), &source),
+            None
         );
     }
 }

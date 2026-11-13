@@ -214,6 +214,7 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
     let mut project_indices: Vec<ProjectIndex<'_>> = Vec::new();
     let mut target_project_idx: Vec<Option<usize>> = Vec::with_capacity(targets.len());
     if has_project_rules {
+        let configured_roots = config.project.configured_source_roots();
         let mut directory_to_project_index: HashMap<PathBuf, usize> = HashMap::new();
         for target in &targets {
             let parent_dir = target
@@ -225,7 +226,7 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
             let index_pos = if let Some(&cached_pos) = directory_to_project_index.get(&parent_dir) {
                 cached_pos
             } else {
-                let base_layout = ProjectLayout::discover(&target.path, &disk, &[]);
+                let base_layout = ProjectLayout::discover(&target.path, &disk, &configured_roots);
                 let resolved_pos = if let Some(existing_pos) = project_indices
                     .iter()
                     .position(|index| index.layout().project_root == base_layout.project_root)

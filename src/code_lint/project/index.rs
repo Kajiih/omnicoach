@@ -150,7 +150,8 @@ impl<'s> ProjectIndex<'s> {
         source: &'s dyn FileSource,
         config: &ProjectConfig,
     ) -> Result<Self, ProjectTomlError> {
-        let base_layout = ProjectLayout::discover(anchor, source, &[]);
+        let configured_roots = config.configured_source_roots();
+        let base_layout = ProjectLayout::discover(anchor, source, &configured_roots);
         Self::from_layout_and_config(base_layout, source, config)
     }
 
@@ -231,9 +232,15 @@ impl<'s> ProjectIndex<'s> {
     }
 
     /// Merges additional inferred Python source roots discovered inside the same `project_root`
-    /// when Python source roots were not explicitly configured in `.omnicoach.toml`.
+    /// when Python source roots were neither explicitly configured nor inferred from a container
+    /// root (`src/`, `python/`, `Lib/`).
     pub fn merge_python_source_roots(&mut self, additional: &[PathBuf]) {
-        if !self.project_config.has_configured_python_roots() {
+        if !self.project_config.has_configured_python_roots()
+            && self
+                .layout
+                .python_source_roots
+                .contains(&self.layout.project_root)
+        {
             self.layout.merge_python_source_roots(additional);
         }
     }
@@ -243,17 +250,10 @@ impl<'s> ProjectIndex<'s> {
     pub fn seed_from_parsed(&self, path: &Path, parsed: &ParsedFile) {
         match parsed.lang() {
             Language::Python => {
-                if let Some(module) = self.layout.python_module_of_path(path) {
-                    let resolved = self.layout.resolve_query_path(path);
-                    if self
-                        .layout
-                        .python_module_file(&module, self.source)
-                        .as_deref()
-                        == Some(resolved.as_path())
-                    {
-                        let slot = self.python_slot(&module);
-                        let _ = slot.get_or_init(|| Some(Arc::new(summarize_python_file(parsed))));
-                    }
+                if let Some(module_path) = self.layout.python_context_module_of_path(path) {
+                    self.seed_python_summary_slots(path, &module_path, || {
+                        Arc::new(summarize_python_file(parsed))
+                    });
                 }
             }
             Language::Rust => {
@@ -268,25 +268,18 @@ impl<'s> ProjectIndex<'s> {
         }
     }
 
-    /// Seeds the memoized [`PythonFileSummary`] for a parsed Python module (`full_path` with
-    /// resolved `module_path`), preserving PEP 561 `.pyi` stub precedence while also populating
-    /// fallback or disambiguated module keys.
+    /// Seeds and returns the memoized [`PythonFileSummary`] for a parsed Python module
+    /// (`full_path` with resolved `module_path`), preserving PEP 561 `.pyi` stub precedence while
+    /// also populating fallback or disambiguated module keys.
     pub(super) fn seed_python_module(
         &self,
         full_path: &Path,
         module_path: &str,
         parsed: &ParsedFile,
-    ) {
-        self.seed_from_parsed(full_path, parsed);
-        let slot = self.python_slot(module_path);
-        if slot.get().is_none()
-            && self
-                .layout
-                .python_module_file(module_path, self.source)
-                .is_none()
-        {
-            let _ = slot.get_or_init(|| Some(Arc::new(summarize_python_file(parsed))));
-        }
+    ) -> Arc<PythonFileSummary> {
+        let summary = Arc::new(summarize_python_file(parsed));
+        self.seed_python_summary_slots(full_path, module_path, || Arc::clone(&summary));
+        summary
     }
 
     /// Seeds the memoized [`RustFileSummary`] for `module` from an already-computed summary.
@@ -1401,6 +1394,37 @@ impl<'s> ProjectIndex<'s> {
             ResolvedPythonTarget::Symbol { .. }
             | ResolvedPythonTarget::Module(_)
             | ResolvedPythonTarget::Unknown => None,
+        }
+    }
+
+    fn seed_python_summary_slots(
+        &self,
+        full_path: &Path,
+        module_path: &str,
+        build_summary: impl Fn() -> Arc<PythonFileSummary>,
+    ) {
+        let mut cached = None;
+        let mut get_summary = || Arc::clone(cached.get_or_insert_with(&build_summary));
+        if let Some(module) = self.layout.python_module_of_path(full_path) {
+            let resolved = self.layout.resolve_query_path(full_path);
+            if self
+                .layout
+                .python_module_file(&module, self.source)
+                .as_deref()
+                == Some(resolved.as_path())
+            {
+                let slot = self.python_slot(&module);
+                let _ = slot.get_or_init(|| Some(get_summary()));
+            }
+        }
+        let slot = self.python_slot(module_path);
+        if slot.get().is_none()
+            && self
+                .layout
+                .python_module_file(module_path, self.source)
+                .is_none()
+        {
+            let _ = slot.get_or_init(|| Some(get_summary()));
         }
     }
 

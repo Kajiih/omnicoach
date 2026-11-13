@@ -248,6 +248,25 @@ crate::test_utils::rule_test!(
                             tags: set[str]
                     "#,
                 },
+                src_layout_tests_import_pydantic_base_model_subclass_exempt => {
+                    "pyproject.toml" => r#"
+                        [project]
+                        name = "pkg"
+                    "#,
+                    "src/pkg/__init__.py" => "",
+                    "src/pkg/base.py" => r#"
+                        from pydantic import BaseModel
+
+                        class FrozenModel(BaseModel):
+                            pass
+                    "#,
+                    "tests/test_models.py" => r#"
+                        from pkg.base import FrozenModel
+
+                        class OrderConfig(FrozenModel):
+                            items: list[str]
+                    "#,
+                },
             ],
             fail: [
                 dataclass_concrete_list_attribute => r#"
