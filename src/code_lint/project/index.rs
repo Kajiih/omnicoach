@@ -643,6 +643,32 @@ impl<'s> ProjectIndex<'s> {
         ancestors
     }
 
+    /// Returns true if `classes[index]` or any of its C3 MRO ancestors (in-file or imported from
+    /// another project module) has a direct external base class whose import-resolved path is one
+    /// of `candidates`.
+    #[must_use]
+    pub(super) fn class_mro_has_base_in(
+        &self,
+        current_module: Option<&str>,
+        classes: &[PythonClassInfo<'_>],
+        index: usize,
+        candidates: &[&str],
+    ) -> bool {
+        self.class_mro_entries(current_module, classes, index)
+            .into_iter()
+            .any(|entry| match entry {
+                ClassMroEntry::Local(local_index) => self.local_class_has_external_base_in(
+                    current_module,
+                    classes,
+                    local_index,
+                    candidates,
+                ),
+                ClassMroEntry::Imported(ancestor_id) => {
+                    self.imported_class_has_external_base_in(&ancestor_id, candidates)
+                }
+            })
+    }
+
     /// Collects all `Protocol`s imported into `module` in deterministic local-name order.
     #[must_use]
     pub(super) fn imported_protocols_in_module(
@@ -956,22 +982,14 @@ impl<'s> ProjectIndex<'s> {
             if base.is_structural_marker() {
                 continue;
             }
-            let base_name = base.unsubscripted_name();
-            if !base_name.contains('.')
-                && let Some(local_index) = (0..index).rev().find(|&candidate| {
-                    classes[candidate].name == base_name
-                        && classes[candidate].is_visible_at(&classes[index])
-                })
-            {
-                direct_bases.push(ClassMroEntry::Local(local_index));
-                continue;
-            }
-            if let Some(module) = current_module
-                && let Some(target_id) =
-                    self.resolve_python_class(module, base_name, Some(module_level_classes_before))
-                && (base_name.contains('.') || target_id.module != module)
-            {
-                direct_bases.push(ClassMroEntry::Imported(target_id));
+            if let Some(entry) = self.resolve_local_class_base(
+                current_module,
+                classes,
+                index,
+                module_level_classes_before,
+                base.unsubscripted_name(),
+            ) {
+                direct_bases.push(entry);
             }
         }
         if direct_bases.is_empty() {
@@ -1006,6 +1024,84 @@ impl<'s> ProjectIndex<'s> {
         active.remove(&index);
 
         c3_merge(self_entry, sequences)
+    }
+
+    fn local_class_has_external_base_in(
+        &self,
+        current_module: Option<&str>,
+        classes: &[PythonClassInfo<'_>],
+        index: usize,
+        candidates: &[&str],
+    ) -> bool {
+        let module_level_classes_before = classes[..index]
+            .iter()
+            .filter(|class| class.is_module_level())
+            .count();
+        classes[index].bases.iter().any(|base| {
+            self.resolve_local_class_base(
+                current_module,
+                classes,
+                index,
+                module_level_classes_before,
+                base.unsubscripted_name(),
+            )
+            .is_none()
+                && base
+                    .resolved_path
+                    .as_deref()
+                    .is_some_and(|path| candidates.contains(&path))
+        })
+    }
+
+    fn imported_class_has_external_base_in(
+        &self,
+        class_id: &PythonClassId,
+        candidates: &[&str],
+    ) -> bool {
+        let Some(summary) = self.python_summary(&class_id.module) else {
+            return false;
+        };
+        let Some(class_summary) = summary.classes.get(class_id.class_index) else {
+            return false;
+        };
+        class_summary.bases.iter().any(|base| {
+            self.resolve_python_class(
+                &class_id.module,
+                &base.unsubscripted_name,
+                Some(class_id.class_index),
+            )
+            .is_none()
+                && base
+                    .resolved_path
+                    .as_deref()
+                    .is_some_and(|path| candidates.contains(&path))
+        })
+    }
+
+    fn resolve_local_class_base(
+        &self,
+        current_module: Option<&str>,
+        classes: &[PythonClassInfo<'_>],
+        index: usize,
+        module_level_classes_before: usize,
+        base_name: &str,
+    ) -> Option<ClassMroEntry> {
+        if !base_name.contains('.')
+            && let Some(local_index) = (0..index).rev().find(|&candidate| {
+                classes[candidate].name == base_name
+                    && classes[candidate].is_visible_at(&classes[index])
+            })
+        {
+            return Some(ClassMroEntry::Local(local_index));
+        }
+        if let Some(module) = current_module
+            && let Some(target_id) =
+                self.resolve_python_class(module, base_name, Some(module_level_classes_before))
+            && (base_name.contains('.') || target_id.module != module)
+        {
+            return Some(ClassMroEntry::Imported(target_id));
+        }
+        None
     }
 
     fn resolve_python_name_bounded(
@@ -1484,6 +1580,7 @@ mod tests {
     use super::*;
     use crate::code_lint::ast::python::extract_classes;
     use crate::code_lint::project::source::MemoryFileSource;
+    use rstest::rstest;
 
     #[test]
     fn architecture_spec_finds_component_declared_after_a_test_gated_item() {
@@ -2163,5 +2260,110 @@ mod tests {
 
         assert_eq!(clean_findings.undeclared_component_dependencies.len(), 0);
         assert_eq!(fresh_findings.undeclared_component_dependencies.len(), 1);
+    }
+
+    #[rstest]
+    #[case::diamond_cross_module(
+        &[
+            ("pkg/__init__.py", ""),
+            ("pkg/root.py", "from pydantic import BaseModel\nclass Root(BaseModel): pass\n"),
+            ("pkg/left.py", "from pkg.root import Root\nclass Left(Root): pass\n"),
+            ("pkg/right.py", "from pkg.root import Root\nclass Right(Root): pass\n"),
+            (
+                "pkg/leaf.py",
+                indoc::indoc! {r"
+                    from pkg.left import Left
+                    from pkg.right import Right
+                    class Leaf(Left, Right): pass
+                "},
+            ),
+        ],
+        "pkg/leaf.py",
+        true
+    )]
+    #[case::cyclic_cross_module(
+        &[
+            ("pkg/__init__.py", ""),
+            ("pkg/first.py", "from pkg.second import Second\nclass First(Second): pass\n"),
+            ("pkg/second.py", "from pkg.first import First\nclass Second(First): pass\n"),
+        ],
+        "pkg/first.py",
+        false
+    )]
+    #[case::package_init_reexport(
+        &[
+            ("pkg/__init__.py", "from .base import FrozenModel\n"),
+            ("pkg/base.py", "from pydantic import BaseModel\nclass FrozenModel(BaseModel): pass\n"),
+            ("pkg/models.py", "from pkg import FrozenModel\nclass OrderConfig(FrozenModel): pass\n"),
+        ],
+        "pkg/models.py",
+        true
+    )]
+    #[case::aliased_import(
+        &[
+            ("pkg/__init__.py", ""),
+            ("pkg/base.py", "from pydantic import BaseModel\nclass FrozenModel(BaseModel): pass\n"),
+            ("pkg/models.py", "from pkg.base import FrozenModel as Base\nclass OrderConfig(Base): pass\n"),
+        ],
+        "pkg/models.py",
+        true
+    )]
+    #[case::module_qualified_base(
+        &[
+            ("pkg/__init__.py", ""),
+            ("pkg/base.py", "from pydantic import BaseModel\nclass FrozenModel(BaseModel): pass\n"),
+            ("pkg/models.py", "import pkg.base\nclass OrderConfig(pkg.base.FrozenModel): pass\n"),
+        ],
+        "pkg/models.py",
+        true
+    )]
+    #[case::function_local_base_model_shadowing(
+        &[
+            ("pkg/__init__.py", ""),
+            (
+                "pkg/models.py",
+                indoc::indoc! {r"
+                    def build() -> None:
+                        class BaseModel: pass
+                        class OrderConfig(BaseModel): pass
+                "},
+            ),
+        ],
+        "pkg/models.py",
+        false
+    )]
+    #[case::wildcard_imported_non_pydantic_base_model(
+        &[
+            ("pkg/__init__.py", ""),
+            ("pkg/base.py", "class BaseModel: pass\n"),
+            ("pkg/models.py", "from pkg.base import *\nclass OrderConfig(BaseModel): pass\n"),
+        ],
+        "pkg/models.py",
+        false
+    )]
+    fn class_mro_has_base_in_resolves_cross_module_and_shadowed_bases(
+        #[case] files: &[(&str, &str)],
+        #[case] target_rel: &str,
+        #[case] expected: bool,
+    ) {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(root, files);
+        let index = ProjectIndex::new(ProjectLayout::discover(root, &source, &[]), &source);
+        let target_path = root.join(target_rel);
+        let text = source.read_to_string(&target_path).unwrap();
+        let parsed = ParsedFile::new(&text, Language::Python);
+        index.seed_from_parsed(&target_path, &parsed);
+        let classes = extract_classes(&parsed);
+        let current_module = index.layout().python_module_of_path(&target_path);
+        let target_index = classes.len() - 1;
+        assert_eq!(
+            index.class_mro_has_base_in(
+                current_module.as_deref(),
+                &classes,
+                target_index,
+                &["BaseModel", "pydantic.BaseModel", "pydantic.main.BaseModel"],
+            ),
+            expected
+        );
     }
 }

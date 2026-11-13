@@ -1,14 +1,41 @@
 //! Flags public Python instance attributes annotated inline inside methods.
 
 use crate::code_lint::ast::ParsedFile;
-use crate::code_lint::ast::python::extract_classes;
-use crate::code_lint::contract::{CodeRule, RuleTarget};
+use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
+use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
+use crate::code_lint::policy::is_pydantic_model;
+use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
     RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
+
+// TODO: Should this stay here or belong to general python ast as something like dataclass/like or something like this?
+// TODO: Is this the right abstraction that's required? or more granular/per field/attribute abstraction?
+const FIELD_SYNTHESIZING_DECORATOR_PATHS: &[&str] = &[
+    "dataclass",
+    "dataclasses.dataclass",
+    "pydantic.dataclasses.dataclass",
+    "define",
+    "frozen",
+    "mutable",
+    "s",
+    "attrs",
+    "attr.define",
+    "attr.frozen",
+    "attr.mutable",
+    "attr.s",
+    "attr.attrs",
+    "attr.dataclass",
+    "attrs.define",
+    "attrs.frozen",
+    "attrs.mutable",
+    "attrs.s",
+    "attrs.attrs",
+    "attrs.dataclass",
+];
 
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Public attribute `self.{name}` of `{class}` is annotated inline in `{function}` with `{expression}`.",
@@ -17,7 +44,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule = CodeRule {
+pub const RULE: ProjectCodeRule<(), &'static [Example]> = ProjectCodeRule {
     declaration: Declaration {
         name: RuleName("inline-public-attribute-annotation"),
         template: &TEMPLATE,
@@ -34,8 +61,9 @@ pub const RULE: CodeRule = CodeRule {
             what_it_does: indoc::indoc! {r"
                 Flags annotated assignments to public instance attributes inside methods, such as
                 `self.retries: int = 3`. Classes that build fields from class-body annotations
-                (dataclasses, `attrs` classes and Pydantic models) are skipped, as are bare `Final`
-                annotations, which a class body cannot hold without a value."},
+                (dataclasses, `attrs` classes and Pydantic models, including subclasses of a
+                project `BaseModel` base class) are skipped, as are bare `Final` annotations, which
+                a class body cannot hold without a value."},
             why_is_this_bad: indoc::indoc! {r"
                 A public attribute is part of a class's external interface. When its type annotation
                 is written inline on `self.attr: Type` inside `__init__` or another method, Python's
@@ -49,9 +77,8 @@ pub const RULE: CodeRule = CodeRule {
                 class's public contract can be prefixed with `_` and annotated either in the class
                 body or inline."},
             known_problems: Some(indoc::indoc! {r"
-                Field-building base classes such as `pydantic.BaseModel` are only recognized as
-                direct bases, so a model that inherits `BaseModel` through an intermediate class is
-                still flagged."}),
+                Base classes in third-party libraries outside project source roots (other than
+                `pydantic.BaseModel`) are not inspected."}),
             references: &[
                 Reference {
                     title: "PEP 526: Syntax for Variable Annotations — Class and instance variable annotations",
@@ -87,12 +114,20 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
-fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+fn check_file(
+    rule: &ProjectCodeRule<(), &'static [Example]>,
+    path: &Path,
+    file: &ParsedFile,
+    project: &ProjectContext<'_>,
+    (): (),
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    for class in extract_classes(file) {
+    let classes = extract_classes(file);
+    let current_module = project.python_module_of_path(path);
+    for (index, class) in classes.iter().enumerate() {
         // Moving the annotation to the body of a field-synthesizing class turns it into a
         // constructor field, and a bare `Final` is invalid in a class body without a value.
-        if class.is_field_synthesizing() {
+        if is_field_synthesizing_class(current_module.as_deref(), &classes, index, project) {
             continue;
         }
         for attribute in class.instance_attribute_annotations() {
@@ -115,6 +150,19 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         }
     }
     diagnostics
+}
+
+/// Returns true if `classes[index]` synthesizes fields from class-body annotations: either via a
+/// direct `@dataclass` / `attrs` decorator on the class itself, or by inheriting from
+/// `pydantic.BaseModel` in its local or cross-module MRO.
+fn is_field_synthesizing_class(
+    current_module: Option<&str>,
+    classes: &[PythonClassInfo<'_>],
+    index: usize,
+    project: &ProjectContext<'_>,
+) -> bool {
+    classes[index].has_decorator_in(FIELD_SYNTHESIZING_DECORATOR_PATHS)
+        || is_pydantic_model(current_module, classes, index, project)
 }
 
 #[cfg(test)]
@@ -269,6 +317,35 @@ crate::test_utils::rule_test!(
                         def __init__(self, record_id: int) -> None:
                             self.record_id: Const = record_id
                 "#,
+                indirect_pydantic_subclass_inline_annotation_exempt => r#"
+                    from pydantic import BaseModel
+
+                    class FrozenModel(BaseModel):
+                        pass
+
+                    class PydanticSummary(FrozenModel):
+                        items: list[int]
+
+                        def model_post_init(self, __context: object) -> None:
+                            self.total: int = sum(self.items)
+                "#,
+                imported_pydantic_base_model_subclass_exempt => {
+                    "pkg/base.py" => r#"
+                        from pydantic import BaseModel
+
+                        class FrozenModel(BaseModel):
+                            pass
+                    "#,
+                    "pkg/models.py" => r#"
+                        from pkg.base import FrozenModel
+
+                        class PydanticSummary(FrozenModel):
+                            items: list[int]
+
+                            def model_post_init(self, __context: object) -> None:
+                                self.total: int = sum(self.items)
+                    "#,
+                },
             ],
             fail: [
                 inline_public_attribute_in_init => r#"
@@ -277,6 +354,31 @@ crate::test_utils::rule_test!(
                             self.host = host
                             self.retries: int = 3
                 "# => "self.retries: int = 3",
+                undecorated_dataclass_subclass_still_flagged => r#"
+                    from dataclasses import dataclass
+
+                    @dataclass
+                    class BaseOrder:
+                        order_id: int
+
+                    class DerivedOrder(BaseOrder):
+                        def __init__(self, order_id: int) -> None:
+                            super().__init__(order_id)
+                            self.total: int = 0
+                "# => "self.total: int = 0",
+                imported_non_pydantic_base_model_still_flagged => {
+                    "pkg/base.py" => r#"
+                        class BaseModel:
+                            pass
+                    "#,
+                    "pkg/models.py" => r#"
+                        from pkg.base import BaseModel
+
+                        class Summary(BaseModel):
+                            def __init__(self) -> None:
+                                self.total: int = 0
+                    "#,
+                } => ("pkg/models.py", "self.total: int = 0"),
                 valueless_inline_public_attribute_in_init => r#"
                     class Server:
                         def __init__(self) -> None:

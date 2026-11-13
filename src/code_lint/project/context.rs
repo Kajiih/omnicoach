@@ -172,6 +172,21 @@ impl<'a> ProjectContext<'a> {
             .resolve_class_ancestors(current_module, classes, index)
     }
 
+    /// Returns true if `classes[index]` or any of its C3 MRO ancestors (in-file or imported from
+    /// another project module) has a direct base class whose import-resolved path is one of
+    /// `candidates`.
+    #[must_use]
+    pub fn class_mro_has_base_in(
+        &self,
+        current_module: Option<&str>,
+        classes: &[PythonClassInfo<'_>],
+        index: usize,
+        candidates: &[&str],
+    ) -> bool {
+        self.index
+            .class_mro_has_base_in(current_module, classes, index, candidates)
+    }
+
     /// Returns all `Protocol`s imported into `module` in deterministic local-name order.
     #[must_use]
     pub fn imported_protocols_in_module(&self, module: &str) -> Vec<ImportedProtocolSummary> {

@@ -1,9 +1,10 @@
 //! Lint policy shared across rules and the test harness (`CodeLintPolicy`).
 //!
-//! Boundary: `code_lint::ast` (`CodeLintAst`) exposes only rule-agnostic language facts (including
-//! standard-library collection taxonomy and syntax positions where the language or API requires a
-//! literal); single-rule policy lives in that rule's file (`CodeLintRules`); policy shared by two
-//! or more rules or by a rule and `TestUtils` lives here (`CodeLintPolicy`).
+//! Boundary: `code_lint::ast` (`CodeLintAst`) and `code_lint::project` (`CodeLintProject`) expose
+//! only rule-agnostic language and project facts (including standard-library collection taxonomy,
+//! cross-module class MROs, and syntax positions where the language or API requires a literal);
+//! single-rule policy lives in that rule's file (`CodeLintRules`); policy shared by two or more
+//! rules or by a rule and `TestUtils` lives here (`CodeLintPolicy`).
 //!
 //! Two tests separate a fact from policy:
 //! 1. **Vocabulary**: a fact is stated and named in terms of the language or standard library
@@ -18,8 +19,10 @@ architecture_component!(CodeLintPolicy);
 
 use crate::code_lint::ast::LiteralValue;
 use crate::code_lint::ast::python::{
-    CollectionShape, PythonCollectionType, PythonFunctionSignature, is_interface_method,
+    CollectionShape, PythonClassInfo, PythonCollectionType, PythonFunctionSignature,
+    is_interface_method,
 };
+use crate::code_lint::project::ProjectContext;
 use crate::rule_declaration::{CountOption, LanguageDefaults, rule_options};
 
 const MIN_STATEMENTS_KEY: &str = "min-statements";
@@ -28,6 +31,8 @@ const MIN_COGNITIVE_COMPLEXITY_KEY: &str = "min-cognitive-complexity";
 const DEFAULT_MIN_COGNITIVE_COMPLEXITY: usize = 6;
 const STATEMENT_COUNT_METRIC: &str = "statement count";
 const COGNITIVE_COMPLEXITY_METRIC: &str = "cognitive complexity";
+const PYDANTIC_BASE_MODEL_PATHS: &[&str] =
+    &["BaseModel", "pydantic.BaseModel", "pydantic.main.BaseModel"];
 
 rule_options! {
     /// Declared threshold options for the Python function-complexity gate shared by docstring
@@ -134,6 +139,18 @@ pub(super) fn is_exempt_from_signature_rules(signature: &PythonFunctionSignature
 #[must_use]
 pub(super) fn is_exempt_from_body_usage_rules(signature: &PythonFunctionSignature<'_>) -> bool {
     is_exempt_from_signature_rules(signature) || signature.has_stub_body()
+}
+
+/// Returns true if `classes[index]` or any of its C3 MRO ancestors (in-file or imported across
+/// project modules) directly inherits from `pydantic.BaseModel`.
+#[must_use]
+pub(super) fn is_pydantic_model(
+    current_module: Option<&str>,
+    classes: &[PythonClassInfo<'_>],
+    index: usize,
+    project: &ProjectContext<'_>,
+) -> bool {
+    project.class_mro_has_base_in(current_module, classes, index, PYDANTIC_BASE_MODEL_PATHS)
 }
 
 /// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or

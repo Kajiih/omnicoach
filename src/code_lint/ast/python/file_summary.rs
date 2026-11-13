@@ -50,6 +50,9 @@ pub enum ExportedAll {
 pub struct PythonBaseSummary {
     /// Unsubscripted written base expression (`Store`, `interfaces.Store`, `Protocol`).
     pub unsubscripted_name: String,
+    /// Canonical path of the unsubscripted base class resolved through the file's imports, or
+    /// `None` when the first segment is defined in the file.
+    pub resolved_path: Option<String>,
     /// True when the base resolves locally to `object`, `Generic`, `Protocol`, or `ABC`.
     pub is_structural_marker: bool,
 }
@@ -355,6 +358,7 @@ fn summarize_class(
         .iter()
         .map(|base| PythonBaseSummary {
             unsubscripted_name: base.unsubscripted_name().to_owned(),
+            resolved_path: base.resolved_path.clone(),
             is_structural_marker: base.is_structural_marker(),
         })
         .collect();

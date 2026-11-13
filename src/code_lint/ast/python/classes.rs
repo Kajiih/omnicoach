@@ -41,8 +41,6 @@ const TYPED_DICT_PATHS: &[&str] = &[
     "typing.TypedDict",
     "typing_extensions.TypedDict",
 ];
-const PYDANTIC_BASE_MODEL_PATHS: &[&str] =
-    &["BaseModel", "pydantic.BaseModel", "pydantic.main.BaseModel"];
 const STRUCTURAL_MARKER_PATHS: &[&str] = &[
     "object",
     "builtins.object",
@@ -69,28 +67,6 @@ const ENUM_BASE_PATHS: &[&str] = &[
     "enum.IntFlag",
     "enum.ReprEnum",
 ];
-const FIELD_SYNTHESIZING_DECORATOR_PATHS: &[&str] = &[
-    "dataclass",
-    "dataclasses.dataclass",
-    "pydantic.dataclasses.dataclass",
-    "define",
-    "frozen",
-    "mutable",
-    "s",
-    "attrs",
-    "attr.define",
-    "attr.frozen",
-    "attr.mutable",
-    "attr.s",
-    "attr.attrs",
-    "attr.dataclass",
-    "attrs.define",
-    "attrs.frozen",
-    "attrs.mutable",
-    "attrs.s",
-    "attrs.attrs",
-    "attrs.dataclass",
-];
 
 /// Represents a base class expression in a Python class definition.
 #[derive(Clone)]
@@ -100,7 +76,7 @@ pub struct PythonBaseClass {
     /// Canonical path of the unsubscripted base class resolved through
     /// [`crate::code_lint::ast::resolve_name`], or `None` when the first segment is defined in the
     /// file.
-    resolved_path: Option<String>,
+    pub(in crate::code_lint) resolved_path: Option<String>,
 }
 
 impl PythonBaseClass {
@@ -335,24 +311,28 @@ impl<'a> PythonClassInfo<'a> {
     }
 
     /// The annotated attributes the class declares, in source order: class-body annotations
-    /// (`x: T`), then `self.<name>: T` annotations in `__init__`, each recording whether a method
-    /// of the class mutates it in place.
+    /// (`x: T`), then `self.<name>: T` annotations in `__init__`, each recording whether it is in
+    /// the class body and whether a method of the class mutates it in place.
     #[must_use]
     pub fn annotated_attributes(&self) -> Vec<PythonAnnotatedAttribute<'a>> {
         let mutated = collect_mutated_class_attr_names(&self.definition.body, &self.name);
         self.class_body_attribute_annotations()
             .into_iter()
+            .map(|(name, type_node)| (name, type_node, true))
             .chain(
                 self.instance_attribute_annotations()
                     .into_iter()
                     .filter(|attr| attr.method_name == INIT_METHOD)
-                    .map(|attr| (attr.name, attr.annotation)),
+                    .map(|attr| (attr.name, attr.annotation, false)),
             )
-            .map(|(name, type_node)| PythonAnnotatedAttribute {
-                is_mutated_in_class: mutated.contains(&name),
-                name,
-                type_node,
-            })
+            .map(
+                |(name, type_node, is_in_class_body)| PythonAnnotatedAttribute {
+                    is_mutated_in_class: mutated.contains(&name),
+                    is_in_class_body,
+                    name,
+                    type_node,
+                },
+            )
             .collect()
     }
 
@@ -490,14 +470,24 @@ impl<'a> PythonClassInfo<'a> {
         self.has_base_in(TYPED_DICT_PATHS)
     }
 
-    /// Returns true if the class synthesizes constructor fields from class-body annotations
-    /// (`@dataclass`, `attrs` decorators, or Pydantic `BaseModel` subclasses).
+    /// Returns true if the import-resolved path of any decorator on this class is one of
+    /// `candidates`; decorators defined in the file never match.
     #[must_use]
-    pub(in crate::code_lint) fn is_field_synthesizing(&self) -> bool {
+    pub(in crate::code_lint) fn has_decorator_in(&self, candidates: &[&str]) -> bool {
         self.decorators
             .iter()
-            .any(|decorator| decorator.matches_any(FIELD_SYNTHESIZING_DECORATOR_PATHS))
-            || self.has_base_in(PYDANTIC_BASE_MODEL_PATHS)
+            .any(|decorator| decorator.matches_any(candidates))
+    }
+
+    /// Returns true if the import-resolved path of a direct base class is one of `candidates`;
+    /// bases defined in the file never match.
+    #[must_use]
+    fn has_base_in(&self, candidates: &[&str]) -> bool {
+        self.bases.iter().any(|base| {
+            base.resolved_path
+                .as_deref()
+                .is_some_and(|path| candidates.contains(&path))
+        })
     }
 
     /// The `@dataclass` or `@dataclasses.dataclass` decorator, resolved through the file's
@@ -506,16 +496,6 @@ impl<'a> PythonClassInfo<'a> {
         self.decorators
             .iter()
             .find(|decorator| decorator.matches_any(DATACLASS_DECORATOR_PATHS))
-    }
-
-    /// Returns true if the import-resolved path of a direct base class is one of `candidates`;
-    /// bases defined in the file never match.
-    fn has_base_in(&self, candidates: &[&str]) -> bool {
-        self.bases.iter().any(|base| {
-            base.resolved_path
-                .as_deref()
-                .is_some_and(|path| candidates.contains(&path))
-        })
     }
 }
 
@@ -674,6 +654,8 @@ pub struct PythonAnnotatedAttribute<'a> {
     pub(in crate::code_lint) name: String,
     /// Type annotation AST node (`type`).
     pub(in crate::code_lint) type_node: AstNode<'a>,
+    /// True if the annotation is in the class body rather than on `self.<name>` in `__init__`.
+    pub(in crate::code_lint) is_in_class_body: bool,
     /// True if any method in the class mutates this attribute in place.
     pub(in crate::code_lint) is_mutated_in_class: bool,
 }
@@ -1275,57 +1257,63 @@ mod tests {
 
         let cls = &classes[0];
         assert_eq!(cls.name, "Config");
-        assert!(cls.is_field_synthesizing());
+        assert!(cls.has_decorator_in(&["dataclass"]));
         assert!(!cls.is_dataclass_missing_arg("frozen"));
         assert!(cls.is_dataclass_missing_arg("slots"));
     }
 
     #[rstest::rstest]
-    #[case::class_level("class C:\n    items: list[int]", &[("items", false, false)])]
-    #[case::private_included("class C:\n    _items: list[int]", &[("_items", false, false)])]
+    #[case::class_level("class C:\n    items: list[int]", &[("items", true, false, false)])]
+    #[case::private_included("class C:\n    _items: list[int]", &[("_items", true, false, false)])]
     #[case::init_attribute(indoc::indoc! {r"
         class C:
             def __init__(self):
-                self.items: list[int] = []"}, &[("items", false, false)])]
+                self.items: list[int] = []"}, &[("items", false, false, false)])]
     #[case::self_mutation(indoc::indoc! {r"
         class C:
             items: list[int]
             def add(self):
-                self.items.append(1)"}, &[("items", true, false)])]
+                self.items.append(1)"}, &[("items", true, true, false)])]
     #[case::cls_mutation(indoc::indoc! {r"
         class C:
             items: list[int]
             @classmethod
             def add(cls):
-                cls.items.append(1)"}, &[("items", true, false)])]
+                cls.items.append(1)"}, &[("items", true, true, false)])]
     #[case::class_name_mutation(indoc::indoc! {r"
         class C:
             items: list[int]
             def add(self):
-                C.items.append(1)"}, &[("items", true, false)])]
+                C.items.append(1)"}, &[("items", true, true, false)])]
     #[case::subscript_delete(indoc::indoc! {r"
         class C:
             items: list[int]
             def pop(self):
-                del self.items[0]"}, &[("items", true, false)])]
-    #[case::protocol_member("class P(Protocol):\n    items: list[int]", &[("items", false, true)])]
-    fn test_annotated_attributes(#[case] source: &str, #[case] expected: &[(&str, bool, bool)]) {
+                del self.items[0]"}, &[("items", true, true, false)])]
+    #[case::protocol_member("class P(Protocol):\n    items: list[int]", &[("items", true, false, true)])]
+    fn test_annotated_attributes(
+        #[case] source: &str,
+        #[case] expected: &[(&str, bool, bool, bool)],
+    ) {
         let file = ParsedFile::new(source, Language::Python);
-        let actual: Vec<(String, bool, bool)> = extract_classes(&file)
+        let actual: Vec<(String, bool, bool, bool)> = extract_classes(&file)
             .iter()
             .flat_map(|class| {
                 class.annotated_attributes().into_iter().map(|attribute| {
                     (
                         attribute.name,
+                        attribute.is_in_class_body,
                         attribute.is_mutated_in_class,
                         class.is_interface(),
                     )
                 })
             })
             .collect();
-        let expected: Vec<(String, bool, bool)> = expected
+        let expected: Vec<(String, bool, bool, bool)> = expected
             .iter()
-            .map(|(name, mutated, in_protocol)| ((*name).to_string(), *mutated, *in_protocol))
+            .map(|(name, in_class_body, mutated, in_protocol)| {
+                ((*name).to_string(), *in_class_body, *mutated, *in_protocol)
+            })
             .collect();
         assert_eq!(actual, expected);
     }
@@ -1459,56 +1447,38 @@ mod tests {
             class C:
                 def __init__(self):
                     self.a: Final = 1"},
-        (true, false)
+        true
     )]
     #[case::qualified_bare_final(
         indoc::indoc! {r"
             class C:
                 def __init__(self):
                     self.a: typing.Final = 1"},
-        (true, false)
+        true
     )]
     #[case::annotated_bare_final(
         indoc::indoc! {r"
             class C:
                 def __init__(self):
                     self.a: Annotated[Final, 'm'] = 1"},
-        (true, false)
+        true
     )]
     #[case::parameterized_final(
         indoc::indoc! {r"
             class C:
                 def __init__(self):
                     self.a: Final[int] = 1"},
-        (false, false)
+        false
     )]
-    #[case::dataclass(
-        indoc::indoc! {r"
-            @dataclass
-            class C:
-                def __post_init__(self):
-                    self.a: int = 1"},
-        (false, true)
-    )]
-    #[case::pydantic_model(
-        indoc::indoc! {r"
-            class C(BaseModel):
-                def model_post_init(self, context):
-                    self.a: int = 1"},
-        (false, true)
-    )]
-    fn test_instance_attribute_annotation_facts(
-        #[case] source: &str,
-        #[case] expected: (bool, bool),
-    ) {
+    fn test_instance_attribute_annotation_facts(#[case] source: &str, #[case] expected: bool) {
         let file = ParsedFile::new(source, Language::Python);
-        let actual: Vec<(bool, bool)> = extract_classes(&file)
+        let actual: Vec<bool> = extract_classes(&file)
             .iter()
             .flat_map(|class| {
                 class
                     .instance_attribute_annotations()
                     .iter()
-                    .map(|attribute| (attribute.is_bare_final(), class.is_field_synthesizing()))
+                    .map(PythonInstanceAttributeAnnotation::is_bare_final)
                     .collect::<Vec<_>>()
             })
             .collect();

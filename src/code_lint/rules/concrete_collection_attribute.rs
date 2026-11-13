@@ -5,8 +5,9 @@ use crate::code_lint::ast::python::{
     AnnotationTraversalDepth, CollectionAbstraction, PythonCollectionType,
     collect_collection_types, extract_classes,
 };
-use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::policy::read_only_collection_replacements;
+use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
+use crate::code_lint::policy::{is_pydantic_model, read_only_collection_replacements};
+use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
@@ -21,7 +22,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule = CodeRule {
+pub const RULE: ProjectCodeRule<(), &'static [Example]> = ProjectCodeRule {
     declaration: Declaration {
         name: RuleName("concrete-collection-attribute"),
         template: &TEMPLATE,
@@ -41,8 +42,9 @@ pub const RULE: CodeRule = CodeRule {
                 `tags: frozenset[str]` in a class body or `self.counts: dict[str, int]` in
                 `__init__`, including inside covariant wrappers such as `Sequence[list[str]]`.
                 Fixed-length record tuples (`tuple[int, str]`, `tuple[int]`, `tuple[()]`), variadic
-                class-object tuples (`tuple[type[Exception], ...]`), and attributes of `Protocol`
-                and `ABC` classes are skipped."},
+                class-object tuples (`tuple[type[Exception], ...]`), class-body fields of Pydantic
+                `BaseModel` subclasses (where concrete collection types control runtime validation
+                and coercion), and attributes of `Protocol` and `ABC` classes are skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 On a `@dataclass` or public class interface, annotating a field as
                 `items: list[str]` or `items: tuple[str, ...]` forces callers constructing the
@@ -90,14 +92,23 @@ pub const RULE: CodeRule = CodeRule {
     check: check_file,
 };
 
-fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Diagnostic> {
+fn check_file(
+    rule: &ProjectCodeRule<(), &'static [Example]>,
+    path: &Path,
+    file: &ParsedFile,
+    project: &ProjectContext<'_>,
+    (): (),
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    for class in extract_classes(file) {
+    let classes = extract_classes(file);
+    let current_module = project.python_module_of_path(path);
+    for (index, class) in classes.iter().enumerate() {
         if class.is_interface() {
             continue;
         }
+        let is_pydantic = is_pydantic_model(current_module.as_deref(), &classes, index, project);
         for attribute in class.annotated_attributes() {
-            if attribute.name.starts_with('_') {
+            if attribute.name.starts_with('_') || (is_pydantic && attribute.is_in_class_body) {
                 continue;
             }
             let matched: Vec<_> = collect_collection_types(
@@ -205,6 +216,38 @@ crate::test_utils::rule_test!(
                     class AbstractStore(abc.ABC):
                         records: dict[str, int]
                 "#,
+                pydantic_base_model_exempt => r#"
+                    from pydantic import BaseModel
+
+                    class OrderConfig(BaseModel):
+                        items: list[str]
+                        tags: frozenset[str]
+                "#,
+                local_pydantic_base_model_subclass_exempt => r#"
+                    from pydantic import BaseModel
+
+                    class FrozenModel(BaseModel):
+                        pass
+
+                    class OrderConfig(FrozenModel):
+                        items: list[str]
+                        weights: tuple[float, ...]
+                "#,
+                imported_pydantic_base_model_subclass_exempt => {
+                    "pkg/base.py" => r#"
+                        from pydantic import BaseModel
+
+                        class FrozenModel(BaseModel):
+                            pass
+                    "#,
+                    "pkg/models.py" => r#"
+                        from pkg.base import FrozenModel
+
+                        class OrderConfig(FrozenModel):
+                            items: list[str]
+                            tags: set[str]
+                    "#,
+                },
             ],
             fail: [
                 dataclass_concrete_list_attribute => r#"
@@ -214,6 +257,32 @@ crate::test_utils::rule_test!(
                     class Order:
                         items: list[str]
                 "# => "list[str]",
+                pydantic_init_instance_attribute_still_flagged => r#"
+                    from pydantic import BaseModel
+
+                    class OrderConfig(BaseModel):
+                        def __init__(self) -> None:
+                            self.cached_items: list[str] = []
+                "# => "list[str]",
+                shadowed_local_base_model_still_flagged => r#"
+                    class BaseModel:
+                        pass
+
+                    class OrderConfig(BaseModel):
+                        items: list[str]
+                "# => "list[str]",
+                imported_non_pydantic_base_model_still_flagged => {
+                    "pkg/base.py" => r#"
+                        class BaseModel:
+                            pass
+                    "#,
+                    "pkg/models.py" => r#"
+                        from pkg.base import BaseModel
+
+                        class OrderConfig(BaseModel):
+                            items: list[str]
+                    "#,
+                } => ("pkg/models.py", "list[str]"),
                 unqualified_typing_set_attribute => r#"
                     from typing import Set
 
