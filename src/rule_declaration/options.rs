@@ -241,53 +241,47 @@ impl OptionsDeclaration for ListOption {
     }
 }
 
-/// Declares a multi-option [`OptionsDeclaration`] struct paired with the named `Copy` value
-/// struct received by a rule's check function, binding options and resolved values by field name
-/// rather than tuple position.
-// TODO: Why are we using a macro for this? I sit ricr?
+/// Declares a multi-option record `struct Name<T = usize>` and implements
+/// [`OptionsDeclaration`] for `Name<T>` whenever `T` is an [`OptionsDeclaration`] whose
+/// [`OptionsDeclaration::Resolved`] value is `Copy`, binding options and resolved values by
+/// field name rather than tuple position.
 macro_rules! rule_options {
     (
-        $(#[$decl_meta:meta])*
-        $decl_vis:vis struct $decl:ident =>
-        $(#[$val_meta:meta])*
-        $val_vis:vis struct $val:ident {
+        $(#[$meta:meta])*
+        $vis:vis struct $name:ident < $param:ident = $default:ty > {
             $(
                 $(#[$field_meta:meta])*
-                $field_vis:vis $field:ident : $opt_ty:ty
+                $field_vis:vis $field:ident : $field_ty:ty
             ),+ $(,)?
         }
     ) => {
-        $(#[$decl_meta])*
+        $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        $decl_vis struct $decl {
+        $vis struct $name<$param = $default> {
             $(
                 $(#[$field_meta])*
-                $field_vis $field: $opt_ty,
+                $field_vis $field: $field_ty,
             )+
         }
 
-        $(#[$val_meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        $val_vis struct $val {
-            $(
-                $(#[$field_meta])*
-                $field_vis $field: <$opt_ty as $crate::rule_declaration::OptionsDeclaration>::Resolved,
-            )+
-        }
-
-        impl $crate::rule_declaration::OptionsDeclaration for $decl {
-            type Resolved = $val;
-            type Param<'a> = $val;
+        impl<$param> $crate::rule_declaration::OptionsDeclaration for $name<$param>
+        where
+            $param: $crate::rule_declaration::OptionsDeclaration,
+            $param::Resolved: Copy,
+        {
+            type Resolved = $name<$param::Resolved>;
+            type Param<'a> = $name<$param::Resolved>;
 
             fn as_param(&resolved: &Self::Resolved) -> Self::Param<'_> {
                 resolved
             }
 
             fn specs(self) -> Vec<$crate::rule_declaration::OptionSpec> {
+                let Self { $($field),+ } = self;
                 let mut specs = Vec::new();
                 $(
                     specs.extend(
-                        $crate::rule_declaration::OptionsDeclaration::specs(self.$field),
+                        $crate::rule_declaration::OptionsDeclaration::specs($field),
                     );
                 )+
                 specs
@@ -298,10 +292,11 @@ macro_rules! rule_options {
                 language: $crate::diagnostic::Language,
                 overrides: Option<&$crate::rule_declaration::RuleOverrides>,
             ) -> Self::Resolved {
-                $val {
+                let Self { $($field),+ } = self;
+                $name {
                     $(
                         $field: $crate::rule_declaration::OptionsDeclaration::resolve(
-                            self.$field,
+                            $field,
                             language,
                             overrides,
                         ),
@@ -798,9 +793,9 @@ mod tests {
     };
 
     rule_options! {
-        struct BoundsOptions => struct BoundsThresholds {
-            min_items: CountOption,
-            max_items: CountOption,
+        struct BoundsThresholds<T = usize> {
+            min_items: T,
+            max_items: T,
         }
     }
 
@@ -969,7 +964,7 @@ mod tests {
 
     #[test]
     fn rule_options_struct_resolves_each_field_and_lists_specs_in_order() {
-        let bounds = BoundsOptions {
+        let bounds = BoundsThresholds {
             min_items: MIN_ITEMS,
             max_items: LIMIT,
         };
@@ -991,7 +986,10 @@ mod tests {
                 max_items: 9,
             }
         );
-        assert_eq!(BoundsOptions::as_param(&resolved), resolved);
+        assert_eq!(
+            BoundsThresholds::<CountOption>::as_param(&resolved),
+            resolved
+        );
     }
 
     #[test]

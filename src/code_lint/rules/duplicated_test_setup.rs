@@ -11,12 +11,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 rule_options! {
-    /// Declared options for `duplicated-test-setup`.
-    pub struct SetupOptions =>
-    /// Resolved thresholds for `duplicated-test-setup`.
-    pub struct SetupThresholds {
-        min_tests: CountOption,
-        min_statements: CountOption,
+    /// Thresholds for `duplicated-test-setup`.
+    pub struct SetupThresholds<T = usize> {
+        min_tests: T,
+        min_statements: T,
     }
 }
 
@@ -44,12 +42,12 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule<SetupOptions> = CodeRule {
+pub const RULE: CodeRule<SetupThresholds<CountOption>> = CodeRule {
     declaration: Declaration {
         name: RuleName("duplicated-test-setup"),
         template: &TEMPLATE,
         languages: &[Language::Python, Language::Rust],
-        options: RuleOptions::code_rule(SetupOptions {
+        options: RuleOptions::code_rule(SetupThresholds {
             min_tests: MIN_TESTS,
             min_statements: MIN_STATEMENTS,
         }),
@@ -197,7 +195,7 @@ pub const RULE: CodeRule<SetupOptions> = CodeRule {
 };
 
 fn check_file(
-    rule: &CodeRule<SetupOptions>,
+    rule: &CodeRule<SetupThresholds<CountOption>>,
     path: &Path,
     file: &ParsedFile,
     thresholds: SetupThresholds,

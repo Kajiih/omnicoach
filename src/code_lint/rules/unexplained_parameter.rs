@@ -9,21 +9,21 @@ use crate::code_lint::ast::python::{
 };
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::policy::{ComplexityGate, ComplexityGateOptions};
+use crate::code_lint::policy::ComplexityGate;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
-    RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality, Precision,
+    Reference, RuleDoc, RuleOptions, Topic,
 };
 use std::collections::HashSet;
 use std::path::Path;
 
-const OPTIONS: ComplexityGateOptions = ComplexityGateOptions {
-    min_statements: ComplexityGateOptions::min_statements(
+const OPTIONS: ComplexityGate<CountOption> = ComplexityGate {
+    min_statements: ComplexityGate::min_statements(
         "Minimum statements in a function body for an `Args:` section to be required when a \
          non-obvious parameter is present; 0 disables this trigger.",
     ),
-    min_cognitive_complexity: ComplexityGateOptions::min_cognitive_complexity(
+    min_cognitive_complexity: ComplexityGate::min_cognitive_complexity(
         "Minimum cognitive complexity of a function for an `Args:` section to be required when a \
          non-obvious parameter is present; 0 disables this trigger.",
     ),
@@ -36,7 +36,7 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule<ComplexityGateOptions> = CodeRule {
+pub const RULE: CodeRule<ComplexityGate<CountOption>> = CodeRule {
     declaration: Declaration {
         name: RuleName("unexplained-parameter"),
         template: &TEMPLATE,
@@ -153,7 +153,7 @@ const FUNCTION: &str = "function";
 const PARAMETERS: &str = "parameters";
 
 fn check_file(
-    rule: &CodeRule<ComplexityGateOptions>,
+    rule: &CodeRule<ComplexityGate<CountOption>>,
     path: &Path,
     file: &ParsedFile,
     gate: ComplexityGate,

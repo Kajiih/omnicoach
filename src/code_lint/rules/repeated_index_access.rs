@@ -19,12 +19,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 rule_options! {
-    /// Declared options for `repeated-index-access`.
-    pub struct IndexAccessOptions =>
-    /// Resolved thresholds for `repeated-index-access`.
-    pub struct IndexAccessThresholds {
-        min_positions: CountOption,
-        max_placeholders: CountOption,
+    /// Thresholds for `repeated-index-access`.
+    pub struct IndexAccessThresholds<T = usize> {
+        min_positions: T,
+        max_placeholders: T,
     }
 }
 
@@ -51,12 +49,12 @@ const TEMPLATE: ViolationTemplate = violation_template! {
 };
 
 /// The rule's declaration.
-pub const RULE: CodeRule<IndexAccessOptions> = CodeRule {
+pub const RULE: CodeRule<IndexAccessThresholds<CountOption>> = CodeRule {
     declaration: Declaration {
         name: RuleName("repeated-index-access"),
         template: &TEMPLATE,
         languages: &[Language::Python, Language::Rust],
-        options: RuleOptions::code_rule(IndexAccessOptions {
+        options: RuleOptions::code_rule(IndexAccessThresholds {
             min_positions: MIN_POSITIONS,
             max_placeholders: MAX_PLACEHOLDERS,
         }),
@@ -134,7 +132,7 @@ pub const RULE: CodeRule<IndexAccessOptions> = CodeRule {
 };
 
 fn check_file(
-    rule: &CodeRule<IndexAccessOptions>,
+    rule: &CodeRule<IndexAccessThresholds<CountOption>>,
     path: &Path,
     file: &ParsedFile,
     thresholds: IndexAccessThresholds,

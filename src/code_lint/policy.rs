@@ -35,19 +35,17 @@ const PYDANTIC_BASE_MODEL_PATHS: &[&str] =
     &["BaseModel", "pydantic.BaseModel", "pydantic.main.BaseModel"];
 
 rule_options! {
-    /// Declared threshold options for the Python function-complexity gate shared by docstring
-    /// rules (`min-statements` and `min-cognitive-complexity`).
-    pub struct ComplexityGateOptions =>
-    /// Resolved statement-count and cognitive-complexity thresholds for the Python complexity gate.
-    pub struct ComplexityGate {
+    /// Statement-count and cognitive-complexity thresholds for the Python function-complexity
+    /// gate shared by docstring rules (`min-statements` and `min-cognitive-complexity`).
+    pub struct ComplexityGate<T = usize> {
         /// Minimum statement count; `0` disables this trigger.
-        pub(super) min_statements: CountOption,
+        pub(super) min_statements: T,
         /// Minimum cognitive complexity; `0` disables this trigger.
-        pub(super) min_cognitive_complexity: CountOption,
+        pub(super) min_cognitive_complexity: T,
     }
 }
 
-impl ComplexityGateOptions {
+impl ComplexityGate {
     /// Declares the `min-statements` [`CountOption`] (default `12`) with `doc`.
     #[must_use]
     pub(super) const fn min_statements(doc: &'static str) -> CountOption {
@@ -66,6 +64,30 @@ impl ComplexityGateOptions {
             doc,
             default: LanguageDefaults::new(DEFAULT_MIN_COGNITIVE_COMPLEXITY, &[]),
         }
+    }
+
+    /// Returns the first complexity threshold reached by `signature` (statement count first, then
+    /// cognitive complexity), or `None` if neither threshold is reached. A threshold of `0`
+    /// disables that trigger.
+    #[must_use]
+    pub(super) fn triggered_metric(
+        self,
+        signature: &PythonFunctionSignature<'_>,
+    ) -> Option<ComplexityMetric> {
+        let statements = signature.statement_count();
+        if self.min_statements > 0 && statements >= self.min_statements {
+            return Some(ComplexityMetric::StatementCount(statements));
+        }
+        let complexity = signature.cognitive_complexity();
+        (self.min_cognitive_complexity > 0 && complexity >= self.min_cognitive_complexity)
+            .then_some(ComplexityMetric::CognitiveComplexity(complexity))
+    }
+
+    /// Returns true if `signature` reaches `min_statements` or `min_cognitive_complexity` (`0`
+    /// disables a trigger).
+    #[must_use]
+    pub(super) fn is_nontrivial(self, signature: &PythonFunctionSignature<'_>) -> bool {
+        self.triggered_metric(signature).is_some()
     }
 }
 
@@ -94,32 +116,6 @@ impl ComplexityMetric {
         match self {
             Self::StatementCount(value) | Self::CognitiveComplexity(value) => value,
         }
-    }
-}
-
-impl ComplexityGate {
-    /// Returns the first complexity threshold reached by `signature` (statement count first, then
-    /// cognitive complexity), or `None` if neither threshold is reached. A threshold of `0`
-    /// disables that trigger.
-    #[must_use]
-    pub(super) fn triggered_metric(
-        self,
-        signature: &PythonFunctionSignature<'_>,
-    ) -> Option<ComplexityMetric> {
-        let statements = signature.statement_count();
-        if self.min_statements > 0 && statements >= self.min_statements {
-            return Some(ComplexityMetric::StatementCount(statements));
-        }
-        let complexity = signature.cognitive_complexity();
-        (self.min_cognitive_complexity > 0 && complexity >= self.min_cognitive_complexity)
-            .then_some(ComplexityMetric::CognitiveComplexity(complexity))
-    }
-
-    /// Returns true if `signature` reaches `min_statements` or `min_cognitive_complexity` (`0`
-    /// disables a trigger).
-    #[must_use]
-    pub(super) fn is_nontrivial(self, signature: &PythonFunctionSignature<'_>) -> bool {
-        self.triggered_metric(signature).is_some()
     }
 }
 
