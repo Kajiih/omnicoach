@@ -183,7 +183,6 @@ pub fn run_code_rule<R: TestableCodeRule>(
 ///
 /// # Panics
 /// Panics if `entries` is non-empty and `rule` does not declare a `banned` list option.
-// TODO: Investigate if this is ricr to add banned list override.
 #[must_use]
 #[track_caller]
 pub fn banned_list_overrides<R: TestableCodeRule>(
@@ -1300,7 +1299,6 @@ fn dummy_filename(lang: Language) -> &'static str {
 ///   must span exactly that inner slice (because `rule_test!` compares the flagged slice text
 ///   rather than its byte offset, a case asserting *which* of two occurrences is flagged must
 ///   spell the two occurrences differently, such as `'fast'` vs. `"fast"` or `404u16` vs. `404`).
-//    TODO: Investigate if this is ricr or should be improved.
 ///   Leading indentation of lines `2..N` is normalized,
 ///   so the slice can be written as a clean `indoc!` string.
 /// - The code is also run repeated twice in one file and must report both occurrences, so

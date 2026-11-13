@@ -61,7 +61,7 @@ This gives immediate compile-time validation by `rustc` (catching misspelled var
 
 In [src/architecture.rs](../../../src/architecture.rs) (`Architecture`), `define_architecture!` generates the `strum`-derived `ArchitectureComponent` enum (attaching the `///` doc comments to each variant), the `ARCHITECTURE_GRAPH` constant (`&[ComponentDefinition]`, recording `depends_on` and `owns_external`), and a compile-time `const` assertion requiring every dependency in `$node => [ $($dep),* ]` to be declared earlier (`(ArchitectureComponent::$dep as usize) < (ArchitectureComponent::$node as usize)`). This makes any cycle or forward edge a `rustc` compile error (`E0080`) during `cargo check`, with zero runtime cycle-detection code. Only `architecture_component!` is exported from [src/lib.rs](../../../src/lib.rs), because binary crates invoke it as `omnicoach::architecture_component!`.
 
-See `define_architecture!` in [src/architecture.rs](../../../src/architecture.rs) for the authoritative component graph, including external-crate ownership (`owns_external` on `CodeLintAst`, `CodeLintProject`, and `CommandLintCommand`) and the placement of `CodeLintProject` below `Config` so neither `CodeLintProject` nor `CodeLintGraph` depends on rule-selection `Config`.
+See `define_architecture!` in [src/architecture.rs](../../../src/architecture.rs) for the authoritative component graph, including external-crate ownership (`owns_external` on `Diagnostic`, `CodeLintAst`, `CodeLintProject`, and `CommandLintCommand`) and the placement of `CodeLintProject` below `Config` so neither `CodeLintProject` nor `CodeLintGraph` depends on rule-selection `Config`.
 
 ### 2.4. Production Conformance Engine & Idiomatic Module Policies
 

@@ -18,7 +18,8 @@
 //!   allowed only from a private direct child (`mod child; pub use self::child::Item;`), and a
 //!   `macro_rules!` macro declares its path with `pub(crate) use name;` next to its definition
 //!   (`#[macro_export]` only in `src/lib.rs`).
-//! - **Encapsulation**: only `code_lint::ast` and `command_lint::command` use third-party parser crates.
+//! - **Encapsulation**: only `diagnostic`, `code_lint::ast`, `code_lint::project`, and
+//!   `command_lint::command` use component-owned external crates (`owns_external`).
 
 architecture_component!(Architecture);
 
@@ -101,7 +102,7 @@ define_architecture! {
     /// The component catalog and its dependency graph (`architecture`).
     Architecture        => [],
     /// Rule names, source spans, violation templates and diagnostic output (`diagnostic`).
-    Diagnostic          => [],
+    Diagnostic          => [] (owns_external: ["line_index"]),
     /// VCS detection and the changed lines of a working copy (`diff`).
     Diff                => [],
     /// What every rule states about itself: name, template, languages, options, classification and doc (`rule_declaration`).

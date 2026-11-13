@@ -361,7 +361,55 @@ impl SourceSpan {
     }
 }
 
-// TODO: Should we use line-index of the line/column?
+/// A 1-indexed line and column coordinate inside a file.
+#[derive(Debug, Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct LineColumn {
+    /// 1-indexed line number.
+    pub line: usize,
+    /// 1-indexed column number.
+    pub column: usize,
+}
+
+/// Optimized index for mapping flat byte offsets to 1-indexed (line, column) positions.
+pub(crate) struct LineIndex {
+    inner: line_index::LineIndex,
+}
+
+impl LineIndex {
+    /// Creates a new `LineIndex` for the given file content.
+    #[must_use]
+    pub(crate) fn new(content: &str) -> Self {
+        Self {
+            inner: line_index::LineIndex::new(content),
+        }
+    }
+
+    /// Resolves a byte offset to a 1-indexed (line, column) coordinate, clamping out-of-bounds
+    /// or mid-codepoint offsets to the nearest valid UTF-8 character boundary.
+    #[must_use]
+    pub(crate) fn lookup(&self, offset: usize) -> LineColumn {
+        let doc_len = usize::from(self.inner.len());
+        let clamped = offset.min(doc_len);
+        let line_col = (0..=3)
+            .filter_map(|back| clamped.checked_sub(back))
+            .find_map(|pos| {
+                let size = u32::try_from(pos).ok()?;
+                self.inner.try_line_col(line_index::TextSize::from(size))
+            })
+            .unwrap_or(line_index::LineCol { line: 0, col: 0 });
+        LineColumn {
+            line: line_col.line as usize + 1,
+            column: line_col.col as usize + 1,
+        }
+    }
+
+    /// Resolves a byte offset to a 1-indexed line number.
+    #[must_use]
+    pub(crate) fn line(&self, offset: usize) -> usize {
+        self.lookup(offset).line
+    }
+}
+
 /// Represents a location span and 1-indexed coordinate inside a source file or linter context.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceLocation {
@@ -445,55 +493,6 @@ impl Diagnostic {
             message,
             location,
         }
-    }
-}
-
-/// A 1-indexed line and column coordinate inside a file.
-#[derive(Debug, Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
-pub struct LineColumn {
-    /// 1-indexed line number.
-    pub line: usize,
-    /// 1-indexed column number.
-    pub column: usize,
-}
-
-/// Optimized index for mapping flat byte offsets to 1-indexed (line, column) positions.
-pub(crate) struct LineIndex {
-    inner: line_index::LineIndex,
-}
-
-impl LineIndex {
-    /// Creates a new `LineIndex` for the given file content.
-    #[must_use]
-    pub(crate) fn new(content: &str) -> Self {
-        Self {
-            inner: line_index::LineIndex::new(content),
-        }
-    }
-
-    /// Resolves a byte offset to a 1-indexed (line, column) coordinate, clamping out-of-bounds
-    /// or mid-codepoint offsets to the nearest valid UTF-8 character boundary.
-    #[must_use]
-    pub(crate) fn lookup(&self, offset: usize) -> LineColumn {
-        let doc_len = usize::from(self.inner.len());
-        let clamped = offset.min(doc_len);
-        let line_col = (0..=3)
-            .filter_map(|back| clamped.checked_sub(back))
-            .find_map(|pos| {
-                let size = u32::try_from(pos).ok()?;
-                self.inner.try_line_col(line_index::TextSize::from(size))
-            })
-            .unwrap_or(line_index::LineCol { line: 0, col: 0 });
-        LineColumn {
-            line: line_col.line as usize + 1,
-            column: line_col.col as usize + 1,
-        }
-    }
-
-    /// Resolves a byte offset to a 1-indexed line number.
-    #[must_use]
-    pub(crate) fn line(&self, offset: usize) -> usize {
-        self.lookup(offset).line
     }
 }
 
