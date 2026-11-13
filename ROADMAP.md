@@ -4,6 +4,11 @@ This document serves as the single source of truth for architectural milestones,
 
 Items here represent design areas and technical directions to evaluate rather than fixed implementation mandates.
 
+## Ad hoc
+
+- Should we add test/lint to detect if language names are present in modules that are supposed to be cross-language/abstraction over multi languages.
+  - To investigate
+
 ## Prioritized Next Steps
 
 1. **Agent & Parallel `jj` Workspace Safety Rules (§1, *Candidate Rules & Rule Follow-ups*)**: Add `unbounded-jj-log`, `subcommand-before-global-flags`, multi-workspace `jj` rewrite safety checks, and shell/command-shape guardrails (`command_lint` + `hook`).

@@ -3,10 +3,18 @@
 use super::architecture::{ArchitectureError, ArchitectureSpec};
 use super::config::{ProjectConfig, resolve_against_cwd};
 use super::index::ProjectIndex;
-use super::layout::{
-    ProjectLayout, disambiguated_rust_module_path, is_python_package_init, is_rust_crate_root,
-    normalize_relative_path, python_dotted_path, resolve_relative_python_module,
-    resolve_rust_reference_path, rust_module_path,
+use super::layout::ProjectLayout;
+use super::paths::{
+    // TODO: Is this the right abstraction to contain language specific components?
+    INIT_STEM,
+    disambiguated_rust_module_path,
+    is_python_package_init,
+    is_rust_crate_root,
+    normalize_relative_path,
+    python_dotted_path,
+    resolve_relative_python_module,
+    resolve_rust_reference_path,
+    rust_module_path,
 };
 use super::source::{DiskFileSource, FileSource};
 use crate::code_lint::ast::python::collect_path_references;
@@ -19,7 +27,6 @@ use crate::diagnostic::Language;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-const INIT_MODULE: &str = "__init__";
 const CARGO_TOML_NAME: &str = "Cargo.toml";
 
 /// A project source file discovered via [`FileSource`], paired with its full query path,
@@ -586,7 +593,7 @@ fn python_component_name(module_path: &str, fallback_title: &str) -> String {
     module_path
         .split('.')
         .next()
-        .filter(|segment| !segment.is_empty() && *segment != INIT_MODULE)
+        .filter(|segment| !segment.is_empty() && *segment != INIT_STEM)
         .unwrap_or(fallback_title)
         .to_owned()
 }

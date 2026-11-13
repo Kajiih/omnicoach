@@ -5,9 +5,16 @@ use super::config::{
     ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, ProjectTomlError,
     compile_glob,
 };
-use super::layout::{
-    PathOrigin, ProjectLayout, ROOT_MODULE_TAG, is_in_module_subtree, is_python_package_init,
-    is_rust_crate_root, resolve_inherited_component_with_root, resolve_relative_python_package,
+use super::layout::ProjectLayout;
+use super::paths::{
+    // TODO: Is this the right abstraction to contain language specific components?
+    PathOrigin,
+    ROOT_MODULE_TAG,
+    is_in_python_module_subtree,
+    is_in_rust_module_subtree,
+    is_python_package_init,
+    is_rust_crate_root,
+    resolve_relative_python_package,
     resolve_rust_reference_path,
 };
 use super::source::FileSource;
@@ -313,6 +320,38 @@ pub struct FileArchitectureFindings {
     pub reexported_public_items: Vec<ReexportedPublicItemFinding>,
 }
 
+/// An inherited component and the nearest ancestor module that declared it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InheritedComponent<'a, T> {
+    /// Nearest ancestor (or self) module path that declared the component.
+    pub root_module: &'a str,
+    /// Inherited component value.
+    pub component: &'a T,
+}
+
+/// Resolves the [`InheritedComponent`] for `module` by climbing up its `::`-separated
+/// module path to the nearest ancestor (or self) in `declared_components`.
+#[must_use]
+pub fn resolve_inherited_component_with_root<'a, T>(
+    module: &str,
+    declared_components: &'a BTreeMap<String, T>,
+) -> Option<InheritedComponent<'a, T>> {
+    let mut current = module;
+    loop {
+        if let Some((root_key, component)) = declared_components.get_key_value(current) {
+            return Some(InheritedComponent {
+                root_module: root_key.as_str(),
+                component,
+            });
+        }
+        if let Some((parent, _)) = current.rsplit_once(RUST_MODULE_SEPARATOR) {
+            current = parent;
+        } else {
+            return None;
+        }
+    }
+}
+
 /// Evaluates the component-level architectural conformance rules for `file` (`path`).
 #[must_use]
 pub(super) fn evaluate_file_architecture(
@@ -450,8 +489,8 @@ fn evaluate_rust_file_architecture(
         } = &resolved.origin
             && let Some(ref inherited) = enclosing
             && !shallowest_ancestor.as_deref().is_some_and(|ancestor| {
-                is_in_module_subtree(ancestor, inherited.root_module)
-                    && is_in_module_subtree(&resolved.canonical_path, inherited.root_module)
+                is_in_rust_module_subtree(ancestor, inherited.root_module)
+                    && is_in_rust_module_subtree(&resolved.canonical_path, inherited.root_module)
             })
         {
             findings
@@ -601,7 +640,7 @@ fn check_rust_external_owner(
     for (package_name, owner) in &spec.external_package_owners {
         let is_allowed_owner = enclosing_component
             .is_some_and(|component| owner.components.iter().any(|allowed| allowed == component));
-        if is_in_module_subtree(canonical_path, package_name) && !is_allowed_owner {
+        if is_in_rust_module_subtree(canonical_path, package_name) && !is_allowed_owner {
             out.push(UnownedExternalDependencyFinding {
                 span,
                 module: module_path.to_owned(),
@@ -717,7 +756,7 @@ fn check_rust_file_coverage_and_routers(
         let routes_child = (spec.from_rust_macros && child_prefix == RUST_ARCHITECTURE_MODULE)
             || component_roots
                 .keys()
-                .any(|root| is_in_module_subtree(root, &child_prefix));
+                .any(|root| is_in_rust_module_subtree(root, &child_prefix));
         if !routes_child {
             out.push(UnmappedArchitectureModuleFinding {
                 span: external_mod.span,
@@ -746,7 +785,7 @@ fn check_rust_file_coverage_and_routers(
         || is_pure_architecture_declaration
         || component_roots
             .keys()
-            .any(|root| is_in_module_subtree(root, module_path));
+            .any(|root| is_in_rust_module_subtree(root, module_path));
     if out.len() == before_count
         && !is_pure_architecture_declaration
         && (summary.external_mods.is_empty() || !routes_to_declared)
@@ -774,11 +813,11 @@ fn check_rust_sibling_isolation(
     out: &mut Vec<SiblingModuleDependencyFinding>,
 ) {
     for sibling_rule in sibling_rules {
-        if is_in_module_subtree(module_path, &sibling_rule.subject_prefix)
+        if is_in_rust_module_subtree(module_path, &sibling_rule.subject_prefix)
             && let Some(forbidden_sibling) = sibling_rule
                 .forbidden_siblings
                 .iter()
-                .find(|sibling| is_in_module_subtree(canonical_path, sibling))
+                .find(|sibling| is_in_rust_module_subtree(canonical_path, sibling))
         {
             out.push(SiblingModuleDependencyFinding {
                 span,
@@ -927,7 +966,8 @@ impl ResolvedPythonImport {
             .or_else(|| component_root.strip_suffix(".*"))
             .unwrap_or(component_root);
         let floor_in_root = python_root_specificity(ancestor, component_root).is_some()
-            || (!component_root.ends_with(".*") && is_in_python_subtree(ancestor, floor_base));
+            || (!component_root.ends_with(".*")
+                && is_in_python_module_subtree(ancestor, floor_base));
         target_in_root && floor_in_root
     }
 }
@@ -1067,12 +1107,11 @@ fn python_root_specificity(module_path: &str, root_pattern: &str) -> Option<Spec
     }
     if let Some(prefix) = root_pattern.strip_suffix(".**") {
         let segment_count = prefix.split(PYTHON_MODULE_SEPARATOR).count();
-        return (module_path != prefix && is_in_python_subtree(module_path, prefix)).then_some(
-            SpecificityRank {
+        return (module_path != prefix && is_in_python_module_subtree(module_path, prefix))
+            .then_some(SpecificityRank {
                 kind_rank: 2,
                 segment_count,
-            },
-        );
+            });
     }
     if let Some(prefix) = root_pattern.strip_suffix(".*") {
         let segment_count = prefix.split(PYTHON_MODULE_SEPARATOR).count();
@@ -1084,7 +1123,7 @@ fn python_root_specificity(module_path: &str, root_pattern: &str) -> Option<Spec
             segment_count: segment_count + 1,
         });
     }
-    if is_in_python_subtree(module_path, root_pattern) {
+    if is_in_python_module_subtree(module_path, root_pattern) {
         let segment_count = root_pattern.split(PYTHON_MODULE_SEPARATOR).count();
         let exact_bonus = usize::from(module_path == root_pattern);
         return Some(SpecificityRank {
@@ -1304,7 +1343,7 @@ fn collect_python_unmapped_findings(
                 || spec.components.iter().any(|comp| {
                     comp.roots
                         .iter()
-                        .any(|root| is_in_python_subtree(root, module_path))
+                        .any(|root| is_in_python_module_subtree(root, module_path))
                 }));
         if !is_pure_package_router {
             out.push(UnmappedArchitectureModuleFinding {
@@ -1341,7 +1380,9 @@ fn check_python_external_owner(
     for (package_name, owner) in &spec.external_package_owners {
         let is_allowed_owner = enclosing_component
             .is_some_and(|component| owner.components.iter().any(|allowed| allowed == component));
-        if is_in_python_subtree(&resolved.full_target_path, package_name) && !is_allowed_owner {
+        if is_in_python_module_subtree(&resolved.full_target_path, package_name)
+            && !is_allowed_owner
+        {
             out.push(UnownedExternalDependencyFinding {
                 span,
                 module: module_path.to_owned(),
@@ -1391,13 +1432,6 @@ fn python_root_base(root: &str) -> &str {
     root.strip_suffix(".**")
         .or_else(|| root.strip_suffix(".*"))
         .unwrap_or(root)
-}
-
-fn is_in_python_subtree(module_path: &str, prefix: &str) -> bool {
-    module_path == prefix
-        || module_path
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with(PYTHON_MODULE_SEPARATOR))
 }
 
 fn is_rust_path_allowed_by_exports(

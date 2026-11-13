@@ -5,9 +5,10 @@ use super::architecture::{
     evaluate_file_architecture, evaluate_stray_rust_component_markers, resolve_architecture_spec,
 };
 use super::config::{CONFIG_FILE_NAME, ProjectConfig, ProjectTomlError};
-use super::layout::{
-    LIB_CRATE_ROOT, ProjectLayout, is_python_package_init, is_vcs_boundary,
-    resolve_relative_python_module, resolve_rust_reference_path,
+use super::layout::{ProjectLayout, is_vcs_boundary};
+use super::paths::{
+    LIB_CRATE_ROOT, is_python_package_init, resolve_relative_python_module,
+    resolve_rust_reference_path,
 };
 use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;

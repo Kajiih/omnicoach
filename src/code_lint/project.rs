@@ -9,14 +9,16 @@ mod context;
 mod facts;
 mod index;
 mod layout;
+mod paths;
 mod source;
 
 pub use self::architecture::{
     ArchitectureError, ArchitectureSpec, ComponentSpec, CrossComponentRelativePathFinding,
-    ExportPattern, FileArchitectureFindings, InvalidArchitectureComponentFinding,
-    InvalidArchitectureComponentKind, PrivateComponentImportFinding, ReexportedPublicItemFinding,
-    SiblingModuleDependencyFinding, UndeclaredComponentDependencyFinding,
-    UnmappedArchitectureModuleFinding, UnownedExternalDependencyFinding,
+    ExportPattern, FileArchitectureFindings, InheritedComponent,
+    InvalidArchitectureComponentFinding, InvalidArchitectureComponentKind,
+    PrivateComponentImportFinding, ReexportedPublicItemFinding, SiblingModuleDependencyFinding,
+    UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding,
+    UnownedExternalDependencyFinding, resolve_inherited_component_with_root,
 };
 pub(crate) use self::config::compile_glob;
 pub use self::config::{
@@ -37,5 +39,5 @@ pub use self::index::{
     ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, PythonClassId,
     ResolvedClassAncestors,
 };
-pub use self::layout::{InheritedComponent, ProjectLayout, resolve_inherited_component_with_root};
+pub use self::layout::ProjectLayout;
 pub use self::source::{DiskFileSource, FileSource, MemoryFileSource, OverlayFileSource};
