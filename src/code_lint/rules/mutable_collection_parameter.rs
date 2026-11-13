@@ -2,8 +2,9 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, PythonParameterKind,
-    collect_collection_types, extract_function_signatures, summarize_parameter_usages,
+    AnnotationTraversalDepth, CollectionAbstraction, CollectionMutability, PythonCollectionType,
+    PythonParameterKind, collect_collection_types, extract_function_signatures,
+    summarize_parameter_usages,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::{
@@ -110,7 +111,10 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 AnnotationTraversalDepth::TransparentWrappersOnly,
             )
             .into_iter()
-            .filter(|collection_type| collection_type.kind == CollectionKind::AbstractMutable)
+            .filter(|collection_type| {
+                collection_type.abstraction == CollectionAbstraction::Abstract
+                    && collection_type.mutability == CollectionMutability::Mutable
+            })
             .collect();
             if matched.is_empty() {
                 continue;

@@ -10,9 +10,9 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, ParameterCollectionCapability, PythonCollectionType,
-    PythonParameterKind, collect_collection_types, extract_function_signatures,
-    summarize_parameter_usages,
+    AnnotationTraversalDepth, CollectionAbstraction, CollectionMutability,
+    ParameterCollectionCapability, PythonCollectionType, PythonParameterKind,
+    collect_collection_types, extract_function_signatures, summarize_parameter_usages,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::is_exempt_from_body_usage_rules;
@@ -117,7 +117,8 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             )
             .into_iter()
             .filter(|collection_type| {
-                collection_type.kind == CollectionKind::AbstractReadOnly
+                collection_type.abstraction == CollectionAbstraction::Abstract
+                    && collection_type.mutability == CollectionMutability::ReadOnly
                     && matches!(collection_type.name.as_str(), SEQUENCE | "Collection")
             })
             .collect();

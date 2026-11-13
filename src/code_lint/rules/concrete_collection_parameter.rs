@@ -7,8 +7,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, PythonCollectionType, PythonParameterKind, collect_collection_types,
-    extract_function_signatures,
+    AnnotationTraversalDepth, CollectionAbstraction, PythonCollectionType, PythonParameterKind,
+    collect_collection_types, extract_function_signatures,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::{is_exempt_from_signature_rules, read_only_collection_replacements};
@@ -46,10 +46,10 @@ pub const RULE: CodeRule = CodeRule {
                 `tags: frozenset[str]`, including inside covariant wrappers such as
                 `Sequence[list[str]]` (but not `Callable` argument types or invariant outer
                 containers such as `MutableSequence[list[str]]`). Fixed-length tuple annotations
-                (`tuple[str, int]`, `tuple[int]`, `tuple[()]`) are not flagged here (see
-                `positional-tuple-parameter`). Methods that cannot freely change their signature,
-                such as `@override` methods, `Protocol` and `ABC` members and most dunder methods,
-                are skipped."},
+                (`tuple[str, int]`, `tuple[int]`, `tuple[()]`; see `positional-tuple-parameter`)
+                and variadic class-object tuples (`tuple[type[Exception], ...]`) are not flagged
+                here. Methods that cannot freely change their signature, such as `@override`
+                methods, `Protocol` and `ABC` members and most dunder methods, are skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 In Python's type system, concrete collection types require that exact container at
                 call sites, and `list`, `dict`, and `set` are also invariant in their type
@@ -110,7 +110,9 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             let matched: Vec<_> =
                 collect_collection_types(type_node, AnnotationTraversalDepth::CovariantPositions)
                     .into_iter()
-                    .filter(|collection_type| collection_type.kind.is_concrete())
+                    .filter(|collection_type| {
+                        collection_type.abstraction == CollectionAbstraction::Concrete
+                    })
                     .collect();
             if matched.is_empty() {
                 continue;
@@ -296,6 +298,16 @@ crate::test_utils::rule_test!(
                         pass
 
                     def process(items: List[int]) -> None:
+                        pass
+                "#,
+                class_info_type_tuple_parameters_exempt => r#"
+                    from typing import Type, Tuple
+
+                    def catch_errors(
+                        exc_types: tuple[type[Exception], ...],
+                        specific: tuple[type[ValueError] | type[KeyError], ...],
+                        legacy: Tuple[Type[Exception], ...],
+                    ) -> None:
                         pass
                 "#,
             ],

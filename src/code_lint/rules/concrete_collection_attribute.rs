@@ -2,7 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, PythonCollectionType, collect_collection_types, extract_classes,
+    AnnotationTraversalDepth, CollectionAbstraction, PythonCollectionType,
+    collect_collection_types, extract_classes,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::read_only_collection_replacements;
@@ -39,8 +40,9 @@ pub const RULE: CodeRule = CodeRule {
                 collection type, such as `items: list[str]`, `items: tuple[str, ...]`, or
                 `tags: frozenset[str]` in a class body or `self.counts: dict[str, int]` in
                 `__init__`, including inside covariant wrappers such as `Sequence[list[str]]`.
-                Fixed-length record tuples (`tuple[int, str]`, `tuple[int]`, `tuple[()]`) and
-                attributes of `Protocol` and `ABC` classes are skipped."},
+                Fixed-length record tuples (`tuple[int, str]`, `tuple[int]`, `tuple[()]`), variadic
+                class-object tuples (`tuple[type[Exception], ...]`), and attributes of `Protocol`
+                and `ABC` classes are skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 On a `@dataclass` or public class interface, annotating a field as
                 `items: list[str]` or `items: tuple[str, ...]` forces callers constructing the
@@ -103,7 +105,9 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
                 AnnotationTraversalDepth::CovariantPositions,
             )
             .into_iter()
-            .filter(|collection_type| collection_type.kind.is_concrete())
+            .filter(|collection_type| {
+                collection_type.abstraction == CollectionAbstraction::Concrete
+            })
             .collect();
             if matched.is_empty() {
                 continue;
@@ -160,6 +164,14 @@ crate::test_utils::rule_test!(
                 empty_tuple_attribute_exempt => r#"
                     class Empty:
                         empty: tuple[()]
+                "#,
+                class_info_type_tuple_attributes_exempt => r#"
+                    from typing import Type, Tuple
+
+                    class RetryPolicy:
+                        retryable: tuple[type[Exception], ...]
+                        ignored: tuple[type[ValueError] | type[KeyError], ...]
+                        legacy: Tuple[Type[Exception], ...]
                 "#,
                 unaliased_collections_abc_set_detected => r#"
                     from collections.abc import Set

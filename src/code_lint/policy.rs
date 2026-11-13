@@ -206,18 +206,17 @@ pub(super) fn replacements_by_shape(
 mod tests {
     use super::*;
     use crate::code_lint::ast::ParsedFile;
-    use crate::code_lint::ast::python::{CollectionKind, extract_function_signatures};
+    use crate::code_lint::ast::python::{
+        CollectionAbstraction, CollectionMutability, extract_function_signatures,
+    };
     use crate::diagnostic::Language;
 
-    fn collection_type(
-        path: &str,
-        kind: CollectionKind,
-        shape: CollectionShape,
-    ) -> PythonCollectionType {
+    fn collection_type(path: &str, shape: CollectionShape) -> PythonCollectionType {
         PythonCollectionType {
             path: path.to_owned(),
             name: path.rsplit('.').next().unwrap_or(path).to_owned(),
-            kind,
+            abstraction: CollectionAbstraction::Concrete,
+            mutability: CollectionMutability::Mutable,
             shape,
         }
     }
@@ -265,30 +264,30 @@ mod tests {
 
     #[rstest::rstest]
     #[case::list(
-        vec![collection_type("list", CollectionKind::ConcreteMutable, CollectionShape::Sequence)],
+        vec![collection_type("list", CollectionShape::Sequence)],
         "collections.abc.Sequence"
     )]
     #[case::deque(
-        vec![collection_type("collections.deque", CollectionKind::ConcreteMutable, CollectionShape::Sequence)],
+        vec![collection_type("collections.deque", CollectionShape::Sequence)],
         "collections.abc.Sequence"
     )]
     #[case::typing_dict(
-        vec![collection_type("typing.Dict", CollectionKind::ConcreteMutable, CollectionShape::Mapping)],
+        vec![collection_type("typing.Dict", CollectionShape::Mapping)],
         "collections.abc.Mapping"
     )]
     #[case::counter(
-        vec![collection_type("collections.Counter", CollectionKind::ConcreteMutable, CollectionShape::Mapping)],
+        vec![collection_type("collections.Counter", CollectionShape::Mapping)],
         "collections.abc.Mapping"
     )]
     #[case::mutable_set(
-        vec![collection_type("MutableSet", CollectionKind::AbstractMutable, CollectionShape::Set)],
+        vec![collection_type("MutableSet", CollectionShape::Set)],
         "collections.abc.Set"
     )]
     #[case::dedup_and_order(
         vec![
-            collection_type("dict", CollectionKind::ConcreteMutable, CollectionShape::Mapping),
-            collection_type("list", CollectionKind::ConcreteMutable, CollectionShape::Sequence),
-            collection_type("OrderedDict", CollectionKind::ConcreteMutable, CollectionShape::Mapping),
+            collection_type("dict", CollectionShape::Mapping),
+            collection_type("list", CollectionShape::Sequence),
+            collection_type("OrderedDict", CollectionShape::Mapping),
         ],
         "collections.abc.Mapping, collections.abc.Sequence"
     )]

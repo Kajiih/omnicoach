@@ -2,8 +2,9 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, PythonCollectionType, collect_collection_types,
-    collect_locally_mutated_return_functions, extract_function_signatures,
+    AnnotationTraversalDepth, CollectionAbstraction, CollectionMutability, PythonCollectionType,
+    collect_collection_types, collect_locally_mutated_return_functions,
+    extract_function_signatures,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::{is_exempt_from_signature_rules, read_only_collection_replacements};
@@ -112,7 +113,10 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             AnnotationTraversalDepth::TransparentWrappersOnly,
         )
         .into_iter()
-        .filter(|collection_type| collection_type.kind == CollectionKind::AbstractMutable)
+        .filter(|collection_type| {
+            collection_type.abstraction == CollectionAbstraction::Abstract
+                && collection_type.mutability == CollectionMutability::Mutable
+        })
         .collect();
         if matched.is_empty() {
             continue;

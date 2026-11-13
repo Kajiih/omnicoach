@@ -26,9 +26,9 @@ mod tree;
 mod trivia;
 
 pub(in crate::code_lint) use self::annotations::{
-    AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
-    collect_collection_types, collection_display, collection_type, generator_yield_type,
-    includes_none_bool_or_callable, return_type_union,
+    AnnotationTraversalDepth, CollectionAbstraction, CollectionMutability, CollectionShape,
+    PythonCollectionType, collect_collection_types, collection_display, collection_type,
+    generator_yield_type, includes_none_bool_or_callable, return_type_union,
 };
 pub(super) use self::annotations::{
     collect_attribute_annotations, collect_parameter_annotations,

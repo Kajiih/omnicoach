@@ -102,30 +102,29 @@ const IMMUTABLE_COLLECTIONS: &[&str] = &[
     "FrozenSet",
 ];
 
-/// What a standard-library collection type lets its holder do.
-// TODO: Why is this mixing mutability, concrete/not concrete, etc?
+/// Whether a standard-library collection type is a concrete container or an abstract interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CollectionKind {
-    /// A concrete mutable container: `list`, `dict`, `set`, their `typing` aliases, and the
-    /// `collections` containers (`defaultdict`, `deque`, `Counter`, `OrderedDict`).
-    ConcreteMutable,
-    /// An abstract mutable interface: `MutableSequence`, `MutableMapping`, `MutableSet`.
-    AbstractMutable,
-    /// An abstract read-only interface: `Sequence`, `Mapping`, `collections.abc.Set`,
-    /// `AbstractSet`, `Collection`, `Iterable`, `Iterator`, `Reversible`.
-    AbstractReadOnly,
-    /// An immutable concrete container: `tuple`, `frozenset` and their `typing` aliases.
-    Immutable,
+pub enum CollectionAbstraction {
+    /// A concrete container: `list`, `dict`, `set`, `tuple`, `frozenset`, the `collections`
+    /// containers (`defaultdict`, `deque`, `Counter`, `OrderedDict`), and their `typing` aliases.
+    Concrete,
+    /// An abstract `collections.abc` or `typing` interface: `Sequence`, `MutableSequence`,
+    /// `Mapping`, `MutableMapping`, `collections.abc.Set`, `AbstractSet`, `MutableSet`,
+    /// `Collection`, `Iterable`, `Iterator`, `Reversible`.
+    Abstract,
 }
 
-impl CollectionKind {
-    /// Returns true for concrete container types (`ConcreteMutable` and `Immutable`), as opposed
-    /// to `collections.abc` interfaces (`AbstractMutable` and `AbstractReadOnly`).
-    // TODO: I don't think this is the proper way to declare/label this information
-    #[must_use]
-    pub const fn is_concrete(self) -> bool {
-        matches!(self, Self::ConcreteMutable | Self::Immutable)
-    }
+/// Whether a standard-library collection type exposes in-place mutation operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionMutability {
+    /// Exposes in-place mutation: `list`, `dict`, `set`, `defaultdict`, `deque`, `Counter`,
+    /// `OrderedDict`, `MutableSequence`, `MutableMapping`, `MutableSet`, and their `typing`
+    /// aliases.
+    Mutable,
+    /// Exposes only read-only access: `Sequence`, `Mapping`, `collections.abc.Set`, `AbstractSet`,
+    /// `Collection`, `Iterable`, `Iterator`, `Reversible`, `tuple`, `frozenset`, and their
+    /// `typing` aliases.
+    ReadOnly,
 }
 
 /// How a standard-library collection type gives access to its elements.
@@ -149,8 +148,10 @@ pub struct PythonCollectionType {
     /// The constructor's unqualified name, resolved through the file's imports (`list`, `Dict`,
     /// `Sequence`; `Set` for `ReadOnlySet` after `from collections.abc import Set as ReadOnlySet`).
     pub name: String,
-    /// What the type lets its holder do.
-    pub kind: CollectionKind,
+    /// Whether the type is a concrete container or an abstract `collections.abc` interface.
+    pub abstraction: CollectionAbstraction,
+    /// Whether the type exposes in-place mutation operations.
+    pub mutability: CollectionMutability,
     /// How the type gives access to its elements.
     pub shape: CollectionShape,
 }
@@ -228,7 +229,10 @@ pub(super) fn annotated_metadata_exprs<'a>(
 /// Fixed-length and empty tuple annotations (`tuple[int, str]`, `tuple[int]`, `tuple[()]`) are
 /// record types rather than variable-length sequence collections and are not collected as `tuple`
 /// (though their element types are still traversed under
-/// [`AnnotationTraversalDepth::CovariantPositions`]).
+/// [`AnnotationTraversalDepth::CovariantPositions`]). Variadic class-object tuples
+/// (`tuple[type[Exception], ...]`, `tuple[type, ...]`) are `_ClassInfo` type-union specifications
+/// required at runtime by `isinstance`, `issubclass`, and `except`, and are likewise not collected
+/// as `tuple`.
 ///
 /// Names are resolved through the file's imports (see [`crate::code_lint::ast::resolve_name`]), so
 /// `from collections.abc import Set` makes `Set` the abstract `collections.abc.Set` rather than
@@ -294,7 +298,7 @@ fn collect_collection_types_expr(
 
             if depth == AnnotationTraversalDepth::CovariantPositions
                 && is_std_type_constructor_prefix(&base_path, &base_terminal)
-                && !is_concrete_collection_constructor(&base_path, &base_terminal)
+                && !is_concrete_mutable_collection_constructor(&base_path, &base_terminal)
             {
                 match base_terminal.as_str() {
                     terminal_name if SINGLE_ARG_COVARIANT_CONTAINERS.contains(&terminal_name) => {
@@ -366,7 +370,8 @@ pub fn collection_display(expression: &AstNode<'_>) -> Option<PythonCollectionTy
     Some(PythonCollectionType {
         path: name.to_owned(),
         name: name.to_owned(),
-        kind: CollectionKind::ConcreteMutable,
+        abstraction: CollectionAbstraction::Concrete,
+        mutability: CollectionMutability::Mutable,
         shape,
     })
 }
@@ -437,8 +442,9 @@ pub struct PythonReturnTypeBranch<'a> {
     #[cfg(test)]
     node: AstNode<'a>,
     /// The variable-length collection type the branch names, directly (`list`, `tuple`) or as a
-    /// subscript (`list[int]`, `tuple[int, ...]`); fixed-length and empty tuples (`tuple[int, str]`,
-    /// `tuple[int]`, `tuple[()]`) are `None`.
+    /// subscript (`list[int]`, `tuple[int, ...]`); fixed-length, empty, and variadic class-object
+    /// tuples (`tuple[int, str]`, `tuple[int]`, `tuple[()]`, `tuple[type[Exception], ...]`) are
+    /// `None`.
     collection: Option<PythonCollectionType>,
     /// The element count if the branch is a non-empty fixed-length tuple (`tuple[int]`,
     /// `tuple[str, int]`, `Tuple[a, b, c]`; not `tuple[int, ...]`, `tuple[()]`, or unsubscripted
@@ -465,7 +471,7 @@ impl PythonReturnTypeBranch<'_> {
     }
 
     /// Returns the collection type if this branch is a variable-length collection (any collection
-    /// other than a fixed-length or empty subscripted `tuple`/`Tuple`).
+    /// other than a fixed-length, empty, or variadic class-object subscripted `tuple`/`Tuple`).
     #[must_use]
     pub const fn variable_length_collection(&self) -> Option<&PythonCollectionType> {
         self.collection.as_ref()
@@ -873,68 +879,6 @@ fn unwrap_return_envelope_expr<'a>(mut current: &'a Expr, file: &ParsedFile) -> 
     current
 }
 
-/// Flattens top-level union constructs (`|`, `Optional[...]`, `Union[...]`, and transparent
-/// qualifiers `Annotated`, `ClassVar`, `Final`, `InitVar`, `Required`, `NotRequired`, `ReadOnly`)
-/// into `branches` and sets `*has_none = true` if `None` (`none`) or `Optional[...]` is part of
-/// the union.
-fn collect_union_branches_expr<'a>(
-    expr: &'a Expr,
-    file: &ParsedFile,
-    has_none: &mut bool,
-    branches: &mut Vec<&'a Expr>,
-) {
-    match expr {
-        Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
-            collect_union_branches_expr(&bin_op.left, file, has_none, branches);
-            collect_union_branches_expr(&bin_op.right, file, has_none, branches);
-        }
-        Expr::NoneLiteral(_) => {
-            *has_none = true;
-        }
-        Expr::Subscript(_) => {
-            let Some(GenericType {
-                base: base_node,
-                arguments: type_args,
-            }) = extract_generic_base_and_args(expr)
-            else {
-                branches.push(expr);
-                return;
-            };
-            let Some(QualifiedName {
-                path: base_path,
-                terminal: base_terminal,
-            }) = written_name(base_node, &file.source).resolve(file)
-            else {
-                branches.push(expr);
-                return;
-            };
-            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_OPTIONAL]) {
-                *has_none = true;
-                for argument in type_args {
-                    collect_union_branches_expr(argument, file, has_none, branches);
-                }
-                return;
-            }
-            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_UNION]) {
-                for argument in type_args {
-                    collect_union_branches_expr(argument, file, has_none, branches);
-                }
-                return;
-            }
-            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {
-                if let Some(&first_arg) = type_args.first() {
-                    collect_union_branches_expr(first_arg, file, has_none, branches);
-                }
-                return;
-            }
-            branches.push(expr);
-        }
-        _ => {
-            branches.push(expr);
-        }
-    }
-}
-
 /// Returns true if `expr` is the `bool` builtin or a `Callable` constructor (optionally
 /// subscripted), resolved through the file's imports.
 fn is_bool_or_callable_type_expr(expr: &Expr, file: &ParsedFile) -> bool {
@@ -1017,7 +961,9 @@ fn collect_annotated_metadata_exprs<'a>(
 ///
 /// When `expr` is a subscript (`list[int]`, `tuple[int, ...]`), resolves its base constructor;
 /// fixed-length and empty tuple subscripts (`tuple[int, str]`, `tuple[int]`, `tuple[()]`) are
-/// record types rather than variable-length sequence collections and return `None`.
+/// record types rather than variable-length sequence collections and return `None`, and variadic
+/// class-object tuples (`tuple[type[Exception], ...]`, `tuple[type, ...]`) are `_ClassInfo`
+/// type-union specifications rather than sequence containers and also return `None`.
 fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollectionType> {
     let generic = extract_generic_base_and_args(expr);
     let base = generic.as_ref().map_or(expr, |generic| generic.base);
@@ -1030,36 +976,146 @@ fn collection_type_expr(expr: &Expr, file: &ParsedFile) -> Option<PythonCollecti
     } = written_name(base, &file.source).resolve(file)?;
     if let Some(generic) = &generic
         && matches!(name.as_str(), TUPLE_CONSTRUCTOR | TYPING_TUPLE_CONSTRUCTOR)
-        && !matches!(generic.arguments.as_slice(), [_, Expr::EllipsisLiteral(_)])
+        && !is_variadic_data_tuple(&generic.arguments, file)
     {
         return None;
     }
-    let kind = collection_kind(&resolved_path, &name)?;
+    let CollectionTaxonomy {
+        abstraction,
+        mutability,
+    } = collection_taxonomy(&resolved_path, &name)?;
     let shape = collection_shape(&name);
     let span = span_from_ruff_range(base.range());
     Some(PythonCollectionType {
         path: file.source[span.start..span.end].to_owned(),
         name,
-        kind,
+        abstraction,
+        mutability,
         shape,
     })
 }
 
-/// Classifies the import-resolved `(path, terminal)` as a standard-library collection type
-/// constructor.
-fn collection_kind(path: &str, terminal: &str) -> Option<CollectionKind> {
-    let kind = if is_concrete_collection_constructor(path, terminal) {
-        CollectionKind::ConcreteMutable
-    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
-        CollectionKind::AbstractMutable
-    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {
-        CollectionKind::AbstractReadOnly
-    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {
-        CollectionKind::Immutable
-    } else {
-        return None;
+/// The abstraction level and mutability of a standard-library collection constructor.
+struct CollectionTaxonomy {
+    abstraction: CollectionAbstraction,
+    mutability: CollectionMutability,
+}
+
+/// Returns true if `arguments` of a subscripted `tuple[...]` / `Tuple[...]` has the variadic
+/// sequence shape `[element, ...]` where `element` is not a `_ClassInfo` class-object type
+/// (`type`, `builtins.type`, `typing.Type`, `typing_extensions.Type`, subscripted or bare, or a
+/// union thereof).
+fn is_variadic_data_tuple(arguments: &[&Expr], file: &ParsedFile) -> bool {
+    let [element, Expr::EllipsisLiteral(_)] = arguments else {
+        return false;
     };
-    Some(kind)
+    let mut has_none = false;
+    let mut branches = Vec::new();
+    collect_union_branches_expr(element, file, &mut has_none, &mut branches);
+    has_none
+        || !branches
+            .into_iter()
+            .all(|branch| is_class_object_type_expr(branch, file))
+}
+
+/// Flattens top-level union constructs (`|`, `Optional[...]`, `Union[...]`, and transparent
+/// qualifiers `Annotated`, `ClassVar`, `Final`, `InitVar`, `Required`, `NotRequired`, `ReadOnly`)
+/// into `branches` and sets `*has_none = true` if `None` (`none`) or `Optional[...]` is part of
+/// the union.
+fn collect_union_branches_expr<'a>(
+    expr: &'a Expr,
+    file: &ParsedFile,
+    has_none: &mut bool,
+    branches: &mut Vec<&'a Expr>,
+) {
+    match expr {
+        Expr::BinOp(bin_op) if bin_op.op == Operator::BitOr => {
+            collect_union_branches_expr(&bin_op.left, file, has_none, branches);
+            collect_union_branches_expr(&bin_op.right, file, has_none, branches);
+        }
+        Expr::NoneLiteral(_) => {
+            *has_none = true;
+        }
+        Expr::Subscript(_) => {
+            let Some(GenericType {
+                base: base_node,
+                arguments: type_args,
+            }) = extract_generic_base_and_args(expr)
+            else {
+                branches.push(expr);
+                return;
+            };
+            let Some(QualifiedName {
+                path: base_path,
+                terminal: base_terminal,
+            }) = written_name(base_node, &file.source).resolve(file)
+            else {
+                branches.push(expr);
+                return;
+            };
+            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_OPTIONAL]) {
+                *has_none = true;
+                for argument in type_args {
+                    collect_union_branches_expr(argument, file, has_none, branches);
+                }
+                return;
+            }
+            if is_std_type_constructor(&base_path, &base_terminal, &[TYPE_UNION]) {
+                for argument in type_args {
+                    collect_union_branches_expr(argument, file, has_none, branches);
+                }
+                return;
+            }
+            if is_std_type_constructor(&base_path, &base_terminal, TRANSPARENT_FIRST_ARG_WRAPPERS) {
+                if let Some(&first_arg) = type_args.first() {
+                    collect_union_branches_expr(first_arg, file, has_none, branches);
+                }
+                return;
+            }
+            branches.push(expr);
+        }
+        _ => {
+            branches.push(expr);
+        }
+    }
+}
+
+/// Returns true if `expr` is the `type` builtin or `typing.Type` / `typing_extensions.Type`
+/// constructor (optionally subscripted, as in `type[Exception]`), resolved through the file's
+/// imports.
+fn is_class_object_type_expr(expr: &Expr, file: &ParsedFile) -> bool {
+    let base = extract_generic_base_and_args(expr).map_or(expr, |generic| generic.base);
+    written_name(base, &file.source)
+        .resolve(file)
+        .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &["type", "Type"]))
+}
+
+/// Classifies the import-resolved `(path, terminal)` as a standard-library collection type
+/// constructor along the abstraction and mutability axes.
+fn collection_taxonomy(path: &str, terminal: &str) -> Option<CollectionTaxonomy> {
+    if is_concrete_mutable_collection_constructor(path, terminal) {
+        Some(CollectionTaxonomy {
+            abstraction: CollectionAbstraction::Concrete,
+            mutability: CollectionMutability::Mutable,
+        })
+    } else if is_std_type_constructor(path, terminal, MUTABLE_COLLECTION_ABCS) {
+        Some(CollectionTaxonomy {
+            abstraction: CollectionAbstraction::Abstract,
+            mutability: CollectionMutability::Mutable,
+        })
+    } else if is_std_type_constructor(path, terminal, READ_ONLY_COLLECTION_ABCS) {
+        Some(CollectionTaxonomy {
+            abstraction: CollectionAbstraction::Abstract,
+            mutability: CollectionMutability::ReadOnly,
+        })
+    } else if is_std_type_constructor(path, terminal, IMMUTABLE_COLLECTIONS) {
+        Some(CollectionTaxonomy {
+            abstraction: CollectionAbstraction::Concrete,
+            mutability: CollectionMutability::ReadOnly,
+        })
+    } else {
+        None
+    }
 }
 
 /// The element access shape of the collection type constructor named `terminal`.
@@ -1124,7 +1180,7 @@ fn is_std_type_constructor(path: &str, terminal: &str, targets: &[&str]) -> bool
 /// Qualified `collections.abc.Set` is excluded because it is the abstract set ABC, whereas
 /// unqualified `Set` and `typing.Set` are flagged as concrete (per Ruff `PYI025`, `collections.abc.Set`
 /// should be imported `as AbstractSet`).
-fn is_concrete_collection_constructor(path: &str, terminal: &str) -> bool {
+fn is_concrete_mutable_collection_constructor(path: &str, terminal: &str) -> bool {
     match terminal {
         LIST_CONSTRUCTOR
         | "List"
@@ -1252,7 +1308,9 @@ mod tests {
                 let type_node = parameter.type_node.as_ref().expect("param should be typed");
                 collect_collection_types(type_node, AnnotationTraversalDepth::CovariantPositions)
                     .into_iter()
-                    .filter(|collection_type| collection_type.kind.is_concrete())
+                    .filter(|collection_type| {
+                        collection_type.abstraction == CollectionAbstraction::Concrete
+                    })
                     .map(|collection_type| collection_type.path)
                     .collect()
             })
@@ -1271,8 +1329,8 @@ mod tests {
     }
 
     /// Collects the top-level collection types of the annotation of the first parameter of the
-    /// first function in `source`, as `(path, kind, shape)`.
-    fn top_level_collection_types(source: &str) -> Vec<(String, CollectionKind, CollectionShape)> {
+    /// first function in `source`.
+    fn top_level_collection_types(source: &str) -> Vec<PythonCollectionType> {
         let file = ParsedFile::new(source, Language::Python);
         let sigs = extract_function_signatures(&file);
         let type_node = sigs[0].parameters[0]
@@ -1280,123 +1338,138 @@ mod tests {
             .as_ref()
             .expect("param should be typed");
         collect_collection_types(type_node, AnnotationTraversalDepth::TransparentWrappersOnly)
-            .into_iter()
-            .map(|collection_type| {
-                (
-                    collection_type.path,
-                    collection_type.kind,
-                    collection_type.shape,
-                )
-            })
-            .collect()
     }
 
     #[rstest]
     #[case::list(
         "def f(x: list[int]): pass",
         "list",
-        CollectionKind::ConcreteMutable,
+        CollectionAbstraction::Concrete,
+        CollectionMutability::Mutable,
         CollectionShape::Sequence
     )]
     #[case::typing_dict(
         "def f(x: typing.Dict[str, int]): pass",
         "typing.Dict",
-        CollectionKind::ConcreteMutable,
+        CollectionAbstraction::Concrete,
+        CollectionMutability::Mutable,
         CollectionShape::Mapping
     )]
     #[case::unqualified_set(
         "def f(x: Set[int]): pass",
         "Set",
-        CollectionKind::ConcreteMutable,
+        CollectionAbstraction::Concrete,
+        CollectionMutability::Mutable,
         CollectionShape::Set
     )]
     #[case::deque(
         "def f(x: collections.deque[int]): pass",
         "collections.deque",
-        CollectionKind::ConcreteMutable,
+        CollectionAbstraction::Concrete,
+        CollectionMutability::Mutable,
         CollectionShape::Sequence
     )]
     #[case::counter(
         "def f(x: collections.Counter[str]): pass",
         "collections.Counter",
-        CollectionKind::ConcreteMutable,
+        CollectionAbstraction::Concrete,
+        CollectionMutability::Mutable,
         CollectionShape::Mapping
     )]
     #[case::mutable_sequence(
         "def f(x: MutableSequence[int]): pass",
         "MutableSequence",
-        CollectionKind::AbstractMutable,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::Mutable,
         CollectionShape::Sequence
     )]
     #[case::mutable_mapping(
         "def f(x: collections.abc.MutableMapping[str, int]): pass",
         "collections.abc.MutableMapping",
-        CollectionKind::AbstractMutable,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::Mutable,
         CollectionShape::Mapping
     )]
     #[case::mutable_set(
         "def f(x: typing.MutableSet[int] | None): pass",
         "typing.MutableSet",
-        CollectionKind::AbstractMutable,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::Mutable,
         CollectionShape::Set
     )]
     #[case::sequence(
         "def f(x: Optional[collections.abc.Sequence[int]]): pass",
         "collections.abc.Sequence",
-        CollectionKind::AbstractReadOnly,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::ReadOnly,
         CollectionShape::Sequence
     )]
     #[case::mapping(
         "def f(x: Mapping[str, Sequence[int]]): pass",
         "Mapping",
-        CollectionKind::AbstractReadOnly,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::ReadOnly,
         CollectionShape::Mapping
     )]
     #[case::abc_set(
         "def f(x: collections.abc.Set[int]): pass",
         "collections.abc.Set",
-        CollectionKind::AbstractReadOnly,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::ReadOnly,
         CollectionShape::Set
     )]
     #[case::imported_abc_set(
         "from collections.abc import Set\ndef f(x: Set[int]): pass",
         "Set",
-        CollectionKind::AbstractReadOnly,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::ReadOnly,
         CollectionShape::Set
     )]
     #[case::collection(
         "def f(x: typing.Collection[int]): pass",
         "typing.Collection",
-        CollectionKind::AbstractReadOnly,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::ReadOnly,
         CollectionShape::Iterable
     )]
     #[case::iterable(
         "def f(x: Iterable[int]): pass",
         "Iterable",
-        CollectionKind::AbstractReadOnly,
+        CollectionAbstraction::Abstract,
+        CollectionMutability::ReadOnly,
         CollectionShape::Iterable
     )]
     #[case::tuple(
         "def f(x: tuple[int, ...]): pass",
         "tuple",
-        CollectionKind::Immutable,
+        CollectionAbstraction::Concrete,
+        CollectionMutability::ReadOnly,
         CollectionShape::Sequence
     )]
     #[case::frozenset(
         "def f(x: frozenset[int]): pass",
         "frozenset",
-        CollectionKind::Immutable,
+        CollectionAbstraction::Concrete,
+        CollectionMutability::ReadOnly,
         CollectionShape::Set
     )]
     fn test_collection_type_taxonomy(
         #[case] source: &str,
         #[case] path: &str,
-        #[case] kind: CollectionKind,
+        #[case] abstraction: CollectionAbstraction,
+        #[case] mutability: CollectionMutability,
         #[case] shape: CollectionShape,
     ) {
+        let name = path.rsplit('.').next().unwrap_or(path).to_owned();
         assert_eq!(
             top_level_collection_types(source),
-            [(path.to_string(), kind, shape)]
+            [PythonCollectionType {
+                path: path.to_owned(),
+                name,
+                abstraction,
+                mutability,
+                shape,
+            }]
         );
     }
 
@@ -1409,10 +1482,18 @@ mod tests {
     #[case::empty_tuple_ignored("def f(x: tuple[()]): pass", &[])]
     #[case::bare_tuple_collected("def f(x: tuple): pass", &["tuple"])]
     #[case::typing_tuple_ellipsis_collected("def f(x: Tuple[int, ...]): pass", &["Tuple"])]
+    #[case::class_info_type_tuple_ignored("def f(x: tuple[type[Exception], ...]): pass", &[])]
+    #[case::class_info_bare_type_tuple_ignored("def f(x: tuple[type, ...]): pass", &[])]
+    #[case::class_info_typing_type_tuple_ignored("def f(x: Tuple[typing.Type[Exception], ...]): pass", &[])]
+    #[case::class_info_union_type_tuple_ignored("def f(x: tuple[type[ValueError] | type[KeyError], ...]): pass", &[])]
+    #[case::class_info_annotated_type_tuple_ignored("def f(x: tuple[Annotated[type[Exception], 'meta'], ...]): pass", &[])]
+    #[case::mixed_type_and_value_tuple_collected("def f(x: tuple[type[int] | str, ...]): pass", &["tuple"])]
+    #[case::nullable_type_element_tuple_collected("def f(x: tuple[type[int] | None, ...]): pass", &["tuple"])]
+    #[case::local_shadow_type_tuple_collected("class type: pass\ndef f(x: tuple[type[int], ...]): pass", &["tuple"])]
     fn test_collect_top_level_collection_types(#[case] source: &str, #[case] expected: &[&str]) {
         let paths: Vec<String> = top_level_collection_types(source)
             .into_iter()
-            .map(|(path, _, _)| path)
+            .map(|collection_type| collection_type.path)
             .collect();
         assert_eq!(paths, expected);
     }

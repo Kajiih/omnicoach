@@ -1,7 +1,7 @@
 //! Flags Python module-level constants whose type annotation or value is a mutable collection.
 
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, CollectionKind, CollectionShape, PythonCollectionType,
+    AnnotationTraversalDepth, CollectionMutability, CollectionShape, PythonCollectionType,
     PythonModuleAssignment, call_callee, collect_collection_types, collect_module_assignments,
     collection_display, collection_type,
 };
@@ -145,10 +145,7 @@ fn mutable_collections<'tree, 'assignment>(
             collect_collection_types(annotation, AnnotationTraversalDepth::CovariantPositions)
                 .into_iter()
                 .filter(|collection_type| {
-                    matches!(
-                        collection_type.kind,
-                        CollectionKind::ConcreteMutable | CollectionKind::AbstractMutable
-                    )
+                    collection_type.mutability == CollectionMutability::Mutable
                 })
                 .collect();
         if !matched.is_empty() {

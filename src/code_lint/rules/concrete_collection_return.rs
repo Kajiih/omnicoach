@@ -2,8 +2,8 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    AnnotationTraversalDepth, PythonCollectionType, collect_collection_types,
-    extract_function_signatures,
+    AnnotationTraversalDepth, CollectionAbstraction, PythonCollectionType,
+    collect_collection_types, extract_function_signatures,
 };
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::{is_exempt_from_signature_rules, read_only_collection_replacements};
@@ -39,10 +39,11 @@ pub const RULE: CodeRule = CodeRule {
                 Flags functions and methods whose return annotation uses a concrete collection type,
                 such as `-> list[str]`, `-> tuple[str, ...]`, or `-> frozenset[str]`, including
                 inside covariant wrappers such as `Sequence[list[str]]`. Fixed-length tuple
-                annotations (`tuple[str, int]`, `tuple[int]`, `tuple[()]`) are not flagged here (see
-                `positional-tuple-return`). Methods that cannot freely change their signature, such
-                as `@override` methods, `Protocol` and `ABC` members and most dunder methods, are
-                skipped."},
+                annotations (`tuple[str, int]`, `tuple[int]`, `tuple[()]`; see
+                `positional-tuple-return`) and variadic class-object tuples
+                (`tuple[type[Exception], ...]`) are not flagged here. Methods that cannot freely
+                change their signature, such as `@override` methods, `Protocol` and `ABC` members
+                and most dunder methods, are skipped."},
             why_is_this_bad: indoc::indoc! {r"
                 Returning a concrete `list`, `dict`, `set`, `tuple[T, ...]`, or `frozenset` couples
                 the signature to a specific container representation—and, for `list`, `dict`, and
@@ -101,7 +102,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
             AnnotationTraversalDepth::CovariantPositions,
         )
         .into_iter()
-        .filter(|collection_type| collection_type.kind.is_concrete())
+        .filter(|collection_type| collection_type.abstraction == CollectionAbstraction::Concrete)
         .collect();
         if matched.is_empty() {
             continue;
@@ -166,6 +167,15 @@ crate::test_utils::rule_test!(
                 empty_tuple_return_type_exempt => r#"
                     def get_empty() -> tuple[()]:
                         return ()
+                "#,
+                class_info_type_tuple_return_types_exempt => r#"
+                    from typing import Type, Tuple
+
+                    def retryable_errors() -> tuple[type[Exception], ...]:
+                        return (ValueError, KeyError)
+
+                    def legacy_errors() -> Tuple[Type[Exception], ...]:
+                        return (ValueError,)
                 "#,
                 protocol_class_exempt => r#"
                     from typing import Protocol
