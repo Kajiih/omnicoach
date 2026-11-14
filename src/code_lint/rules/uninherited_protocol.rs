@@ -9,7 +9,9 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonBaseClass, PythonClassInfo, extract_classes};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
 use crate::code_lint::policy::is_fake_class_name;
-use crate::code_lint::project::{ImportedProtocolSummary, ProjectContext, PythonClassId};
+use crate::code_lint::project::{
+    ImportedProtocolSummary, ProjectContext, PythonClassId, PythonModuleContext,
+};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
@@ -146,25 +148,16 @@ fn check_file(
     if !has_candidate_class {
         return Vec::new();
     }
-    let current_module = project.python_module_of_path(path);
-    let imported_protocols: Vec<ImportedProtocolSummary> =
-        current_module.as_deref().map_or_else(Vec::new, |module| {
-            project
-                .imported_protocols_in_module(module)
-                .into_iter()
-                .filter(|imported| imported.counted_methods.len() >= min_methods)
-                .collect()
-        });
+    let python_project = project.python(path);
+    let imported_protocols: Vec<ImportedProtocolSummary> = python_project
+        .imported_protocols()
+        .into_iter()
+        .filter(|imported| imported.counted_methods.len() >= min_methods)
+        .collect();
     let local_protocols: Vec<LocalProtocol> = (0..classes.len())
         .filter(|&protocol_index| classes[protocol_index].is_protocol())
         .map(|protocol_index| {
-            build_local_protocol(
-                &classes,
-                &class_methods,
-                protocol_index,
-                current_module.as_deref(),
-                project,
-            )
+            build_local_protocol(&classes, &class_methods, protocol_index, &python_project)
         })
         .filter(|protocol| protocol.methods.len() >= min_methods)
         .collect();
@@ -183,8 +176,7 @@ fn check_file(
             &local_protocols,
             &imported_protocols,
             index,
-            current_module.as_deref(),
-            project,
+            &python_project,
         ) {
             diagnostics.push(rule.diagnostic_at_node(
                 path,
@@ -225,10 +217,9 @@ fn build_local_protocol(
     classes: &[PythonClassInfo<'_>],
     class_methods: &[HashSet<String>],
     protocol_index: usize,
-    current_module: Option<&str>,
-    project: &ProjectContext<'_>,
+    python_project: &PythonModuleContext<'_>,
 ) -> LocalProtocol {
-    let ancestors = project.resolve_class_ancestors(current_module, classes, protocol_index);
+    let ancestors = python_project.resolve_class_ancestors(classes, protocol_index);
     let mut methods: HashSet<String> = std::iter::once(protocol_index)
         .chain(ancestors.in_file.iter().copied())
         .flat_map(|extended| class_methods[extended].iter().cloned())
@@ -250,10 +241,9 @@ fn uninherited_protocol_names<'p>(
     local_protocols: &'p [LocalProtocol],
     imported_protocols: &'p [ImportedProtocolSummary],
     index: usize,
-    current_module: Option<&str>,
-    project: &ProjectContext<'_>,
+    python_project: &PythonModuleContext<'_>,
 ) -> Vec<&'p str> {
-    let ancestors = project.resolve_class_ancestors(current_module, classes, index);
+    let ancestors = python_project.resolve_class_ancestors(classes, index);
 
     let mut matched_local: Vec<&LocalProtocol> = local_protocols
         .iter()

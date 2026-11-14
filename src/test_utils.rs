@@ -1572,10 +1572,7 @@ mod tests {
         project: &ProjectContext<'_>,
         (): (),
     ) -> Vec<Diagnostic> {
-        let Some(module) = project.python_module_of_path(path) else {
-            return Vec::new();
-        };
-        let Some(summary) = project.python_summary(&module) else {
+        let Some(summary) = project.python(path).summary() else {
             return Vec::new();
         };
         summary

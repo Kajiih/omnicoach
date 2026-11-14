@@ -65,26 +65,12 @@ impl<'a> PythonModuleContext<'a> {
         }
     }
 
-    /// Constructs a [`PythonModuleContext`] bound to an already-resolved `current_module`.
-    #[must_use]
-    pub(in crate::code_lint::project) const fn from_module(
-        index: &'a PythonIndex<'a>,
-        current_module: Option<String>,
-    ) -> Self {
-        Self {
-            index,
-            current_module,
-        }
-    }
-
-    /// Returns the memoized [`crate::code_lint::ast::python::PythonFileSummary`] of `module`.
+    /// Returns the memoized [`crate::code_lint::ast::python::PythonFileSummary`] of the bound
+    /// module, or `None` when the file lies outside the project root.
     #[cfg(test)]
     #[must_use]
-    pub fn summary(
-        &self,
-        module: &str,
-    ) -> Option<Arc<crate::code_lint::ast::python::PythonFileSummary>> {
-        self.index.summary(module)
+    pub fn summary(&self) -> Option<Arc<crate::code_lint::ast::python::PythonFileSummary>> {
+        self.index.summary(self.current_module.as_deref()?)
     }
 
     /// Extracts every `@override` method in `file` that has both its own docstring and an
@@ -836,6 +822,86 @@ mod tests {
                 &["BaseModel", "pydantic.BaseModel", "pydantic.main.BaseModel"],
             ),
             expected
+        );
+    }
+
+    #[test]
+    fn out_of_root_path_has_no_module_summary_or_imported_protocols() {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[
+                ("pyproject.toml", "[project]\nname = \"demo\"\n"),
+                ("standalone.py", "class Local:\n    pass\n"),
+            ],
+        );
+        let layout = PythonLayout::discover(
+            WorkspaceAnchor::new(root.to_path_buf(), None),
+            root,
+            None,
+            &source,
+            &[],
+        );
+        let index = PythonIndex::new(layout, &source);
+        let context = PythonModuleContext::new(&index, Path::new("/outside/standalone.py"));
+
+        assert!(context.summary().is_none());
+        assert_eq!(context.imported_protocols(), Vec::new());
+    }
+
+    #[test]
+    fn out_of_root_path_still_resolves_in_file_mro_and_docstrings() {
+        let root = Path::new("/repo");
+        let source = MemoryFileSource::from_relative_files(
+            root,
+            &[("pyproject.toml", "[project]\nname = \"demo\"\n")],
+        );
+        let standalone_code = indoc::indoc! {r#"
+            from typing import override
+            from pydantic import BaseModel
+
+            class Base(BaseModel):
+                def run(self) -> None:
+                    """Run from Base."""
+
+            class Child(Base):
+                @override
+                def run(self) -> None:
+                    """Run from Child."""
+        "#};
+        let layout = PythonLayout::discover(
+            WorkspaceAnchor::new(root.to_path_buf(), None),
+            root,
+            None,
+            &source,
+            &[],
+        );
+        let index = PythonIndex::new(layout, &source);
+        let context = PythonModuleContext::new(&index, Path::new("/outside/standalone.py"));
+        let parsed = ParsedFile::new(standalone_code, Language::Python);
+        let classes = extract_classes(&parsed);
+        let override_ancestors: Vec<_> = context
+            .documented_override_methods(&parsed)
+            .into_iter()
+            .map(|entry| (entry.method_name, entry.ancestor_name))
+            .collect();
+
+        assert_eq!(
+            context.resolve_ancestor_class_names(&classes, 1),
+            vec!["Base".to_owned()]
+        );
+        assert_eq!(
+            context.resolve_class_ancestors(&classes, 1),
+            ResolvedClassAncestors {
+                in_file: vec![0],
+                cross_module: HashSet::new(),
+                cross_module_public_methods: HashSet::new(),
+            }
+        );
+        assert!(context.class_mro_has_base_in(&classes, 1, &["pydantic.BaseModel"]));
+        assert_eq!(
+            override_ancestors,
+            vec![("run".to_owned(), "Base".to_owned())]
         );
     }
 }

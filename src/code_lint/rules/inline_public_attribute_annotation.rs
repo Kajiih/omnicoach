@@ -4,7 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
 use crate::code_lint::policy::is_pydantic_model;
-use crate::code_lint::project::ProjectContext;
+use crate::code_lint::project::{ProjectContext, PythonModuleContext};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
@@ -123,11 +123,14 @@ fn check_file(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let classes = extract_classes(file);
-    let current_module = project.python_module_of_path(path);
+    if classes.is_empty() {
+        return diagnostics;
+    }
+    let python_project = project.python(path);
     for (index, class) in classes.iter().enumerate() {
         // Moving the annotation to the body of a field-synthesizing class turns it into a
         // constructor field, and a bare `Final` is invalid in a class body without a value.
-        if is_field_synthesizing_class(current_module.as_deref(), &classes, index, project) {
+        if is_field_synthesizing_class(&classes, index, &python_project) {
             continue;
         }
         for attribute in class.instance_attribute_annotations() {
@@ -156,13 +159,12 @@ fn check_file(
 /// direct `@dataclass` / `attrs` decorator on the class itself, or by inheriting from
 /// `pydantic.BaseModel` in its local or cross-module MRO.
 fn is_field_synthesizing_class(
-    current_module: Option<&str>,
     classes: &[PythonClassInfo<'_>],
     index: usize,
-    project: &ProjectContext<'_>,
+    python_project: &PythonModuleContext<'_>,
 ) -> bool {
     classes[index].has_decorator_in(FIELD_SYNTHESIZING_DECORATOR_PATHS)
-        || is_pydantic_model(current_module, classes, index, project)
+        || is_pydantic_model(classes, index, python_project)
 }
 
 #[cfg(test)]

@@ -146,7 +146,7 @@ fn check_file(
     (): (),
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    for entry in project.documented_override_methods(file, path) {
+    for entry in project.python(path).documented_override_methods(file) {
         if entry
             .docstring
             .copies_owned_summary_of(&entry.inherited_docstring)

@@ -22,7 +22,7 @@ use crate::code_lint::ast::python::{
     CollectionShape, PythonClassInfo, PythonCollectionType, PythonFunctionSignature,
     is_interface_method,
 };
-use crate::code_lint::project::ProjectContext;
+use crate::code_lint::project::PythonModuleContext;
 use crate::rule_declaration::{CountOption, LanguageDefaults, rule_options};
 
 const MIN_STATEMENTS_KEY: &str = "min-statements";
@@ -141,12 +141,11 @@ pub(super) fn is_exempt_from_body_usage_rules(signature: &PythonFunctionSignatur
 /// project modules) directly inherits from `pydantic.BaseModel`.
 #[must_use]
 pub(super) fn is_pydantic_model(
-    current_module: Option<&str>,
     classes: &[PythonClassInfo<'_>],
     index: usize,
-    project: &ProjectContext<'_>,
+    python_project: &PythonModuleContext<'_>,
 ) -> bool {
-    project.class_mro_has_base_in(current_module, classes, index, PYDANTIC_BASE_MODEL_PATHS)
+    python_project.class_mro_has_base_in(classes, index, PYDANTIC_BASE_MODEL_PATHS)
 }
 
 /// Returns true if `name` starts with the word `Fake` after any leading `_`: `Fake` alone or

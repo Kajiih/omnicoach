@@ -6,7 +6,7 @@
 use crate::code_lint::ast::python::{PythonBaseClass, PythonClassInfo, normalize_docstring_text};
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
-use crate::code_lint::project::ProjectContext;
+use crate::code_lint::project::{ProjectContext, PythonModuleContext};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
@@ -173,7 +173,7 @@ fn check_file(
     if classes.is_empty() {
         return Vec::new();
     }
-    let current_module = project.python_module_of_path(path);
+    let python_project = project.python(path);
     let mut diagnostics = Vec::new();
     for (index, class) in classes.iter().enumerate() {
         let mut cached_base_references: Option<Vec<String>> = None;
@@ -184,9 +184,8 @@ fn check_file(
             let Some(docstring) = method.docstring() else {
                 continue;
             };
-            let resolved_references = cached_base_references.get_or_insert_with(|| {
-                base_references(&classes, index, current_module.as_deref(), project)
-            });
+            let resolved_references = cached_base_references
+                .get_or_insert_with(|| base_references(&classes, index, &python_project));
             let text = comparable_text(&docstring.normalized());
             let method_name = method.name.to_lowercase();
             let is_deferral = phrases.iter().any(|phrase| {
@@ -214,10 +213,9 @@ fn check_file(
 fn base_references(
     classes: &[PythonClassInfo<'_>],
     index: usize,
-    current_module: Option<&str>,
-    project: &ProjectContext<'_>,
+    python_project: &PythonModuleContext<'_>,
 ) -> Vec<String> {
-    let resolved_ancestors = project.resolve_ancestor_class_names(current_module, classes, index);
+    let resolved_ancestors = python_project.resolve_ancestor_class_names(classes, index);
     let names = classes[index]
         .bases
         .iter()

@@ -21,6 +21,8 @@ pub(in crate::code_lint) use self::foundation::{
     InvalidArchitectureComponentKind, ModuleFact, ProjectFacts, ProjectSourceFile,
 };
 
+pub(crate) use self::python::PythonModuleContext;
+
 pub use self::context::{ProjectContext, ProjectIndex, ProjectLayout};
 pub use self::foundation::{
     ArchitectureConfigError, ArchitectureError, ArchitectureSpec, CONFIG_FILE_NAME, ComponentSpec,

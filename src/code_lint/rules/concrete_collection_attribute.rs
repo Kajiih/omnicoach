@@ -101,12 +101,15 @@ fn check_file(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let classes = extract_classes(file);
-    let current_module = project.python_module_of_path(path);
+    if classes.is_empty() {
+        return diagnostics;
+    }
+    let python_project = project.python(path);
     for (index, class) in classes.iter().enumerate() {
         if class.is_interface() {
             continue;
         }
-        let is_pydantic = is_pydantic_model(current_module.as_deref(), &classes, index, project);
+        let is_pydantic = is_pydantic_model(&classes, index, &python_project);
         for attribute in class.annotated_attributes() {
             if attribute.name.starts_with('_') || (is_pydantic && attribute.is_in_class_body) {
                 continue;

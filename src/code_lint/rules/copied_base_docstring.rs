@@ -113,7 +113,8 @@ fn check_file(
     (): (),
 ) -> Vec<Diagnostic> {
     project
-        .documented_override_methods(file, path)
+        .python(path)
+        .documented_override_methods(file)
         .into_iter()
         .filter(|entry| {
             entry.docstring.normalized() == entry.inherited_docstring.normalized()
