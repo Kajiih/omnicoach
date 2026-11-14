@@ -9,7 +9,7 @@ use crate::diagnostic::Language;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-const PYPROJECT_TOML: &str = "pyproject.toml";
+pub(in crate::code_lint::project) const PYPROJECT_TOML: &str = "pyproject.toml";
 const PYTHON_EXTENSION: &str = "py";
 const PYTHON_STUB_EXTENSION: &str = "pyi";
 const PYTHON_SUFFIX: &str = ".py";

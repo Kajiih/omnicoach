@@ -6,7 +6,8 @@
 use crate::code_lint::ast::python::{PythonBaseClass, PythonClassInfo, normalize_docstring_text};
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
-use crate::code_lint::project::{ProjectContext, PythonModuleContext};
+use crate::code_lint::project::context::ProjectContext;
+use crate::code_lint::project::python::PythonModuleContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,

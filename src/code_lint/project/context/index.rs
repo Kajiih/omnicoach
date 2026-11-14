@@ -60,7 +60,7 @@ impl<'s> ProjectIndex<'s> {
     ///
     /// Returns [`ProjectTomlError`] if an external `.omnicoach.toml` fails TOML deserialization
     /// or `[architecture]` validation.
-    pub fn discover_with_config(
+    pub(crate) fn discover_with_config(
         anchor: &Path,
         source: &'s dyn FileSource,
         config: &ProjectConfig,
@@ -78,7 +78,7 @@ impl<'s> ProjectIndex<'s> {
     ///
     /// Returns [`ProjectTomlError`] if an external `.omnicoach.toml` fails TOML deserialization
     /// or `[architecture]` validation.
-    pub fn from_layout_and_config(
+    pub(in crate::code_lint) fn from_layout_and_config(
         base_layout: ProjectLayout,
         source: &'s dyn FileSource,
         config: &ProjectConfig,
@@ -136,13 +136,13 @@ impl<'s> ProjectIndex<'s> {
 
     /// Project layout used by this index.
     #[must_use]
-    pub const fn layout(&self) -> &ProjectLayout {
+    pub(in crate::code_lint) const fn layout(&self) -> &ProjectLayout {
         &self.layout
     }
 
     /// Rule-registry-independent project configuration resolved for this index.
     #[must_use]
-    pub const fn project_config(&self) -> &ProjectConfig {
+    pub(in crate::code_lint) const fn project_config(&self) -> &ProjectConfig {
         &self.project_config
     }
 

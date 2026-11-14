@@ -1,5 +1,7 @@
 //! Unified cross-language project layout, memoized summary index, rule query context, and
-//! multi-file source discovery.
+//! multi-file source discovery (`CodeLintProjectContext`).
+
+architecture_component!(CodeLintProjectContext);
 
 mod discovery;
 mod index;

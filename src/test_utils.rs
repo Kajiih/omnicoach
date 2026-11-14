@@ -7,7 +7,8 @@ use crate::code_lint::ast::{
 };
 use crate::code_lint::contract::{CodeRule, ProjectCodeRule};
 use crate::code_lint::policy::is_trivial_literal;
-use crate::code_lint::project::{MemoryFileSource, ProjectContext, ProjectIndex, ProjectLayout};
+use crate::code_lint::project::context::{ProjectContext, ProjectIndex, ProjectLayout};
+use crate::code_lint::project::foundation::{CONFIG_FILE_NAME, MemoryFileSource, ProjectConfig};
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::{Diagnostic, Language};
@@ -848,8 +849,8 @@ fn validate_and_parse_project_files<'a>(
                 "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': stub file '{relative_path}' has a syntax error:\n{content}",
             );
             parsed_files.push((relative_path, parsed));
-        } else if relative_path == crate::code_lint::project::CONFIG_FILE_NAME
-            && let Err(error) = crate::code_lint::project::ProjectConfig::from_toml_str(content)
+        } else if relative_path == CONFIG_FILE_NAME
+            && let Err(error) = ProjectConfig::from_toml_str(content)
         {
             panic!(
                 "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': invalid {relative_path}: {error}\n{content}"
@@ -996,17 +997,13 @@ fn build_virtual_project_index<'a>(
     lang: Language,
     case_name: &str,
 ) -> ProjectIndex<'a> {
-    ProjectIndex::discover_with_config(
-        root,
-        memory,
-        &crate::code_lint::project::ProjectConfig::default(),
+    ProjectIndex::discover_with_config(root, memory, &ProjectConfig::default()).unwrap_or_else(
+        |error| {
+            panic!(
+                "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': invalid {CONFIG_FILE_NAME}: {error}",
+            )
+        },
     )
-    .unwrap_or_else(|error| {
-        panic!(
-            "rule_test! [{rule_name}] ({lang:?}) case '{case_name}': invalid {}: {error}",
-            crate::code_lint::project::CONFIG_FILE_NAME
-        )
-    })
 }
 
 #[track_caller]

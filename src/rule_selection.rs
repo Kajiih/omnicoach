@@ -21,7 +21,7 @@ use strum::IntoEnumIterator as _;
 
 pub use self::taxonomy::{AnalyzedInput, Derived, Facet, RegisteredRule, Tag, registered_topics};
 use self::taxonomy::{REGISTERED_RULES, Selector};
-use crate::code_lint::project::{
+use crate::code_lint::project::foundation::{
     ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig,
     compile_glob, lexical_normalize, resolve_against_cwd,
 };

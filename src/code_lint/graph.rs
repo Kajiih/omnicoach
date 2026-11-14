@@ -19,10 +19,10 @@ use self::builder::{build_file_graph, build_project_graph};
 use self::render::render_graph;
 
 use crate::code_lint::ast::{ParsedFile, collect_intra_file_references, collect_scope_facts};
-use crate::code_lint::project::{
-    DiskFileSource, FileSource as _, ProjectConfig, derive_project_title, discover_project_sources,
-    resolve_effective_paths,
+use crate::code_lint::project::context::{
+    derive_project_title, discover_project_sources, resolve_effective_paths,
 };
+use crate::code_lint::project::foundation::{DiskFileSource, FileSource as _, ProjectConfig};
 use crate::diagnostic::Language;
 use std::path::{Path, PathBuf};
 
@@ -191,8 +191,8 @@ mod tests {
         };
         let rendered = generate_graph(&options, &ProjectConfig::default()).unwrap();
         assert!(
-            rendered.contains("## Component [L0] CodeLintProject (depends_on=[])"),
-            "expected declared CodeLintProject component in:\n{rendered}"
+            rendered.contains("## Component [L0] CodeLintProjectFoundation (depends_on=[])"),
+            "expected declared CodeLintProjectFoundation component in:\n{rendered}"
         );
         assert!(
             rendered.contains("### Module [L0] code_lint::project::foundation::config"),

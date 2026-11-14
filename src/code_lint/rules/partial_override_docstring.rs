@@ -9,7 +9,7 @@ use crate::code_lint::ast::python::{
     DocstringSection, DocstringSectionKind, OwnedDocstring, PythonDocstring,
 };
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
-use crate::code_lint::project::ProjectContext;
+use crate::code_lint::project::context::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, ImpactedQuality, Precision, ProjectExample, Reference,

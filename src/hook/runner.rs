@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::{VirtualFile, apply_virtual_edit};
 use super::warning_queue::QueuedWarning;
-use crate::code_lint::project::{is_rooted_path, lexical_normalize};
+use crate::code_lint::project::foundation::{is_rooted_path, lexical_normalize};
 use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
 use crate::command_lint::runner::run_command_lint_with_client;
 use crate::command_lint::vcs::{JjCliClient, JjClient};

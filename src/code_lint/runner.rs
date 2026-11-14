@@ -4,9 +4,10 @@ architecture_component!(CodeLintRunner);
 
 use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{AnyCodeRule, RuleTarget};
-use crate::code_lint::project::{
-    ArchitectureError, DiskFileSource, OverlayFileSource, ProjectContext, ProjectIndex,
-    ProjectLayout, is_rooted_path, lexical_normalize, resolve_against_cwd,
+use crate::code_lint::project::context::{ProjectContext, ProjectIndex, ProjectLayout};
+use crate::code_lint::project::foundation::{
+    ArchitectureError, DiskFileSource, OverlayFileSource, is_rooted_path, lexical_normalize,
+    resolve_against_cwd,
 };
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::semantic::comments::may_contain_suppression_directive;
@@ -44,7 +45,7 @@ pub fn lint_file_in_project(
 }
 
 /// Analyzes an in-memory edit to `target_path` within `project_root`, constructing an
-/// [`OverlayFileSource`]-backed [`ProjectContext`] when any enabled rule requires cross-file
+/// `OverlayFileSource`-backed [`ProjectContext`] when any enabled rule requires cross-file
 /// project context.
 ///
 /// # Errors
@@ -377,7 +378,7 @@ fn collect_targets(options: &LintOptions) -> anyhow::Result<Vec<LintTarget>> {
 }
 
 fn collect_directory_candidates(dir: &Path) -> impl Iterator<Item = LintTarget> {
-    use crate::code_lint::project::FileSource as _;
+    use crate::code_lint::project::foundation::FileSource as _;
     DiskFileSource
         .walk_files(dir)
         .unwrap_or_default()
@@ -1314,7 +1315,7 @@ mod tests {
         let unignored_config = config_enabling(&["uninherited-protocol"]);
         let mut ignored_config = unignored_config.clone();
         ignored_config.per_file_ignores = vec![(
-            crate::code_lint::project::compile_glob("pkg/**")
+            crate::code_lint::project::foundation::compile_glob("pkg/**")
                 .expect("valid glob")
                 .compile_matcher(),
             HashSet::from([RuleName("uninherited-protocol")]),

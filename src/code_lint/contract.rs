@@ -4,7 +4,7 @@
 architecture_component!(CodeLintContract);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
-use crate::code_lint::project::ProjectContext;
+use crate::code_lint::project::context::ProjectContext;
 use crate::code_lint::semantic::{bindings, calls, comments::CommentIndex};
 use crate::diagnostic::{Diagnostic, Language, RuleName, SourceSpan};
 use crate::rule_declaration::{

@@ -204,17 +204,17 @@ pub(super) fn is_rust_crate_root(module_path: &str) -> bool {
 
 /// An inherited component and the nearest ancestor Rust module that declared it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InheritedComponent<'a, T> {
+pub(super) struct InheritedComponent<'a, T> {
     /// Nearest ancestor (or self) module path that declared the component.
-    pub root_module: &'a str,
+    pub(super) root_module: &'a str,
     /// Inherited component value.
-    pub component: &'a T,
+    pub(super) component: &'a T,
 }
 
 /// Resolves the [`InheritedComponent`] for `module` by climbing up its `::`-separated
 /// module path to the nearest ancestor (or self) in `declared_components`.
 #[must_use]
-pub fn resolve_inherited_component_with_root<'a, T>(
+pub(super) fn resolve_inherited_component_with_root<'a, T>(
     module: &str,
     declared_components: &'a BTreeMap<String, T>,
 ) -> Option<InheritedComponent<'a, T>> {

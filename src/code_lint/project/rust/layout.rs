@@ -5,7 +5,7 @@ use crate::code_lint::project::foundation::{FileSource, WorkspaceAnchor};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-const CARGO_TOML: &str = "Cargo.toml";
+pub(in crate::code_lint::project) const CARGO_TOML: &str = "Cargo.toml";
 const SOURCE_DIRECTORY: &str = "src";
 
 /// Rust crate source root, crate identifier, and file-to-module mapping for a discovered project.

@@ -4,10 +4,10 @@ use super::builder::{ProjectDepth, build_project_graph};
 use super::index::{DirectedEdge, GraphIndex};
 use super::model::{AbstractionGraph, DeclarationKind, DeclarationNode, NodeId};
 use crate::code_lint::ast::Visibility;
-use crate::code_lint::project::{
-    DiscoveredProjectSources, ProjectConfig, ProjectSourceFile, discover_project_sources,
-    resolve_effective_paths,
+use crate::code_lint::project::context::{
+    DiscoveredProjectSources, discover_project_sources, resolve_effective_paths,
 };
+use crate::code_lint::project::foundation::{ProjectConfig, ProjectSourceFile};
 use crate::diagnostic::Language;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -787,7 +787,8 @@ fn source_line_snippet<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::project::{MemoryFileSource, discover_project_sources_in};
+    use crate::code_lint::project::context::discover_project_sources_in;
+    use crate::code_lint::project::foundation::MemoryFileSource;
     use std::path::Path;
 
     const SAMPLE_RUST_FILES: &[(&str, &str)] = &[

@@ -1,5 +1,5 @@
 //! Read-only cross-file query handle (`ProjectContext`) passed to project-aware rules
-//! (`CodeLintProject`).
+//! (`CodeLintProjectContext`).
 
 use super::index::ProjectIndex;
 use crate::code_lint::ast::ParsedFile;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// Read-only cross-file query handle passed to project-aware rules.
 ///
 /// Wraps [`ProjectIndex`] behind an immutable query API exposing file-bound Python queries
-/// ([`Self::python`]) and cached architectural conformance evaluation without mutating index slots
+/// (`Self::python`) and cached architectural conformance evaluation without mutating index slots
 /// or exposing raw filesystem handles.
 pub struct ProjectContext<'a> {
     index: &'a ProjectIndex<'a>,
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn python_query_handle_exposes_nameable_override_and_ancestor_types() {
         use crate::code_lint::ast::python::extract_classes;
-        use crate::code_lint::project::{DocumentedOverrideMethod, ResolvedClassAncestors};
+        use crate::code_lint::project::python::{DocumentedOverrideMethod, ResolvedClassAncestors};
 
         let root = Path::new("/repo");
         let base_code = indoc::indoc! {r#"

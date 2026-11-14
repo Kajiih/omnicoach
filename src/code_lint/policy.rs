@@ -1,8 +1,9 @@
 //! Lint policy shared across rules and the test harness (`CodeLintPolicy`).
 //!
-//! Boundary: `code_lint::ast` (`CodeLintAst`) and `code_lint::project` (`CodeLintProject`) expose
-//! only rule-agnostic language and project facts (including standard-library collection taxonomy,
-//! cross-module class MROs, and syntax positions where the language or API requires a literal);
+//! Boundary: `code_lint::ast` (`CodeLintAst`) and `code_lint::project::python`
+//! (`CodeLintProjectPython`) expose only rule-agnostic language and project facts (including
+//! standard-library collection taxonomy, cross-module class MROs, and syntax positions where the
+//! language or API requires a literal);
 //! single-rule policy lives in that rule's file (`CodeLintRules`); policy shared by two or more
 //! rules or by a rule and `TestUtils` lives here (`CodeLintPolicy`).
 //!
@@ -22,7 +23,7 @@ use crate::code_lint::ast::python::{
     CollectionShape, PythonClassInfo, PythonCollectionType, PythonFunctionSignature,
     is_interface_method,
 };
-use crate::code_lint::project::PythonModuleContext;
+use crate::code_lint::project::python::PythonModuleContext;
 use crate::rule_declaration::{CountOption, LanguageDefaults, rule_options};
 
 const MIN_STATEMENTS_KEY: &str = "min-statements";

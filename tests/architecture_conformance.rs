@@ -5,19 +5,21 @@
 // Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
 #![cfg(test)]
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use omnicoach::architecture::ArchitectureComponent;
-use omnicoach::code_lint::project::{
-    ArchitectureSpec, DiskFileSource, ProjectIndex, ProjectLayout,
-    resolve_inherited_component_with_root,
+use omnicoach::code_lint::ast::rust::{collect_inline_test_ranges, summarize_rust_file};
+use omnicoach::code_lint::ast::{ParsedFile, collect_bindings};
+use omnicoach::code_lint::project::context::{ProjectIndex, ProjectLayout};
+use omnicoach::code_lint::project::foundation::{
+    ArchitectureSpec, DiskFileSource, FileSource as _,
 };
 use omnicoach::code_lint::rules::CODE_RULES;
 use omnicoach::code_lint::runner::{LintOptions, run_code_lint};
 use omnicoach::config::Config;
-use omnicoach::diagnostic::RuleName;
+use omnicoach::diagnostic::{Language, RuleName};
 use strum::VariantArray;
 
 fn repo_root_directory() -> PathBuf {
@@ -153,38 +155,127 @@ fn test_components_are_named_after_their_modules() {
     );
 }
 
-#[test]
-fn test_subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers() {
-    let declared_components = BTreeMap::from([
-        (
-            "domain::unit".to_owned(),
-            ArchitectureComponent::CodeLintRules,
-        ),
-        ("other".to_owned(), ArchitectureComponent::CommandLintRules),
-    ]);
-    let queries = [
-        "domain::unit",
-        "domain::unit::leaf::deeper",
-        "other::leaf",
-        "domain",
-        "domain::unit_sibling",
-    ];
-    let resolved: Vec<Option<ArchitectureComponent>> = queries
-        .into_iter()
-        .map(|module| {
-            resolve_inherited_component_with_root(module, &declared_components)
-                .map(|inherited| *inherited.component)
-        })
-        .collect();
+const ALLOWED_CONTEXT_DELEGATION_BINDINGS: &[&str] = &[
+    "python",
+    "rust",
+    "Python",
+    "Rust",
+    "PythonLayout",
+    "RustLayout",
+    "PythonIndex",
+    "RustIndex",
+    "PythonModuleContext",
+    "collect_python_project_facts",
+    "collect_rust_project_facts",
+];
 
+struct ProjectLanguageViolations {
+    cross_language_ast_paths: Vec<String>,
+    foundation_language_bindings: Vec<String>,
+    context_language_bindings: Vec<String>,
+    sibling_language_bindings: Vec<String>,
+}
+
+fn collect_project_language_violations() -> ProjectLanguageViolations {
+    let code_lint_root = source_root_directory().join("code_lint");
+    let mut paths = DiskFileSource
+        .walk_files(&code_lint_root.join("project"))
+        .expect("walk src/code_lint/project");
+    paths.push(code_lint_root.join("project.rs"));
+    paths.sort();
+
+    let mut violations = ProjectLanguageViolations {
+        cross_language_ast_paths: Vec::new(),
+        foundation_language_bindings: Vec::new(),
+        context_language_bindings: Vec::new(),
+        sibling_language_bindings: Vec::new(),
+    };
+
+    for path in paths {
+        let content = DiskFileSource
+            .read_to_string(&path)
+            .expect("read project source file");
+        let parsed = ParsedFile::new(&content, Language::Rust);
+        let summary = summarize_rust_file(&parsed);
+        let inline_test_ranges = collect_inline_test_ranges(&parsed);
+        let relative = path
+            .strip_prefix(&code_lint_root)
+            .expect("project file under src/code_lint")
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let is_foundation_or_router =
+            relative == "project.rs" || relative.starts_with("project/foundation");
+        let is_context = relative.starts_with("project/context");
+        if is_foundation_or_router || is_context {
+            for reference in &summary.referenced_paths {
+                if reference.raw_path.contains("ast::python")
+                    || reference.raw_path.contains("ast::rust")
+                {
+                    violations.cross_language_ast_paths.push(format!(
+                        "{relative}:{} -> {}",
+                        reference.line, reference.raw_path
+                    ));
+                }
+            }
+        }
+
+        for binding in collect_bindings(&parsed) {
+            let node = binding.node();
+            let start = node.span().start;
+            if inline_test_ranges
+                .iter()
+                .any(|range| range.contains(&start))
+            {
+                continue;
+            }
+            let name = node.text();
+            let lower = name.to_ascii_lowercase();
+            let entry = format!("{relative}: {name}");
+            if is_foundation_or_router {
+                if ["python", "rust", "cargo", "pyproject"]
+                    .iter()
+                    .any(|term| lower.contains(term))
+                {
+                    violations.foundation_language_bindings.push(entry);
+                }
+            } else if is_context {
+                let has_manifest_term = lower.contains("cargo") || lower.contains("pyproject");
+                let has_unapproved_language_term = (lower.contains("python")
+                    || lower.contains("rust"))
+                    && !ALLOWED_CONTEXT_DELEGATION_BINDINGS.contains(&name.as_ref());
+                if has_manifest_term || has_unapproved_language_term {
+                    violations.context_language_bindings.push(entry);
+                }
+            } else if relative.starts_with("project/python") {
+                if lower.contains("rust") || lower.contains("cargo") {
+                    violations.sibling_language_bindings.push(entry);
+                }
+            } else if relative.starts_with("project/rust")
+                && (lower.contains("python") || lower.contains("pyproject"))
+            {
+                violations.sibling_language_bindings.push(entry);
+            }
+        }
+    }
+
+    violations
+}
+
+/// Verifies that cross-language modules (`project.rs`, `foundation`, `context`) never reference
+/// `code_lint::ast::{python,rust}`, `foundation` declares zero language- or manifest-specific
+/// bindings beyond `FileSource`'s `is_cargo_target_dir` build-directory filter, `context` declares
+/// only its explicit `python`/`rust` delegation bindings, and `python` / `rust` declare zero
+/// bindings naming each other's language or manifest.
+#[test]
+fn test_code_lint_project_enforces_language_isolation_across_ast_and_bindings() {
+    let violations = collect_project_language_violations();
+
+    assert_eq!(violations.cross_language_ast_paths, Vec::<String>::new());
     assert_eq!(
-        resolved,
-        vec![
-            Some(ArchitectureComponent::CodeLintRules),
-            Some(ArchitectureComponent::CodeLintRules),
-            Some(ArchitectureComponent::CommandLintRules),
-            None,
-            None,
-        ]
+        violations.foundation_language_bindings,
+        vec!["project/foundation/source.rs: is_cargo_target_dir".to_owned()]
     );
+    assert_eq!(violations.context_language_bindings, Vec::<String>::new());
+    assert_eq!(violations.sibling_language_bindings, Vec::<String>::new());
 }

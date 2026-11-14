@@ -179,7 +179,7 @@ impl ProjectConfig {
     /// # Errors
     ///
     /// Returns [`ProjectTomlError`] if TOML deserialization or [`ArchitectureConfig::validate`] fails.
-    pub fn from_toml_str(toml_content: &str) -> Result<Self, ProjectTomlError> {
+    pub(crate) fn from_toml_str(toml_content: &str) -> Result<Self, ProjectTomlError> {
         let raw: RawProjectToml = toml::from_str(toml_content)?;
         if let Some(ref architecture) = raw.architecture {
             architecture.validate()?;
@@ -193,7 +193,7 @@ impl ProjectConfig {
 
     /// Returns true if the given path matches any configured test pattern.
     #[must_use]
-    pub fn is_test_path(&self, path: &Path) -> bool {
+    pub(crate) fn is_test_path(&self, path: &Path) -> bool {
         self.context
             .test_patterns
             .is_match(self.normalize_path_for_glob(path))
@@ -202,7 +202,7 @@ impl ProjectConfig {
     /// Returns true if every file inside `directory` falls under a configured directory-level test
     /// pattern (such as `**/tests/**`).
     #[must_use]
-    pub fn is_test_directory(&self, directory: &Path) -> bool {
+    pub(in crate::code_lint) fn is_test_directory(&self, directory: &Path) -> bool {
         let probe = format!("{}/_", self.normalize_path_for_glob(directory));
         self.context.test_patterns.is_match(probe)
     }
@@ -210,7 +210,7 @@ impl ProjectConfig {
     /// Returns true if any `source-roots` are explicitly configured in `[context]` or
     /// `[architecture]`.
     #[must_use]
-    pub fn has_configured_source_roots(&self) -> bool {
+    pub(in crate::code_lint) fn has_configured_source_roots(&self) -> bool {
         !self.context.source_roots.is_empty()
             || self
                 .architecture
@@ -224,7 +224,7 @@ impl ProjectConfig {
     /// ([`Self::root_dir`]), so that they name the same directories from every sub-package; without
     /// a configuration root they stay relative to the discovered project root.
     #[must_use]
-    pub fn configured_source_roots(&self) -> Vec<PathBuf> {
+    pub(in crate::code_lint) fn configured_source_roots(&self) -> Vec<PathBuf> {
         let architecture_roots = self
             .architecture
             .iter()

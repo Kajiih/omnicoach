@@ -5,7 +5,7 @@ architecture_component!(Config);
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::code_lint::project::ProjectConfig;
+use crate::code_lint::project::foundation::ProjectConfig;
 use crate::diagnostic::RuleName;
 use crate::rule_declaration::RuleOverrides;
 
@@ -61,7 +61,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::code_lint::project::compile_glob;
+    use crate::code_lint::project::foundation::compile_glob;
 
     const LOGGING_RULE: RuleName = RuleName("mock-logging-rule");
     const STYLE_RULE: RuleName = RuleName("mock-style-rule");

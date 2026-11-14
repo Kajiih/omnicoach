@@ -18,8 +18,8 @@
 //!   allowed only from a private direct child (`mod child; pub use self::child::Item;`), and a
 //!   `macro_rules!` macro declares its path with `pub(crate) use name;` next to its definition
 //!   (`#[macro_export]` only in `src/lib.rs`).
-//! - **Encapsulation**: only `diagnostic`, `code_lint::ast`, `code_lint::project`, and
-//!   `command_lint::command` use component-owned external crates (`owns_external`).
+//! - **Encapsulation**: only `diagnostic`, `code_lint::ast`, `code_lint::project::foundation`,
+//!   and `command_lint::command` use component-owned external crates (`owns_external`).
 
 architecture_component!(Architecture);
 
@@ -113,22 +113,28 @@ define_architecture! {
     CodeLintAst         => [Diagnostic] (owns_external: ["ra_ap_syntax", "ruff_python_ast", "ruff_python_parser", "ruff_text_size"]),
     /// Cross-language facts computed over the AST: bindings, calls, comments (`code_lint::semantic`).
     CodeLintSemantic    => [CodeLintAst],
-    /// Multi-file project facts, cross-module symbol resolution, and component/path conformance (`code_lint::project`).
-    CodeLintProject     => [CodeLintAst, Diagnostic] (owns_external: ["ignore"]),
+    /// Language-agnostic project foundation: virtual/disk file sources, `.omnicoach.toml` schema, architecture conformance model, and multi-file fact containers (`code_lint::project::foundation`).
+    CodeLintProjectFoundation => [CodeLintAst, Diagnostic] (owns_external: ["ignore"]),
+    /// Python project layout, module resolution, summary cache, and architecture conformance (`code_lint::project::python`).
+    CodeLintProjectPython     => [CodeLintProjectFoundation, CodeLintAst, Diagnostic],
+    /// Rust crate layout, module resolution, summary cache, and architecture conformance (`code_lint::project::rust`).
+    CodeLintProjectRust       => [CodeLintProjectFoundation, CodeLintAst, Diagnostic],
+    /// Unified cross-language project layout, index, rule context, and source discovery (`code_lint::project::context`).
+    CodeLintProjectContext    => [CodeLintProjectFoundation, CodeLintProjectPython, CodeLintProjectRust, CodeLintAst, Diagnostic],
     /// The code rule contract: a declaration, a file target and a check function (`code_lint::contract`).
-    CodeLintContract    => [CodeLintProject, CodeLintSemantic, CodeLintAst, RuleDeclaration],
+    CodeLintContract    => [CodeLintProjectContext, CodeLintSemantic, CodeLintAst, RuleDeclaration],
     /// Rule-selection and per-rule override configuration resolved from `.omnicoach.toml` (`config`).
-    Config              => [CodeLintProject, Diagnostic, RuleDeclaration],
+    Config              => [CodeLintProjectFoundation, Diagnostic, RuleDeclaration],
     /// Inline comment suppression tracker and directive policies (`code_lint::suppression`).
     CodeLintSuppression => [CodeLintContract, CodeLintSemantic, RuleDeclaration, Config],
     /// Policy shared by several code rules or by a rule and the test harness, built from AST and project facts (`code_lint::policy`).
-    CodeLintPolicy      => [CodeLintProject, CodeLintAst, RuleDeclaration],
+    CodeLintPolicy      => [CodeLintProjectPython, CodeLintAst, RuleDeclaration],
     /// Concrete static analysis linter rules (`code_lint::rules`).
-    CodeLintRules       => [CodeLintProject, CodeLintContract, CodeLintPolicy, RuleDeclaration],
+    CodeLintRules       => [CodeLintProjectContext, CodeLintContract, CodeLintPolicy, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
-    CodeLintRunner      => [CodeLintProject, CodeLintRules, CodeLintSuppression, Diff],
+    CodeLintRunner      => [CodeLintProjectContext, CodeLintRules, CodeLintSuppression, Diff],
     /// Alpha / experimental multi-level abstraction graph model, builder, and text renderers (`code_lint::graph`).
-    CodeLintGraph       => [CodeLintProject, CodeLintAst, Diagnostic],
+    CodeLintGraph       => [CodeLintProjectContext, CodeLintAst, Diagnostic],
 
     // --- Command Safety Domain (`command_lint`) ---
     /// The jj client: repository state queries for command rules (`command_lint::vcs`).
@@ -154,7 +160,7 @@ define_architecture! {
 
     // --- Test Harness & Entrypoints ---
     /// The `rule_test!` harness and snapshot fixtures (`test_utils`).
-    TestUtils           => [CodeLintContract, CodeLintProject, CodeLintPolicy, CommandLintContract],
+    TestUtils           => [CodeLintContract, CodeLintProjectContext, CodeLintPolicy, CommandLintContract],
     /// Command-line argument parsing, dispatch, and BrokenPipe-safe output (`cli`).
     Cli                 => [CodeLintRunner, CodeLintGraph, CommandLintRunner, Config, Diagnostic, Hook, RuleSelection, RuleCatalog],
     /// CLI entrypoints (`bin::*`).

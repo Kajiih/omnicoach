@@ -26,6 +26,14 @@ pub struct Binding<'a> {
     pub(in crate::code_lint) kind: BindingKind,
 }
 
+impl<'a> Binding<'a> {
+    /// Returns the identifier [`AstNode`] introducing this binding.
+    #[must_use]
+    pub const fn node(&self) -> AstNode<'a> {
+        self.node
+    }
+}
+
 /// Appends each node that `extract` collects to `bindings` as a binding of `kind`.
 pub(super) fn push_bindings<'a>(
     bindings: &mut Vec<Binding<'a>>,

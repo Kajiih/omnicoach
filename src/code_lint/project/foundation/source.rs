@@ -129,7 +129,8 @@ pub struct MemoryFileSource {
 
 impl MemoryFileSource {
     /// Canonical virtual root path for hermetic in-memory projects.
-    pub const VIRTUAL_ROOT: &'static str = "/proj";
+    #[cfg(test)]
+    pub(crate) const VIRTUAL_ROOT: &'static str = "/proj";
 
     /// Builds an in-memory filesystem rooted at `root` from `(relative_path, content)` pairs.
     #[must_use]
@@ -205,7 +206,7 @@ impl FileSource for MemoryFileSource {
 
 /// Overlay [`FileSource`] serving unsaved file buffers on top of a backing [`FileSource`].
 #[derive(Debug, Clone)]
-pub struct OverlayFileSource<B> {
+pub(in crate::code_lint) struct OverlayFileSource<B> {
     base: B,
     overlays: HashMap<PathBuf, String>,
     overlay_directories: HashSet<PathBuf>,
@@ -214,7 +215,7 @@ pub struct OverlayFileSource<B> {
 impl<B: FileSource> OverlayFileSource<B> {
     /// Wraps `base` with in-memory `overlays` keyed by path.
     #[must_use]
-    pub fn new(base: B, raw_overlays: HashMap<PathBuf, String>) -> Self {
+    pub(in crate::code_lint) fn new(base: B, raw_overlays: HashMap<PathBuf, String>) -> Self {
         let cwd = base.current_dir();
         let mut overlays = HashMap::with_capacity(raw_overlays.len());
         let mut overlay_directories = HashSet::new();

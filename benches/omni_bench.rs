@@ -37,9 +37,8 @@ use divan::{AllocProfiler, Bencher, black_box};
 
 use omnicoach::code_lint::ast::{self, ParsedFile};
 use omnicoach::code_lint::contract::AnyCodeRule;
-use omnicoach::code_lint::project::{
-    MemoryFileSource, ProjectContext, ProjectIndex, ProjectLayout,
-};
+use omnicoach::code_lint::project::context::{ProjectContext, ProjectIndex, ProjectLayout};
+use omnicoach::code_lint::project::foundation::MemoryFileSource;
 use omnicoach::code_lint::rules::{self, CODE_RULES};
 use omnicoach::code_lint::runner::lint_file;
 use omnicoach::code_lint::suppression::SuppressionTracker;

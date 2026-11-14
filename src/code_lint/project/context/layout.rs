@@ -4,13 +4,10 @@ use crate::code_lint::project::foundation::{
     CONFIG_FILE_NAME, FileSource, WorkspaceAnchor, is_rooted_path, is_vcs_boundary,
     resolve_against_cwd,
 };
-use crate::code_lint::project::python::{PythonLayout, climb_package_init_chain};
-use crate::code_lint::project::rust::RustLayout;
+use crate::code_lint::project::python::{self, PythonLayout, climb_package_init_chain};
+use crate::code_lint::project::rust::{self, RustLayout};
 use crate::diagnostic::Language;
 use std::path::{Path, PathBuf};
-
-const CARGO_TOML: &str = "Cargo.toml";
-const PYPROJECT_TOML: &str = "pyproject.toml";
 
 /// Project boundary and per-language source layouts resolved once at the CLI, hook, or test boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +97,11 @@ impl ProjectLayout {
 }
 
 fn find_project_root(start_directory: &Path, source: &dyn FileSource) -> Option<PathBuf> {
-    let markers = [CONFIG_FILE_NAME, PYPROJECT_TOML, CARGO_TOML];
+    let markers = [
+        CONFIG_FILE_NAME,
+        python::MANIFEST_FILE_NAME,
+        rust::MANIFEST_FILE_NAME,
+    ];
     let mut current = Some(start_directory);
     while let Some(directory) = current {
         if markers

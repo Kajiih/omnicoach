@@ -146,7 +146,7 @@ impl<'a> AstNode<'a> {
 
     /// Returns the source text slice spanned by this node.
     #[must_use]
-    pub(crate) fn text(&self) -> std::borrow::Cow<'_, str> {
+    pub fn text(&self) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Borrowed(&self.file.source[self.span.start..self.span.end])
     }
 
@@ -158,7 +158,7 @@ impl<'a> AstNode<'a> {
 
     /// Returns the [`SourceSpan`] (byte range) of this node.
     #[must_use]
-    pub(crate) const fn span(&self) -> SourceSpan {
+    pub const fn span(&self) -> SourceSpan {
         self.span
     }
 
