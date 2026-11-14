@@ -336,6 +336,16 @@ impl Topic {
                          inheritance (`static-typing`).",
         },
     );
+
+    pub(crate) const COMMAND_LINE: Self = Self::root(
+        "command-line",
+        TopicDoc {
+            description: "Command-line flag, argument and subcommand structure.",
+            scope_note: "How command-line programs, subcommands and flags are passed in shell \
+                         invocations. Not version-control workflow semantics (see `vcs`).",
+        },
+    )
+    .aliases(&["cli"]);
 }
 
 /// Precision facet: can the rule flag correct code?

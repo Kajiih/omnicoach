@@ -106,6 +106,9 @@ Templates use a fixed vocabulary so the same thing has the same name in every me
 | `{duplicates}` | Parameters grouped by shared type | bare; each group carries its own backticks, as in `` `source, target: int` `` |
 | `{rule}` | A rule name inside a suppression directive | `` `{rule}` `` |
 | `{revision}` | A VCS revision | `` `{revision}` `` |
+| `{command}` | The flagged shell command invocation, as written in the source | `` `{command}` `` |
+| `{flag}` | A command-line flag or option token | `` `{flag}` `` |
+| `{subcommand}` | A CLI subcommand name | `` `{subcommand}` `` |
 | `{count}` | The observed number | bare |
 | `{metric}` | What `{count}` measures, when a rule reports one of several measures (`statement count`, `cognitive complexity`) | bare |
 | `{section}` | A docstring section header as written, without its colon (`Returns`, `Keyword Args`) | `` `{section}:` `` |

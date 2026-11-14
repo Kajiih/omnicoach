@@ -28,6 +28,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `escaped-multiline-string` (python, rust): Flags single-line string literals that pack multiple lines using `\n` escapes.
 - `fake-without-protocol` (python): Requires Python `Fake*` classes to inherit from a `Protocol` or base class.
 - `field-after-method` (python): Flags type-annotated class and instance attributes declared after methods in a Python class body.
+- `global-flag-before-subcommand` (command): Flags global CLI flags placed before the subcommand.
 - `identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
 - `inline-public-attribute-annotation` (python): Flags public Python instance attributes annotated inline inside methods instead of in the class body.
 - `invalid-architecture-component` (rust): Flags Rust `architecture_component!` declarations that do not establish a valid component root.
