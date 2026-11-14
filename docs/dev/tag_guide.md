@@ -90,16 +90,16 @@ Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-q
 
 | ISO/IEC 25010 characteristic | Status | Meaning for a lint rule |
 |---|---|---|
-| `reliability` | **In enum** | Prevents wrong runtime behaviour, flaky/false-green tests, broken suppressions, or unintended command state/history mutation |
+| `reliability` | **In enum** | Prevents wrong runtime behaviour, flaky/false-green tests, broken suppressions, unintended command state/history mutation, or unbounded repository walks |
 | `maintainability` | **In enum** | Keeps code understandable, diagnosable and safe to change |
 | `security` | Allowed when needed | Prevents an exploitable vulnerability or exposure of sensitive data |
 | `performance-efficiency` | Allowed when needed | Prevents wasted time, memory or I/O |
 | `functional-suitability`, `compatibility`, `interaction-capability`, `flexibility`, `safety` | Allowed when needed | Standard ISO/IEC 25010 characteristics; admit to the enum only with a concrete rule and a yes/no boundary test |
 
-> **Test (`reliability` vs `maintainability`):** does the flagged code or command have a *mechanism that leads to wrong behaviour*: a product bug, a flaky or false-green test, a suppression that silently does something unintended, or a command that mutates/corrupts state or history in place? If yes → `reliability`.
+> **Test (`reliability` vs `maintainability`):** does the flagged code or command have a *mechanism that leads to wrong behaviour*: a product bug, a flaky or false-green test, a suppression that silently does something unintended, or a command that mutates/corrupts state or history in place or walks unbounded repository history? If yes → `reliability`.
 
 - Readability, searchability, refactoring-brittleness and diagnosability costs do **not** count as `reliability`. Without this boundary every rule qualifies.
-- `reliability`: `type-cast` (hides a type error until runtime), `unused-suppression` (will hide a future real violation), `mock-in-tests` (false-green tests when real collaborator diverges), `zero-sleep-in-tests` (relies on timer-subsystem side effects for scheduler yielding), `edit-of-described-commit` (silently rewrites a described commit).
+- `reliability`: `type-cast` (hides a type error until runtime), `unused-suppression` (will hide a future real violation), `mock-in-tests` (false-green tests when real collaborator diverges), `zero-sleep-in-tests` (relies on timer-subsystem side effects for scheduler yielding), `edit-of-described-commit` (silently rewrites a described commit), `unbounded-jj-log` (walks immutable repository history without a bound).
 - `maintainability`: `single-letter-name`, `too-many-assertions` (a worse failure report, but recoverable by re-running), `mock-call-assertion` (asserting on call wiring couples the test to implementation details, making refactors brittle rather than false-green).
 
 ### 2.5 What goes in the rule's docs instead

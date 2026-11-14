@@ -385,14 +385,16 @@ pub enum Consensus {
 ///
 /// **Test:** does the flagged code or command have a *mechanism that leads to wrong
 /// behaviour* (a bug, a flaky or false-green test, a wrong suppression, a command that
-/// corrupts state or history)? If yes → [`Self::Reliability`]. Worked examples and when to
-/// add another ISO/IEC 25010 value: `docs/dev/tag_guide.md` §2.4.
+/// corrupts state or history or walks unbounded repository history)? If yes →
+/// [`Self::Reliability`]. Worked examples and when to add another ISO/IEC 25010 value:
+/// `docs/dev/tag_guide.md` §2.4.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, EnumMessage, IntoStaticStr,
 )]
 #[strum(serialize_all = "kebab-case")]
 pub enum ImpactedQuality {
-    /// Prevents a mechanism leading to wrong behaviour (bug, false-green test, wrong suppression).
+    /// Prevents a mechanism leading to wrong behaviour (bug, false-green test, wrong suppression,
+    /// history corruption, or unbounded repository walk).
     Reliability,
     /// Keeps code readable and changeable.
     Maintainability,

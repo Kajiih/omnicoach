@@ -68,6 +68,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `too-many-assertions` (python, rust): Flags test functions with more assertions than the limit.
 - `type-cast` (python): Flags `typing.cast` calls in Python source files.
 - `type-suffixed-name` (python, rust): Flags names that end with a type suffix such as `_list` or `_str`.
+- `unbounded-jj-log` (command): Flags `jj log` invocations that do not bound the revision walk.
 - `uncolocated-helper` (python, rust): Flags private helpers that are neither colocated right after their single public consumer nor placed in the trailing helper section at the end of the scope.
 - `undeclared-component-dependency` (python, rust): Flags imports and path references targeting an architecture component that the enclosing component does not depend on.
 - `undocumented-nontrivial-function` (python): Requires a docstring on functions with many statements or a high cognitive complexity.
