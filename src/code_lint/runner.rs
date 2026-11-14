@@ -1505,11 +1505,11 @@ mod tests {
         );
         assert_eq!(
             diagnostics[1].message.suggestion,
-            "Import `<exported_item>` from `pkg.auth`, or expose it in `public-exports` of `Auth`."
+            "Import `<exported_item>` from the `pkg.auth` facade; only add `<exported_item>` to `public-exports` of `Auth` if it belongs to the public contract of `Auth`."
         );
         assert_eq!(
             diagnostics[2].message.suggestion,
-            "Import `decode_raw` from `pkg.auth`, or expose it in `public-exports` of `Auth`."
+            "Import `decode_raw` from the `pkg.auth` facade; only add `decode_raw` to `public-exports` of `Auth` if it belongs to the public contract of `Auth`."
         );
     }
 

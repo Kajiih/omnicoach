@@ -806,8 +806,10 @@ mod tests {
             serialize_pre_invocation(&[warning_one, warning_two]).expect("serialization succeeds");
         assert!(serialized.contains("test_foo.py:1:1: [sleep-in-tests]"));
         assert!(serialized.contains("test_bar.py:2:1: [sleep-in-tests]"));
-        assert!(serialized.contains("Note: Fix each finding by applying its suggestion."));
-        assert!(!serialized.contains("Note: Some rules use heuristics."));
+        assert!(serialized.contains(
+            "Note: Fix the underlying design issue rather than reshaping code just to fall under a threshold or outside a pattern"
+        ));
+        assert!(!serialized.contains("Note: Some rules use heuristics"));
     }
 
     #[test]
@@ -823,7 +825,9 @@ mod tests {
         };
         let serialized = serialize_pre_invocation(&[warning]).expect("serialization succeeds");
         assert!(serialized.contains("abbreviated-name"));
-        assert!(serialized.contains("Note: Some rules use heuristics. When a finding conflicts with the clearest, most robust design, suppress it with `omni:ignore [<rule>] -- <reason>`"));
+        assert!(serialized.contains(
+            "Note: Some rules use heuristics or enforce opinionated defaults. When the flagged code is intentional and already the clearest, most robust design"
+        ));
         assert!(serialized.contains(
             "For details on a rule (including known limitations), run: omnicoach --explain <rule>"
         ));

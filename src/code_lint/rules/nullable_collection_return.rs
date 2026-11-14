@@ -24,8 +24,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
         Rust => "Wrapping a collection return type in `Option` creates two representations for an empty result and forces callers to unwrap or match before iterating or querying length.",
     },
     suggestion: {
-        Python => "Remove `None` from the return annotation of `{function}` and return an empty collection such as `()`, `[]`, `{}`, or `frozenset()` when no elements are present.",
-        Rust => "Remove `Option` from the return type of `{function}` and return an empty collection such as `Vec::new()`, `&[]`, `BTreeMap::new()`, or `HashSet::new()` when no elements are present.",
+        Python => "Remove `None` from the return annotation of `{function}` and return an empty collection such as `()`, `[]`, `{}`, or `frozenset()` if `None` only represents an empty result.",
+        Rust => "Remove `Option` from the return type of `{function}` and return an empty collection such as `Vec::new()`, `&[]`, `BTreeMap::new()`, or `HashSet::new()` if `None` only represents an empty result.",
     },
 };
 

@@ -13,7 +13,10 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Module `{module}` imports external package `{dependency}` outside its owner {owner}.",
     rationale: "Spreading direct third-party calls across the codebase leaks external types and makes library upgrades touch unrelated modules.",
-    suggestion: "Access `{dependency}` through the adapter API exposed by {owner}.",
+    suggestion: {
+        Python => "Access `{dependency}` through the domain API exposed by {owner}; only add `{dependency}` to `owns-external` in `.omnicoach.toml` if `{module}` belongs to a dedicated adapter component.",
+        Rust => "Access `{dependency}` through the domain API exposed by {owner}; only add `{dependency}` to `owns_external` in `define_architecture!` if `{module}` belongs to a dedicated adapter component.",
+    },
 };
 
 /// The rule's declaration.

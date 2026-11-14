@@ -15,8 +15,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Module in component `{component}` references `{expression}` in `{dependency}`, which `{component}` does not depend on.",
     rationale: "Reaching across undeclared component boundaries couples layers that the architecture keeps independent and hides dependency cycles.",
     suggestion: {
-        Python => "Move the shared logic into a lower component `{component}` already depends on, or add `{dependency}` to `depends-on` in `.omnicoach.toml`.",
-        Rust => "Move the shared logic into a lower component `{component}` already depends on, or add `{dependency}` to the declared dependencies of `{component}`.",
+        Python => "Move the shared logic into a lower component `{component}` already depends on; only add `{dependency}` to `depends-on` in `.omnicoach.toml` if `{dependency}` is a lower layer than `{component}`.",
+        Rust => "Move the shared logic into a lower component `{component}` already depends on; only add `{dependency}` to the declared dependencies of `{component}` if `{dependency}` is a lower layer than `{component}`.",
     },
 };
 

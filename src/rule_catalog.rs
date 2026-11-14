@@ -61,16 +61,20 @@ impl DiscoveryArgs {
 }
 
 /// The footer note on how to fix findings, printed after every plain `code` report.
-const FIX_NOTE: &str = "Note: Fix each finding by applying its suggestion. Do not reshape the \
-                        code or change its values only to fall under a rule's limit or outside \
-                        its pattern.";
+const FIX_NOTE: &str = "Note: Fix the underlying design issue rather than reshaping code just to \
+                        fall under a threshold or outside a pattern, and never degrade behavior, \
+                        encapsulation, or external contracts to silence a finding.";
 
 /// The footer note on suppressing findings, printed when a reported rule is `heuristic` or
 /// `opinionated`.
-const SUPPRESSION_NOTE: &str = "Note: Some rules use heuristics. When a finding conflicts with \
-                                the clearest, most robust design, suppress it with \
-                                `omni:ignore [<rule>] -- <reason>` rather than working around \
-                                the linter and degrading the design.";
+const SUPPRESSION_NOTE: &str = "Note: Some rules use heuristics or enforce opinionated \
+                                defaults. When the flagged code is intentional and already the \
+                                clearest, most robust design, configure project conventions in \
+                                `.omnicoach.toml`, satisfy the rule's `Or:` comment hint if \
+                                shown, or suppress the site with `omni:ignore [<rule>] -- \
+                                <reason>`. If a finding is a false positive or its \
+                                suggestion/documentation is misleading, consider reporting the \
+                                issue to `omnicoach`.";
 
 /// The footer printed after plain `code` diagnostics: `FIX_NOTE`, `SUPPRESSION_NOTE` when
 /// any reported rule is `heuristic` or `opinionated`, and the `--explain` pointer.

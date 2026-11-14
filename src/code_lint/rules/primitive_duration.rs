@@ -27,8 +27,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Name `{name}` ends with the time unit `{suffix}`.",
     rationale: "A duration kept as a plain number with its unit in the name is converted by hand at every call boundary, and one missed conversion is a silent bug.",
     suggestion: {
-        Python => "Rename `{name}` to `{stem}` and type it as `datetime.timedelta` (or `whenever.TimeDelta`).",
-        Rust => "Rename `{name}` to `{stem}` and type it as `std::time::Duration`.",
+        Python => "Rename `{name}` to `{stem}` and type it as `datetime.timedelta` (or `whenever.TimeDelta`), or convert at the boundary if `{name}` is fixed by an external wire or config schema.",
+        Rust => "Rename `{name}` to `{stem}` and type it as `std::time::Duration`, or convert at the boundary if `{name}` is fixed by an external wire or config schema.",
     },
 };
 

@@ -15,8 +15,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Item `{name}` in `{module}` belongs to no declared architecture component.",
     rationale: "Code outside every declared component bypasses dependency conformance checks and obscures architectural ownership.",
     suggestion: {
-        Python => "Add the package of `{module}` to `[[architecture.components]]` in `.omnicoach.toml`, or keep `{module}` as a pure package router.",
-        Rust => "Add `architecture_component!(...)` to `{module}` (or an ancestor module), or keep `{module}` as a pure `mod` router.",
+        Python => "Move `{name}` into a declared component to keep `{module}` a pure package router, or map `{module}` in `[[architecture.components]]` (or its enclosing `submodules` DAG) in `.omnicoach.toml`.",
+        Rust => "Move `{name}` into a declared component to keep `{module}` a pure `mod` router, or map `{module}` via `architecture_component!(...)` on a component root or `modules: { ... }` in `define_architecture!`.",
     },
 };
 

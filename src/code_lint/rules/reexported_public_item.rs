@@ -14,7 +14,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Item `{expression}` in `{module}` creates a second public path outside its defining module.",
     rationale: "Multiple public paths to the same item split caller imports across aliases and obscure which module owns the symbol.",
-    suggestion: "Narrow the source module to `mod ...;` so `{expression}` is the sole public path, or remove `{expression}`.",
+    suggestion: "Narrow the source module to a private `mod` so `{module}` remains the single facade (using `modules: { ... }` in `define_architecture!` if internal submodule boundaries are needed); only remove `{expression}` if `{module}` is not intended to be a facade.",
 };
 
 /// The rule's declaration.
@@ -44,7 +44,9 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 When an item is reachable through both `crate::a::b::Item` and `crate::a::Item`,
                 imports across the codebase splinter between the two paths and module ownership
                 becomes ambiguous. Making child implementation modules private (`mod b;`) when
-                re-exporting at the parent keeps a single canonical import path."},
+                re-exporting at the parent keeps a single canonical import path while `modules: { ... }`
+                in `define_architecture!` still enforces internal dependency boundaries between those
+                private submodules."},
             known_problems: None,
             references: &[],
             examples: &[ProjectExample {

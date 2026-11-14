@@ -13,8 +13,8 @@ const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Test `{function}` interleaves actions and assertions across multiple phases.",
     rationale: "Alternating between actions and assertions in one test couples multiple scenarios together, so an early failure skips later phases and obscures which state transition broke.",
     suggestion: {
-        Python => "Split each arrange-act-assert phase into its own `test_*` function, or move all setup actions above the assertions.",
-        Rust => "Split each arrange-act-assert phase into its own `#[test]` function, or move all setup actions above the assertions.",
+        Python => "Split independent arrange-act-assert scenarios into separate `test_*` functions, or move setup actions above the assertions; keep a single test only when verifying sequential state transitions on one object without dropping intermediate assertions.",
+        Rust => "Split independent arrange-act-assert scenarios into separate `#[test]` functions, or move setup actions above the assertions; keep a single test only when verifying sequential state transitions on one object without dropping intermediate assertions.",
     },
 };
 

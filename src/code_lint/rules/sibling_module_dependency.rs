@@ -14,7 +14,10 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Module `{module}` references sibling `{dependency}` inside isolated component `{component}`.",
     rationale: "Lateral dependencies between peer submodules turn independent vertical slices into a coupled tangle.",
-    suggestion: "Extract the shared helper into the root module of `{component}` or a lower component.",
+    suggestion: {
+        Python => "Extract the shared helper into the `{component}` root module or a lower component; only declare the dependency in `submodules` on `{component}` in `.omnicoach.toml` if `{dependency}` is a lower internal layer.",
+        Rust => "Extract the shared helper into the `{component}` root module or a lower component; only declare the dependency in `modules: { ... }` on `{component}` in `define_architecture!` if `{dependency}` is a lower internal layer.",
+    },
 };
 
 /// The rule's declaration.

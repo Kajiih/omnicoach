@@ -15,7 +15,7 @@ const COMPONENT_PLACEHOLDER: &str = "<Component>";
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Declaration `{expression}` in `{module}` is ignored: {reason}.",
     rationale: "An ignored `architecture_component!` call establishes no component boundary while making `{module}` look mapped.",
-    suggestion: "Remove `{expression}`, or add `{component}` to `define_architecture!` in `architecture` with one top-level `architecture_component!` on its root module.",
+    suggestion: "Remove `{expression}` (using `modules: { ... }` on the enclosing component in `define_architecture!` if `{module}` needs internal submodule boundaries), or add `{component}` to `define_architecture!` with one top-level `architecture_component!` on its root module.",
 };
 
 /// The rule's declaration.

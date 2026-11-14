@@ -13,7 +13,7 @@ use std::path::Path;
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Import `{expression}` reaches into private internals of component `{dependency}`.",
     rationale: "Importing internal submodules bypasses the public facade of a component and couples callers to its internal file layout.",
-    suggestion: "Import `{name}` from `{module}`, or expose it in `public-exports` of `{dependency}`.",
+    suggestion: "Import `{name}` from the `{module}` facade; only add `{name}` to `public-exports` of `{dependency}` if it belongs to the public contract of `{dependency}`.",
 };
 
 /// The rule's declaration.

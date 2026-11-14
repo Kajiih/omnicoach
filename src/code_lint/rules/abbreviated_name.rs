@@ -26,7 +26,7 @@ const BANNED: ListOption = ListOption {
 const TEMPLATE: ViolationTemplate = violation_template! {
     summary: "Name `{name}` contains the abbreviation `{token}`.",
     rationale: "An ambiguous shorthand forces the reader to guess the word it stands for and fragments searches across the codebase.",
-    suggestion: "Rename `{name}` to spell out `{token}` in full.",
+    suggestion: "Rename `{name}` to spell out `{token}` in full, or add `{token}` to `remove-banned` in `.omnicoach.toml` if it is a domain term or full word.",
 };
 
 /// The rule's declaration.
