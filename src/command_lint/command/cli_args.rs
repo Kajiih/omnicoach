@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::iter::Peekable;
 use std::slice::Iter;
 
-use super::shell::CommandArg;
+use super::shell::{CommandArg, InterceptedCommand};
 
 /// Schema defining a program's command-line interface options layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,12 +48,17 @@ impl ParsedArgs {
     /// Returns `true` if the positional arguments start with `sequence`.
     #[must_use]
     pub fn has_subcommand_sequence(&self, sequence: &[&str]) -> bool {
-        self.positionals.len() >= sequence.len()
-            && self
-                .positionals
-                .iter()
-                .zip(sequence)
-                .all(|(argument, expected)| argument == expected)
+        self.positionals
+            .get(..sequence.len())
+            .is_some_and(|prefix| prefix == sequence)
+    }
+}
+
+impl InterceptedCommand {
+    /// Classifies `self.arguments` into positional arguments and option key-values using `schema`.
+    #[must_use]
+    pub fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
+        ParsedArgs::parse(&self.arguments, schema)
     }
 }
 
@@ -158,5 +163,113 @@ impl<'a> ArgParser<'a> {
             }
             self.options.entry(flag).or_default();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_args_basic() {
+        let cmd = InterceptedCommand::parse_all("jj edit -R . --config myconf @-").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &["-R", "--repository", "--config"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["edit", "@-"]);
+        assert_eq!(args.get_option("-R"), Some("."));
+        assert_eq!(args.get_option("--config"), Some("myconf"));
+        assert!(args.has_subcommand_sequence(&["edit"]));
+    }
+
+    #[test]
+    fn test_parse_args_boolean_long_flag_and_stdin_dash() {
+        let cmd = InterceptedCommand::parse_all("jj --no-pager edit -").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &["-R"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["edit", "-"]);
+        assert!(args.has_flag("--no-pager"));
+    }
+
+    #[test]
+    fn test_parse_args_equals_syntax() {
+        let cmd = InterceptedCommand::parse_all("jj edit --repository=. @-").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &["-R", "--repository"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["edit", "@-"]);
+        assert_eq!(args.get_option("--repository"), Some("."));
+    }
+
+    #[test]
+    fn test_parse_args_posix_clustering() {
+        let cmd = InterceptedCommand::parse_all("jj edit -am").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &[],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["edit"]);
+        assert!(args.has_flag("-a"));
+        assert!(args.has_flag("-m"));
+    }
+
+    #[test]
+    fn test_parse_args_posix_glued_value() {
+        let cmd = InterceptedCommand::parse_all("jj edit -R.").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &["-R"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["edit"]);
+        assert_eq!(args.get_option("-R"), Some("."));
+    }
+
+    #[test]
+    fn test_parse_args_posix_cluster_with_value() {
+        let cmd = InterceptedCommand::parse_all("git commit -am msg").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "git",
+            options_with_values: &["-m"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["commit"]);
+        assert!(args.has_flag("-a"));
+        assert_eq!(args.get_option("-m"), Some("msg"));
+    }
+
+    #[test]
+    fn test_parse_args_posix_terminator() {
+        let cmd = InterceptedCommand::parse_all("git log -- -R").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "git",
+            options_with_values: &["-R"],
+        };
+        let args_term = cmd.parse_args(&schema);
+        assert_eq!(args_term.positionals, vec!["log", "-R"]);
+        assert!(!args_term.has_flag("-R"));
+        assert_eq!(args_term.get_option("-R"), None);
+    }
+
+    #[test]
+    fn test_parse_args_consumes_dash_prefixed_option_values() {
+        let cmd =
+            InterceptedCommand::parse_all("jj describe -m -wip --message -second @-").remove(0);
+        let schema = ProgramCliSchema {
+            program_name: "jj",
+            options_with_values: &["-m", "--message"],
+        };
+        let args = cmd.parse_args(&schema);
+        assert_eq!(args.positionals, vec!["describe", "@-"]);
+        assert_eq!(args.get_option("-m"), Some("-wip"));
+        assert_eq!(args.get_option("--message"), Some("-second"));
     }
 }
