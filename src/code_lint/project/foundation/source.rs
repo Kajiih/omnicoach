@@ -1,5 +1,4 @@
-//! Filesystem abstraction for disk, hermetic in-memory tests, and unsaved hook buffer overlays
-//! (`CodeLintProjectFoundation`).
+//! Filesystem abstraction for disk, hermetic in-memory tests, and unsaved hook buffer overlays.
 
 use super::config::{lexical_normalize, resolve_against_cwd};
 use std::collections::{BTreeSet, HashMap, HashSet};

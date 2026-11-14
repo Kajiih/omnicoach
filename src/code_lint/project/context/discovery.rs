@@ -1,4 +1,4 @@
-//! Project source discovery and multi-file `ProjectFacts` dispatch (`CodeLintProjectContext`).
+//! Project source discovery and multi-file `ProjectFacts` dispatch.
 
 use super::index::ProjectIndex;
 use super::layout::ProjectLayout;

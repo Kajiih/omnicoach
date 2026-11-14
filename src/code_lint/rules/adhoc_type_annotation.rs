@@ -4,7 +4,7 @@
 
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::semantic::type_annotations::find_banned_type_annotations;
+use crate::code_lint::semantic::find_banned_type_annotations;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,

@@ -10,7 +10,7 @@ use crate::code_lint::ast::{
     DeclarationScopeKind, IntraFileReference, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind,
     Visibility, levels, strongly_connected_components,
 };
-use crate::code_lint::project::foundation::{ModuleFact, ProjectFacts};
+use crate::code_lint::project::{ModuleFact, ProjectFacts};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -1465,7 +1465,7 @@ mod tests {
         CallClusterRule, FindingFact, OrderingEdge as AstOrderingEdge, OrderingReason,
         PlacementAnchor, RelationFact,
     };
-    use crate::code_lint::project::foundation::{ComponentFact, CrossModuleRefFact};
+    use crate::code_lint::project::{ComponentFact, CrossModuleRefFact};
 
     fn sample_scopes() -> Vec<ScopeFacts> {
         vec![sample_module_scope(), sample_impl_scope()]

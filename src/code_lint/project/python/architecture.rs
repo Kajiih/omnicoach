@@ -1,4 +1,4 @@
-//! Python architectural conformance evaluation (`CodeLintProjectPython`).
+//! Python architectural conformance evaluation.
 
 use super::layout::PythonLayout;
 use super::paths::{

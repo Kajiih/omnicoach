@@ -106,13 +106,13 @@ fn check_file(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let imported_segments: Vec<Vec<String>> =
-        crate::code_lint::semantic::bindings::collect_imported_names(file)
+        crate::code_lint::semantic::collect_imported_names(file)
             .into_iter()
             .map(|name| split_segments(&name))
             .filter(|segments| !segments.is_empty())
             .collect();
 
-    for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
+    for node in crate::code_lint::semantic::collect_renameable_bindings(file) {
         let name = node.text();
         let segments = split_segments(&name);
         for segment in non_imported_segments(&segments, &imported_segments) {

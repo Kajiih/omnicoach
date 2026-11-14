@@ -1,7 +1,5 @@
 //! Rust-specific project layout, module header index, architectural conformance evaluation, and
-//! project fact extraction (`CodeLintProjectRust`).
-
-architecture_component!(CodeLintProjectRust);
+//! project fact extraction.
 
 mod architecture;
 mod facts;

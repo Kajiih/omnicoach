@@ -12,9 +12,8 @@ use std::sync::OnceLock;
 use omnicoach::architecture::ArchitectureComponent;
 use omnicoach::code_lint::ast::rust::{collect_inline_test_ranges, summarize_rust_file};
 use omnicoach::code_lint::ast::{ParsedFile, collect_bindings};
-use omnicoach::code_lint::project::context::{ProjectIndex, ProjectLayout};
-use omnicoach::code_lint::project::foundation::{
-    ArchitectureSpec, DiskFileSource, FileSource as _,
+use omnicoach::code_lint::project::{
+    ArchitectureSpec, DiskFileSource, FileSource as _, ProjectIndex, ProjectLayout,
 };
 use omnicoach::code_lint::rules::CODE_RULES;
 use omnicoach::code_lint::runner::{LintOptions, run_code_lint};
@@ -155,6 +154,7 @@ fn test_components_are_named_after_their_modules() {
     );
 }
 
+// TODO: What do those do? Is it ricr to hardcode them like this?
 const ALLOWED_CONTEXT_DELEGATION_BINDINGS: &[&str] = &[
     "python",
     "rust",
@@ -167,6 +167,16 @@ const ALLOWED_CONTEXT_DELEGATION_BINDINGS: &[&str] = &[
     "PythonModuleContext",
     "collect_python_project_facts",
     "collect_rust_project_facts",
+];
+
+const ALLOWED_FACADE_DELEGATION_BINDINGS: &[&str] = &[
+    "python",
+    "rust",
+    "PythonClassId",
+    "PythonModuleContext",
+    "ImportedProtocolSummary",
+    "DocumentedOverrideMethod",
+    "ResolvedClassAncestors",
 ];
 
 struct ProjectLanguageViolations {
@@ -204,19 +214,25 @@ fn collect_project_language_violations() -> ProjectLanguageViolations {
             .to_string_lossy()
             .replace('\\', "/");
 
-        let is_foundation_or_router =
-            relative == "project.rs" || relative.starts_with("project/foundation");
+        let is_foundation = relative.starts_with("project/foundation");
+        let is_facade = relative == "project.rs";
         let is_context = relative.starts_with("project/context");
-        if is_foundation_or_router || is_context {
-            for reference in &summary.referenced_paths {
-                if reference.raw_path.contains("ast::python")
+        let is_python = relative.starts_with("project/python");
+        let is_rust = relative.starts_with("project/rust");
+        for reference in &summary.referenced_paths {
+            let forbidden_ast_path = if is_foundation || is_facade || is_context {
+                reference.raw_path.contains("ast::python")
                     || reference.raw_path.contains("ast::rust")
-                {
-                    violations.cross_language_ast_paths.push(format!(
-                        "{relative}:{} -> {}",
-                        reference.line, reference.raw_path
-                    ));
-                }
+            } else if is_python {
+                reference.raw_path.contains("ast::rust")
+            } else {
+                is_rust && reference.raw_path.contains("ast::python")
+            };
+            if forbidden_ast_path {
+                violations.cross_language_ast_paths.push(format!(
+                    "{relative}:{} -> {}",
+                    reference.line, reference.raw_path
+                ));
             }
         }
 
@@ -232,28 +248,31 @@ fn collect_project_language_violations() -> ProjectLanguageViolations {
             let name = node.text();
             let lower = name.to_ascii_lowercase();
             let entry = format!("{relative}: {name}");
-            if is_foundation_or_router {
+            if is_foundation {
                 if ["python", "rust", "cargo", "pyproject"]
                     .iter()
                     .any(|term| lower.contains(term))
                 {
                     violations.foundation_language_bindings.push(entry);
                 }
-            } else if is_context {
+            } else if is_facade || is_context {
+                let allowed_bindings = if is_facade {
+                    ALLOWED_FACADE_DELEGATION_BINDINGS
+                } else {
+                    ALLOWED_CONTEXT_DELEGATION_BINDINGS
+                };
                 let has_manifest_term = lower.contains("cargo") || lower.contains("pyproject");
                 let has_unapproved_language_term = (lower.contains("python")
                     || lower.contains("rust"))
-                    && !ALLOWED_CONTEXT_DELEGATION_BINDINGS.contains(&name.as_ref());
+                    && !allowed_bindings.contains(&name.as_ref());
                 if has_manifest_term || has_unapproved_language_term {
                     violations.context_language_bindings.push(entry);
                 }
-            } else if relative.starts_with("project/python") {
+            } else if is_python {
                 if lower.contains("rust") || lower.contains("cargo") {
                     violations.sibling_language_bindings.push(entry);
                 }
-            } else if relative.starts_with("project/rust")
-                && (lower.contains("python") || lower.contains("pyproject"))
-            {
+            } else if is_rust && (lower.contains("python") || lower.contains("pyproject")) {
                 violations.sibling_language_bindings.push(entry);
             }
         }

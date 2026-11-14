@@ -1,5 +1,4 @@
-//! Memoized Python cross-file module summary index and symbol/re-export resolution
-//! (`CodeLintProjectPython`).
+//! Memoized Python cross-file module summary index and symbol/re-export resolution.
 
 use super::architecture::evaluate_python_file_architecture;
 use super::layout::PythonLayout;

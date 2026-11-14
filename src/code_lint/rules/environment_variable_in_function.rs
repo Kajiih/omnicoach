@@ -2,7 +2,7 @@
 
 use crate::code_lint::ast::{self, EnclosingFunction, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
-use crate::code_lint::semantic::calls;
+use crate::code_lint::semantic::find_banned_calls;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, FilterListDefaults, ImpactedQuality, ListKind,
@@ -156,7 +156,7 @@ fn check_file(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    for call_match in calls::find_banned_calls(file, banned_calls) {
+    for call_match in find_banned_calls(file, banned_calls) {
         if let Some(func_name) = non_exempt_function_name(&call_match.enclosing_functions) {
             let expression = format!("{}()", call_match.callee);
             diagnostics.push(rule.diagnostic_at_node(

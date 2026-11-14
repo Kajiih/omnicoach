@@ -1,4 +1,4 @@
-//! Language-agnostic multi-file project fact models and module-graph helpers (`CodeLintProjectFoundation`).
+//! Language-agnostic multi-file project fact models and module-graph helpers.
 
 use super::architecture::ArchitectureSpec;
 use crate::code_lint::ast::{IntraFileReference, ScopeFacts};

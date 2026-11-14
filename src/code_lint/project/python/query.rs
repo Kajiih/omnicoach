@@ -1,5 +1,5 @@
 //! File-bound Python cross-module query handle (`PythonModuleContext`), C3 MRO resolution,
-//! inherited `@override` docstrings, and imported `Protocol` discovery (`CodeLintProjectPython`).
+//! inherited `@override` docstrings, and imported `Protocol` discovery.
 
 use super::index::{PythonClassId, PythonIndex, ResolvedPythonTarget};
 use crate::code_lint::ast::ParsedFile;

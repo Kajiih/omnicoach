@@ -1,5 +1,4 @@
-//! Read-only cross-file query handle (`ProjectContext`) passed to project-aware rules
-//! (`CodeLintProjectContext`).
+//! Read-only cross-file query handle (`ProjectContext`) passed to project-aware rules.
 
 use super::index::ProjectIndex;
 use crate::code_lint::ast::ParsedFile;
@@ -94,7 +93,7 @@ mod tests {
     #[test]
     fn python_query_handle_exposes_nameable_override_and_ancestor_types() {
         use crate::code_lint::ast::python::extract_classes;
-        use crate::code_lint::project::python::{DocumentedOverrideMethod, ResolvedClassAncestors};
+        use crate::code_lint::project::{DocumentedOverrideMethod, ResolvedClassAncestors};
 
         let root = Path::new("/repo");
         let base_code = indoc::indoc! {r#"

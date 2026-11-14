@@ -1,4 +1,4 @@
-//! Multi-file Python project fact extraction and cross-module symbol resolution (`CodeLintProjectPython`).
+//! Multi-file Python project fact extraction and cross-module symbol resolution.
 
 use super::architecture::{resolve_python_component, routes_to_python_component};
 use super::index::PythonIndex;

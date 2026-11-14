@@ -1,4 +1,4 @@
-//! Rust crate source-root discovery and file-to-module mapping (`CodeLintProjectRust`).
+//! Rust crate source-root discovery and file-to-module mapping.
 
 use super::paths::{LIB_CRATE_ROOT, MAIN_CRATE_ROOT, rust_module_from_relative};
 use crate::code_lint::project::foundation::{FileSource, WorkspaceAnchor};

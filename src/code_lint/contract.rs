@@ -4,8 +4,10 @@
 architecture_component!(CodeLintContract);
 
 use crate::code_lint::ast::{AstNode, ParsedFile};
-use crate::code_lint::project::context::ProjectContext;
-use crate::code_lint::semantic::{bindings, calls, comments::CommentIndex};
+use crate::code_lint::project::ProjectContext;
+use crate::code_lint::semantic::{
+    CallMatch, CommentIndex, SuffixedBindingMatch, find_banned_calls, find_suffixed_bindings,
+};
 use crate::diagnostic::{Diagnostic, Language, RuleName, SourceSpan};
 use crate::rule_declaration::{
     Declaration, DeclaredExamples, DeclaredRule, EnforcementMode, OptionsDeclaration,
@@ -111,9 +113,9 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
         path: &Path,
         file: &ParsedFile,
         banned: &HashSet<String>,
-        predicate: impl FnMut(&calls::CallMatch<'_>) -> bool,
+        predicate: impl FnMut(&CallMatch<'_>) -> bool,
     ) -> Vec<Diagnostic> {
-        calls::find_banned_calls(file, banned)
+        find_banned_calls(file, banned)
             .into_iter()
             .filter(predicate)
             .map(|matched| {
@@ -143,9 +145,9 @@ impl<Options: OptionsDeclaration> CodeRule<Options> {
         path: &Path,
         file: &ParsedFile,
         banned: &HashSet<String>,
-        predicate: impl FnMut(&bindings::SuffixedBindingMatch<'_>) -> bool,
+        predicate: impl FnMut(&SuffixedBindingMatch<'_>) -> bool,
     ) -> Vec<Diagnostic> {
-        bindings::find_suffixed_bindings(file, banned)
+        find_suffixed_bindings(file, banned)
             .into_iter()
             .filter(predicate)
             .map(|matched| {

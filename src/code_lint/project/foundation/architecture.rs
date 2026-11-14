@@ -1,5 +1,5 @@
 //! Language-agnostic architectural component specification (`ArchitectureSpec`), finding models,
-//! and component DAG builders (`CodeLintProjectFoundation`).
+//! and component DAG builders.
 
 use super::config::{
     ArchitectureConfig, ArchitectureConfigError, ArchitectureSubmoduleConfig, ProjectTomlError,

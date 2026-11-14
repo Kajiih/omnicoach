@@ -3,7 +3,7 @@
 architecture_component!(CodeLintSuppression);
 
 use crate::code_lint::ast::{self, ParsedFile};
-use crate::code_lint::semantic::comments::{
+use crate::code_lint::semantic::{
     CommentIndex, OmniDirectivePrefix, is_line_prefix_whitespace, is_line_suffix_whitespace,
     is_standalone_comment_span, may_contain_suppression_directive, parse_omni_directive_prefix,
     split_python_directive_segments, starts_with_tool_directive, strip_comment_delimiters,

@@ -4,8 +4,7 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonClassInfo, extract_classes};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
 use crate::code_lint::policy::is_pydantic_model;
-use crate::code_lint::project::context::ProjectContext;
-use crate::code_lint::project::python::PythonModuleContext;
+use crate::code_lint::project::{ProjectContext, PythonModuleContext};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,

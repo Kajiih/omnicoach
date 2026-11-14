@@ -7,8 +7,9 @@ use crate::code_lint::ast::{
 };
 use crate::code_lint::contract::{CodeRule, ProjectCodeRule};
 use crate::code_lint::policy::is_trivial_literal;
-use crate::code_lint::project::context::{ProjectContext, ProjectIndex, ProjectLayout};
-use crate::code_lint::project::foundation::{CONFIG_FILE_NAME, MemoryFileSource, ProjectConfig};
+use crate::code_lint::project::{
+    CONFIG_FILE_NAME, MemoryFileSource, ProjectConfig, ProjectContext, ProjectIndex, ProjectLayout,
+};
 use crate::command_lint::contract::CommandRule;
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::{Diagnostic, Language};

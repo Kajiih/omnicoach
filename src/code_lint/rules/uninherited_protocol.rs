@@ -9,9 +9,8 @@ use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{PythonBaseClass, PythonClassInfo, extract_classes};
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
 use crate::code_lint::policy::is_fake_class_name;
-use crate::code_lint::project::context::ProjectContext;
-use crate::code_lint::project::python::{
-    ImportedProtocolSummary, PythonClassId, PythonModuleContext,
+use crate::code_lint::project::{
+    ImportedProtocolSummary, ProjectContext, PythonClassId, PythonModuleContext,
 };
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{

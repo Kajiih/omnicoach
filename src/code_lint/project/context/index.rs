@@ -1,4 +1,4 @@
-//! Memoized cross-file module summary index (`CodeLintProjectContext`).
+//! Memoized cross-file module summary index.
 
 use super::layout::ProjectLayout;
 use crate::code_lint::ast::ParsedFile;

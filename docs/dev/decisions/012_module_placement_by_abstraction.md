@@ -47,4 +47,4 @@ Python decorators and Rust attributes (P5) both mark definitions, but a decorato
 - Each module's doc comment states its abstraction. An item whose contract does not fit that statement is misplaced.
 - Imports name the owning module (`use super::functions::…`), never a relay.
 - Moving an item is justified by its contract, not by a change in its callers. Adding or removing a caller never moves an item.
-- Enforcement of P3/P4 inside a component is a roadmap item; today they are review criteria.
+- Intra-component sibling DAG acyclicity (P3) and submodule coverage are enforced by `modules: { ... }` / `submodules` in `sibling-module-dependency` and `unmapped-architecture-module`, while facade re-export boundaries (P4) are enforced by `reexported-public-item`; abstraction-vocabulary placement (P1–P2, P5–P7) and pure intra-component parent routers (P4) are review criteria.

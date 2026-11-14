@@ -1,5 +1,5 @@
 //! Rust architectural conformance evaluation and `define_architecture!` / `architecture_component!`
-//! synthesis (`CodeLintProjectRust`).
+//! synthesis.
 
 use super::layout::RustLayout;
 use super::paths::{

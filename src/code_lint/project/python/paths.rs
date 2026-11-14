@@ -1,4 +1,4 @@
-//! Syntactic module-path and relative-package resolution for Python (`CodeLintProjectPython`).
+//! Syntactic module-path and relative-package resolution for Python.
 
 use crate::code_lint::project::foundation::ROOT_MODULE_TAG;
 use std::path::Path;

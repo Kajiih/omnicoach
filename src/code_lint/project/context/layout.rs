@@ -1,4 +1,4 @@
-//! Project boundary, source-root layout, and file-system module mapping (`CodeLintProjectContext`).
+//! Project boundary, source-root layout, and file-system module mapping.
 
 use crate::code_lint::project::foundation::{
     CONFIG_FILE_NAME, FileSource, WorkspaceAnchor, is_rooted_path, is_vcs_boundary,

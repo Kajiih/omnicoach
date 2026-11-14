@@ -1,4 +1,4 @@
-//! Python source-root discovery and file-to-module mapping (`CodeLintProjectPython`).
+//! Python source-root discovery and file-to-module mapping.
 
 use super::paths::{INIT_PY, INIT_PYI, INIT_STEM, is_python_package_init, python_dotted_path};
 use crate::code_lint::project::foundation::{

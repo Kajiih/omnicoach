@@ -7,7 +7,7 @@ use crate::code_lint::ast::python::{
 };
 use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
 use crate::code_lint::policy::{is_pydantic_model, read_only_collection_replacements};
-use crate::code_lint::project::context::ProjectContext;
+use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,

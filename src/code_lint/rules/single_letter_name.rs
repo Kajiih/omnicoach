@@ -106,7 +106,7 @@ fn check_file(
     allowed: &HashSet<String>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    for node in crate::code_lint::semantic::bindings::collect_renameable_bindings(file) {
+    for node in crate::code_lint::semantic::collect_renameable_bindings(file) {
         let name = node.text();
         if name.chars().count() == 1 && !allowed.contains(&*name) {
             diagnostics.push(rule.diagnostic_at_node(path, &node, &[("name", &name)]));

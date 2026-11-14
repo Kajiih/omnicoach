@@ -1,4 +1,4 @@
-//! Memoized Rust module header index and re-export resolution (`CodeLintProjectRust`).
+//! Memoized Rust module header index and re-export resolution.
 
 use super::architecture::{
     MAX_REEXPORT_HOPS, RUST_ARCHITECTURE_MODULE, SiblingIsolationRule,

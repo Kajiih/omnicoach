@@ -1,6 +1,6 @@
 //! Rule-registry-independent project layout, path context (`[context]`), and architectural DAG
 //! (`[architecture]`) configuration resolved from `.omnicoach.toml`, along with lexical path and
-//! glob normalization helpers (`CodeLintProjectFoundation`).
+//! glob normalization helpers.
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};

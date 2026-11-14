@@ -1,4 +1,4 @@
-//! Multi-file Rust project fact extraction and cross-module symbol resolution (`CodeLintProjectRust`).
+//! Multi-file Rust project fact extraction and cross-module symbol resolution.
 
 use super::index::RustIndex;
 use super::layout::RustLayout;

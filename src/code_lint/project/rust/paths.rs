@@ -1,4 +1,4 @@
-//! Syntactic module-path and reference-path resolution for Rust (`CodeLintProjectRust`).
+//! Syntactic module-path and reference-path resolution for Rust.
 
 use crate::code_lint::ast::rust::ExternalModDeclaration;
 use std::collections::BTreeMap;

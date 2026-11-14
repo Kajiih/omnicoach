@@ -1,7 +1,5 @@
 //! Language-agnostic project foundation: virtual/disk file sources, `.omnicoach.toml` schema,
-//! architectural DAG model, and multi-file project fact containers (`CodeLintProjectFoundation`).
-
-architecture_component!(CodeLintProjectFoundation);
+//! architectural DAG model, and multi-file project fact containers.
 
 mod architecture;
 mod config;
@@ -17,11 +15,10 @@ pub(in crate::code_lint) use self::architecture::{
 pub(in crate::code_lint::project) use self::architecture::{
     ExportPattern, ROOT_MODULE_TAG, build_architecture_spec, deduplicate_findings,
 };
-pub(crate) use self::config::{
-    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureSubmoduleConfig, ProjectTomlError,
-    compile_glob, is_rooted_path, lexical_normalize, resolve_against_cwd,
+pub(in crate::code_lint::project) use self::config::{
+    ArchitectureComponentConfig, ArchitectureSubmoduleConfig, ProjectTomlError, WorkspaceAnchor,
+    normalize_relative_path,
 };
-pub(in crate::code_lint::project) use self::config::{WorkspaceAnchor, normalize_relative_path};
 #[cfg(test)]
 pub(in crate::code_lint) use self::facts::ComponentFact;
 pub(in crate::code_lint) use self::facts::{
@@ -35,5 +32,8 @@ pub(in crate::code_lint) use self::source::OverlayFileSource;
 pub(in crate::code_lint::project) use self::source::is_vcs_boundary;
 
 pub use self::architecture::{ArchitectureError, ArchitectureSpec, ComponentSpec, SubmoduleSpec};
-pub use self::config::{ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig};
+pub use self::config::{
+    ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig,
+    compile_glob, is_rooted_path, lexical_normalize, resolve_against_cwd,
+};
 pub use self::source::{DiskFileSource, FileSource, MemoryFileSource};
