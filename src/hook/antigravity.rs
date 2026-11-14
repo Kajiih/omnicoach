@@ -55,9 +55,7 @@ pub fn run_antigravity_hook(
             serialize_pre_tool_decision(&outcome.decision)
         }
         AntigravityEvent::PreInvocation => {
-            let warnings = parse_pre_invocation(json_input)?
-                .map(|queue| queue.drain())
-                .unwrap_or_default();
+            let warnings = parse_pre_invocation(json_input)?.map_or_default(|queue| queue.drain());
             serialize_pre_invocation(&warnings)
         }
     }

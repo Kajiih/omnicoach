@@ -956,13 +956,12 @@ fn rust_fields_summary(fields: Option<ast::FieldList>, include_visibility: bool)
     let visibility_prefix = |visibility: Option<ast::Visibility>| {
         visibility
             .filter(|_| include_visibility)
-            .map(|node| {
+            .map_or_default(|node| {
                 format!(
                     "{} ",
                     collapse_whitespace(&node.syntax().text().to_string())
                 )
             })
-            .unwrap_or_default()
     };
     match fields {
         Some(ast::FieldList::RecordFieldList(record)) => {

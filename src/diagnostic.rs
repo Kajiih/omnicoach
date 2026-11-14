@@ -555,8 +555,7 @@ pub fn format_plain(diagnostics: &[Diagnostic]) -> String {
             .message
             .explanation_hint
             .as_ref()
-            .map(|hint| format!("  Or: {hint}\n"))
-            .unwrap_or_default();
+            .map_or_default(|hint| format!("  Or: {hint}\n"));
 
         let _ = indoc::writedoc!(
             output,

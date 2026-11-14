@@ -5,8 +5,8 @@ use std::ffi::OsString;
 use pyo3::prelude::*;
 
 /// Registers the internal `_omnicoach` native extension module.
-#[pymodule]
-fn _omnicoach(module: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pymodule(name = "_omnicoach")]
+fn omnicoach_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(run_cli, module)?)?;
     Ok(())
 }

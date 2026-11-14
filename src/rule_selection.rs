@@ -86,7 +86,7 @@ pub enum ConfigError {
     /// A label that is not a rule, a tag or a synonym.
     #[error(
         "unknown selector `{label}` in {location}{}",
-        suggestion.map(|known| format!("; did you mean `{known}`?")).unwrap_or_default()
+        suggestion.map_or_default(|known| format!("; did you mean `{known}`?"))
     )]
     UnknownSelector {
         /// The label as written.
@@ -126,7 +126,7 @@ pub enum ConfigError {
     /// A `[rules.<name>]` table for a rule that does not exist.
     #[error(
         "`rules.{name}`: unknown rule{}",
-        suggestion.map(|known| format!("; did you mean `{known}`?")).unwrap_or_default()
+        suggestion.map_or_default(|known| format!("; did you mean `{known}`?"))
     )]
     UnknownRule {
         /// The rule name as written.
@@ -146,7 +146,7 @@ pub enum ConfigError {
 #[derive(Debug, thiserror::Error)]
 #[error(
     "unknown {kind} `{label}`{}",
-    suggestion.map(|known| format!("; did you mean `{known}`?")).unwrap_or_default()
+    suggestion.map_or_default(|known| format!("; did you mean `{known}`?"))
 )]
 pub struct UnknownLabel {
     kind: &'static str,

@@ -155,8 +155,7 @@ fn check_file(rule: &CodeRule, path: &Path, file: &ParsedFile, (): ()) -> Vec<Di
         };
         let constructor_parameters = class
             .constructor()
-            .map(|constructor| constructor.parameters)
-            .unwrap_or_default();
+            .map_or_default(|constructor| constructor.parameters);
         check_docstring(
             rule,
             path,

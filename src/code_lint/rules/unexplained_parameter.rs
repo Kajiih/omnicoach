@@ -187,8 +187,7 @@ fn check_file(
             let documented_unchanged_attrs = constructor_class
                 .as_ref()
                 .filter(|_| signature.name == "__init__")
-                .map(documented_unchanged_constructor_parameters)
-                .unwrap_or_default();
+                .map_or_default(documented_unchanged_constructor_parameters);
             let missing: Vec<String> = signature
                 .parameters
                 .iter()

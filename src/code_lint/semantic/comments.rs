@@ -399,11 +399,7 @@ fn is_substantive_explanation(text: &str) -> bool {
     let starts_with_fixme = text
         .get(..5)
         .is_some_and(|sub| sub.eq_ignore_ascii_case("fixme"));
-    if (starts_with_todo || starts_with_fixme) && words <= MIN_EXPLANATION_WORDS {
-        return false;
-    }
-
-    true
+    !((starts_with_todo || starts_with_fixme) && words <= MIN_EXPLANATION_WORDS)
 }
 
 fn find_directive_prefix(text: &str, lang: Language) -> Option<usize> {
