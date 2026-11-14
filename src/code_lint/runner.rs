@@ -231,8 +231,7 @@ pub fn run_code_lint(options: &LintOptions, config: &Config) -> anyhow::Result<L
                     .iter()
                     .position(|index| index.layout().project_root == base_layout.project_root)
                 {
-                    project_indices[existing_pos]
-                        .merge_python_source_roots(&base_layout.python_source_roots);
+                    project_indices[existing_pos].merge_discovered_layout(&base_layout);
                     existing_pos
                 } else {
                     let new_pos = project_indices.len();

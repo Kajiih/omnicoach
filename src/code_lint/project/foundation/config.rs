@@ -252,6 +252,40 @@ impl ProjectConfig {
     }
 }
 
+/// Discovered project root directory paired with the optional caller working directory used to
+/// resolve relative query paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::code_lint::project) struct WorkspaceAnchor {
+    /// Discovered project root directory.
+    pub(in crate::code_lint::project) project_root: PathBuf,
+    working_directory: Option<PathBuf>,
+}
+
+impl WorkspaceAnchor {
+    /// Constructs a [`WorkspaceAnchor`] for `project_root` and optional `working_directory`.
+    #[must_use]
+    pub(in crate::code_lint::project) const fn new(
+        project_root: PathBuf,
+        working_directory: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            project_root,
+            working_directory,
+        }
+    }
+
+    /// Resolves `path` relative to `working_directory` (or [`Self::project_root`] when no
+    /// relative-anchor working directory was captured) when `path` is relative.
+    #[must_use]
+    pub(in crate::code_lint::project) fn resolve_query_path(&self, path: &Path) -> PathBuf {
+        let base = self
+            .working_directory
+            .as_deref()
+            .unwrap_or(&self.project_root);
+        resolve_against_cwd(path, Some(base))
+    }
+}
+
 /// Normalizes `path` lexically by stripping `.` (`CurDir`) and resolving `..` (`ParentDir`)
 /// components without touching the filesystem, returning `"."` when all components collapse.
 #[must_use]

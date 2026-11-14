@@ -1,28 +1,18 @@
-//! Syntactic module-path and reference-path resolution for Rust and Python (`CodeLintProject`).
+//! Syntactic module-path and reference-path resolution for Rust (`CodeLintProjectRust`).
 
-use super::foundation::ROOT_MODULE_TAG;
 use crate::code_lint::ast::rust::ExternalModDeclaration;
+use std::collections::BTreeMap;
 use std::path::Path;
 
-// TODO: Is this the right abstraction to contain language specific components?
-/// Stem of a Python package initializer file (`__init__.py` / `__init__.pyi`).
-pub(super) const INIT_STEM: &str = "__init__";
-/// Filename of a Python package initializer (`__init__.py`).
-pub(super) const INIT_PY: &str = "__init__.py";
-/// Filename of a Python type-stub package initializer (`__init__.pyi`).
-pub(super) const INIT_PYI: &str = "__init__.pyi";
 /// Crate-relative module identifier assigned to a Rust `lib.rs` crate root.
 pub(super) const LIB_CRATE_ROOT: &str = "lib";
 /// Crate-relative module identifier assigned to a Rust `main.rs` crate root.
 pub(super) const MAIN_CRATE_ROOT: &str = "main";
 
-const PYTHON_SUFFIX: &str = ".py";
-const PYTHON_STUB_SUFFIX: &str = ".pyi";
 const RUST_EXTENSION: &str = "rs";
 const RUST_SUFFIX: &str = ".rs";
 const SOURCE_DIRECTORY: &str = "src";
 const RUST_MODULE_SEP: &str = "::";
-const PYTHON_MODULE_SEP: &str = ".";
 const SELF_SEGMENT: &str = "self";
 const SUPER_SEGMENT: &str = "super";
 
@@ -62,106 +52,6 @@ pub(super) enum PathOrigin {
     /// Unanchored or leading-`::` path not anchored to `crate`, `<crate_name>`, `self`, `super`,
     /// or a declared child `mod`.
     ExternalOrUnanchored,
-}
-
-/// Package prefix and shallowest ancestor reached by a relative Python import (`level >= 1`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ResolvedRelativePackage {
-    /// Target package prefix (`None` when climbing to `<root>`).
-    pub(super) package_prefix: Option<String>,
-    /// Shallowest ancestor reached (`"<root>"` when climbing to the source root).
-    pub(super) shallowest_ancestor: String,
-}
-
-/// Returns true if `path` is a Python package initializer (`__init__.py` or `__init__.pyi`).
-#[must_use]
-pub(super) fn is_python_package_init(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(INIT_PY | INIT_PYI)
-    )
-}
-
-/// Resolves a Python module specifier (`level == 0` absolute or `level >= 1` relative) from
-/// `from_module`.
-#[must_use]
-pub(super) fn resolve_relative_python_module(
-    from_module: &str,
-    is_package_init: bool,
-    level: u32,
-    specifier: Option<&str>,
-) -> Option<String> {
-    if level == 0 {
-        return specifier.map(str::to_owned);
-    }
-    let resolved = resolve_relative_python_package(from_module, is_package_init, level)?;
-    let suffix = specifier.filter(|text| !text.is_empty());
-    match (resolved.package_prefix, suffix) {
-        (Some(prefix), Some(tail)) => Some(format!("{prefix}.{tail}")),
-        (Some(prefix), None) => Some(prefix),
-        (None, Some(tail)) => Some(tail.to_owned()),
-        (None, None) => Some(String::new()),
-    }
-}
-
-/// Resolves a relative Python package prefix (`level >= 1`) from `from_module`.
-///
-/// Returns the target package prefix (`None` when climbing to `<root>`) and the shallowest
-/// ancestor reached (`"<root>"` when climbing to the source root), or `None` if `level` climbs
-/// above the source root.
-#[must_use]
-pub(super) fn resolve_relative_python_package(
-    from_module: &str,
-    is_package_init: bool,
-    level: u32,
-) -> Option<ResolvedRelativePackage> {
-    let mut parts: Vec<&str> = if from_module.is_empty() || from_module == ROOT_MODULE_TAG {
-        Vec::new()
-    } else {
-        from_module
-            .split('.')
-            .filter(|segment| !segment.is_empty() && *segment != INIT_STEM)
-            .collect()
-    };
-    if !is_package_init && !parts.is_empty() {
-        parts.pop();
-    }
-    let up_count = (level as usize).saturating_sub(1);
-    if up_count > parts.len() {
-        return None;
-    }
-    parts.truncate(parts.len() - up_count);
-    let package_prefix = (!parts.is_empty()).then(|| parts.join("."));
-    let shallowest_ancestor = package_prefix
-        .clone()
-        .unwrap_or_else(|| ROOT_MODULE_TAG.to_owned());
-    Some(ResolvedRelativePackage {
-        package_prefix,
-        shallowest_ancestor,
-    })
-}
-
-/// Converts a forward-slash relative Python file path into a dotted module identifier, optionally
-/// trimming a trailing `__init__` segment (returning `"__init__"` when the path resolves to a
-/// root `__init__.py`).
-#[must_use]
-pub(super) fn python_dotted_path(relative_path: &str, trim_init: bool) -> String {
-    let without_extension = relative_path
-        .strip_suffix(PYTHON_STUB_SUFFIX)
-        .or_else(|| relative_path.strip_suffix(PYTHON_SUFFIX))
-        .unwrap_or(relative_path);
-    let mut segments: Vec<&str> = without_extension
-        .split('/')
-        .filter(|segment| !segment.is_empty() && *segment != ".")
-        .collect();
-    if trim_init && segments.last() == Some(&INIT_STEM) {
-        segments.pop();
-    }
-    if segments.is_empty() {
-        INIT_STEM.to_owned()
-    } else {
-        segments.join(".")
-    }
 }
 
 /// Computes the crate-relative `::`-separated module path of a Rust source file path.
@@ -312,6 +202,38 @@ pub(super) fn is_rust_crate_root(module_path: &str) -> bool {
     matches!(module_path, LIB_CRATE_ROOT | MAIN_CRATE_ROOT | "")
 }
 
+/// An inherited component and the nearest ancestor Rust module that declared it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InheritedComponent<'a, T> {
+    /// Nearest ancestor (or self) module path that declared the component.
+    pub root_module: &'a str,
+    /// Inherited component value.
+    pub component: &'a T,
+}
+
+/// Resolves the [`InheritedComponent`] for `module` by climbing up its `::`-separated
+/// module path to the nearest ancestor (or self) in `declared_components`.
+#[must_use]
+pub fn resolve_inherited_component_with_root<'a, T>(
+    module: &str,
+    declared_components: &'a BTreeMap<String, T>,
+) -> Option<InheritedComponent<'a, T>> {
+    let mut current = module;
+    loop {
+        if let Some((root_key, component)) = declared_components.get_key_value(current) {
+            return Some(InheritedComponent {
+                root_module: root_key.as_str(),
+                component,
+            });
+        }
+        if let Some((parent, _)) = current.rsplit_once(RUST_MODULE_SEP) {
+            current = parent;
+        } else {
+            return None;
+        }
+    }
+}
+
 /// Returns true if `path` equals `module_prefix` or is a `::`-delimited Rust descendant of it.
 #[must_use]
 pub(super) fn is_in_rust_module_subtree(path: &str, module_prefix: &str) -> bool {
@@ -324,18 +246,42 @@ pub(super) fn is_in_rust_module_subtree(path: &str, module_prefix: &str) -> bool
             .is_some_and(|rest| rest.starts_with(RUST_MODULE_SEP))
 }
 
-/// Returns true if `module_path` equals `prefix` or is a `.`-delimited Python descendant of it.
-#[must_use]
-pub(super) fn is_in_python_module_subtree(module_path: &str, prefix: &str) -> bool {
-    module_path == prefix
-        || module_path
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with(PYTHON_MODULE_SEP))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtree_inheritance_resolves_leaf_modules_and_rejects_namespace_routers() {
+        let declared_components = BTreeMap::from([
+            ("domain::unit".to_owned(), "CodeLintRules"),
+            ("other".to_owned(), "CommandLintRules"),
+        ]);
+        let queries = [
+            "domain::unit",
+            "domain::unit::leaf::deeper",
+            "other::leaf",
+            "domain",
+            "domain::unit_sibling",
+        ];
+        let resolved: Vec<Option<&str>> = queries
+            .into_iter()
+            .map(|module| {
+                resolve_inherited_component_with_root(module, &declared_components)
+                    .map(|inherited| *inherited.component)
+            })
+            .collect();
+
+        assert_eq!(
+            resolved,
+            vec![
+                Some("CodeLintRules"),
+                Some("CodeLintRules"),
+                Some("CommandLintRules"),
+                None,
+                None,
+            ]
+        );
+    }
 
     #[test]
     fn resolve_rust_reference_path_handles_leading_double_colon_paths() {
@@ -364,5 +310,30 @@ mod tests {
             "serde::Deserialize"
         );
         assert!(!leading_colon_external_with_shadow_mod.is_crate_local());
+    }
+
+    #[test]
+    fn resolve_rust_reference_path_normalizes_self_crate_and_backslash_paths() {
+        assert_eq!(
+            resolve_rust_reference_path(
+                "runner",
+                &[],
+                "my_custom_crate::core::Config",
+                Some("my_custom_crate"),
+            )
+            .canonical_path,
+            "core::Config"
+        );
+        assert_eq!(
+            resolve_rust_reference_path(
+                "runner",
+                &[],
+                "omnicoach::core::Config",
+                Some("my_custom_crate"),
+            )
+            .canonical_path,
+            "omnicoach::core::Config"
+        );
+        assert_eq!(rust_module_path(r"src\sub\mod.rs"), "sub");
     }
 }

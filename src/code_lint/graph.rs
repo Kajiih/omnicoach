@@ -184,7 +184,9 @@ mod tests {
     #[test]
     fn subdirectory_graph_resolves_declared_component_without_empty_siblings() {
         let options = GraphOptions {
-            paths: vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_lint/project")],
+            paths: vec![
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_lint/project/foundation"),
+            ],
             ..GraphOptions::default()
         };
         let rendered = generate_graph(&options, &ProjectConfig::default()).unwrap();

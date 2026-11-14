@@ -15,7 +15,7 @@ pub(in crate::code_lint) use self::architecture::{
 pub(in crate::code_lint::project) use self::architecture::{
     ExportPattern, ROOT_MODULE_TAG, build_architecture_spec, deduplicate_findings,
 };
-pub(in crate::code_lint::project) use self::config::normalize_relative_path;
+pub(in crate::code_lint::project) use self::config::{WorkspaceAnchor, normalize_relative_path};
 #[cfg(test)]
 pub(in crate::code_lint) use self::facts::ComponentFact;
 pub(in crate::code_lint) use self::facts::{

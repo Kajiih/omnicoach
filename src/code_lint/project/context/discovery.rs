@@ -1,30 +1,15 @@
-//! Multi-file project abstraction facts, source discovery, and cross-module symbol resolution (`CodeLintProject`).
+//! Project source discovery and multi-file `ProjectFacts` dispatch (`CodeLintProjectContext`).
 
-use super::architecture::{resolve_component_of_module, routes_to_python_component};
-use super::foundation::{
-    ArchitectureError, CrossModuleRefFact, DiskFileSource, FileSource, ModuleFact, ProjectConfig,
-    ProjectFacts, ProjectGraphScope, ProjectSourceFile, normalize_relative_path,
-    resolve_against_cwd, resolve_unique_module_paths,
-};
 use super::index::ProjectIndex;
 use super::layout::ProjectLayout;
-use super::paths::{
-    INIT_STEM, disambiguated_rust_module_path, is_python_package_init, is_rust_crate_root,
-    python_dotted_path, resolve_relative_python_module, resolve_rust_reference_path,
-    rust_module_path,
+use crate::code_lint::project::foundation::{
+    ArchitectureError, DiskFileSource, FileSource, ProjectConfig, ProjectFacts, ProjectGraphScope,
+    ProjectSourceFile, normalize_relative_path, resolve_against_cwd,
 };
-use crate::code_lint::ast::python::collect_path_references;
-use crate::code_lint::ast::rust::{RustFileSummary, summarize_rust_file};
-use crate::code_lint::ast::{
-    IntraFileReference, ParsedFile, ScopeFacts, collect_intra_file_references, collect_scope_facts,
-    collect_scope_symbol_names, enclosing_scope_symbol,
-};
+use crate::code_lint::project::python::collect_python_project_facts;
+use crate::code_lint::project::rust::collect_rust_project_facts;
 use crate::diagnostic::Language;
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-const CARGO_TOML_NAME: &str = "Cargo.toml";
 
 /// Discovered source files paired with the shared [`ProjectIndex`] governing their repository.
 pub(in crate::code_lint) struct DiscoveredProjectSources<'s> {
@@ -50,10 +35,19 @@ impl DiscoveredProjectSources<'_> {
     ) -> Result<ProjectFacts, ArchitectureError> {
         match lang {
             Language::Rust => {
-                collect_rust_project_facts(title, &self.files, &self.index, self.scope)
+                collect_rust_project_facts(title, &self.files, &self.index.rust, self.scope, || {
+                    self.index.try_architecture_spec()
+                })
             }
             Language::Python => {
-                collect_python_project_facts(title, &self.files, &self.index, self.scope)
+                let spec = self.index.try_architecture_spec()?;
+                Ok(collect_python_project_facts(
+                    title,
+                    &self.files,
+                    &self.index.python,
+                    spec,
+                    self.scope,
+                ))
             }
         }
     }
@@ -93,7 +87,7 @@ pub(in crate::code_lint) fn discover_project_sources_in<'s>(
     for extra_path in paths.iter().skip(1) {
         let extra_layout = ProjectLayout::discover(extra_path, source, &configured_roots);
         if extra_layout.project_root == index.layout().project_root {
-            index.merge_python_source_roots(&extra_layout.python_source_roots);
+            index.merge_discovered_layout(&extra_layout);
         }
     }
 
@@ -116,7 +110,7 @@ pub(in crate::code_lint) fn discover_project_sources_in<'s>(
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     files.dedup_by(|left, right| left.relative_path == right.relative_path);
 
-    merge_discovered_python_subpackage_roots(&files, source, &mut index);
+    index.merge_inferred_source_roots(&files, source);
     let scope = determine_graph_scope(paths, source, &index);
 
     Ok(DiscoveredProjectSources {
@@ -165,377 +159,6 @@ fn derive_project_title_with_cwd(paths: &[PathBuf], current_dir: Option<&Path>) 
     "project".to_owned()
 }
 
-fn collect_rust_project_facts(
-    title: &str,
-    files: &[ProjectSourceFile],
-    index: &ProjectIndex<'_>,
-    scope: ProjectGraphScope,
-) -> Result<ProjectFacts, ArchitectureError> {
-    let rust_files: Vec<&ProjectSourceFile> = files
-        .iter()
-        .filter(|file| file.lang == Language::Rust)
-        .collect();
-    let module_paths = resolved_rust_module_paths(&rust_files, index.layout());
-    let entries: Vec<RustModuleEntry> = rust_files
-        .into_iter()
-        .zip(module_paths)
-        .map(|(file, module_path)| parse_rust_module(file, module_path, index))
-        .collect();
-
-    let spec = index.architecture_spec();
-    if let Some(error) = index.architecture_error() {
-        return Err(error.clone());
-    }
-    let cross_module_refs = resolve_rust_cross_module_refs(&entries, index);
-    let mut modules = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let declared_component = spec.and_then(|resolved| {
-            resolve_component_of_module(resolved, &entry.module_path, Language::Rust)
-        });
-        if declared_component.is_none()
-            && entry.summary.non_namespace_items.is_empty()
-            && entry.summary.macro_definitions.is_empty()
-            && (entry.is_crate_root || spec.is_some())
-        {
-            continue;
-        }
-        let component = declared_component.map_or_else(
-            || {
-                entry
-                    .module_path
-                    .split_once("::")
-                    .map_or(entry.module_path.as_str(), |(head, _)| head)
-                    .to_owned()
-            },
-            str::to_owned,
-        );
-        modules.push(ModuleFact {
-            module_path: entry.module_path,
-            path: entry.path,
-            component,
-            scopes: entry.scopes,
-            intra_file_refs: entry.intra_file_refs,
-        });
-    }
-
-    Ok(ProjectFacts::build(
-        title,
-        spec,
-        modules,
-        cross_module_refs,
-        scope,
-    ))
-}
-
-struct RustModuleEntry {
-    path: String,
-    module_path: String,
-    is_crate_root: bool,
-    summary: Arc<RustFileSummary>,
-    scopes: Vec<ScopeFacts>,
-    intra_file_refs: Vec<IntraFileReference>,
-}
-
-fn resolved_rust_module_paths(
-    rust_files: &[&ProjectSourceFile],
-    layout: &ProjectLayout,
-) -> Vec<String> {
-    resolve_unique_module_paths(
-        rust_files,
-        |file| {
-            layout
-                .rust_module_of_path(&file.full_path)
-                .unwrap_or_else(|| rust_module_path(&file.relative_path))
-        },
-        |file| disambiguated_rust_module_path(&file.relative_path),
-    )
-}
-
-fn parse_rust_module(
-    file: &ProjectSourceFile,
-    module_path: String,
-    index: &ProjectIndex<'_>,
-) -> RustModuleEntry {
-    let is_crate_root = is_rust_crate_root(&module_path);
-    let parsed = ParsedFile::rust(&file.source);
-    let summary = index.seed_rust_summary(&module_path, summarize_rust_file(&parsed));
-    let scopes = collect_scope_facts(&parsed);
-    let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
-    RustModuleEntry {
-        path: file.relative_path.clone(),
-        module_path,
-        is_crate_root,
-        summary,
-        scopes,
-        intra_file_refs,
-    }
-}
-
-fn resolve_rust_cross_module_refs(
-    entries: &[RustModuleEntry],
-    index: &ProjectIndex<'_>,
-) -> Vec<CrossModuleRefFact> {
-    let crate_name = index.layout().rust_crate_name.as_deref();
-    let known_modules: HashSet<&str> = entries
-        .iter()
-        .map(|entry| entry.module_path.as_str())
-        .collect();
-    let mut module_symbols: HashMap<&str, HashSet<String>> = HashMap::new();
-    for entry in entries {
-        let symbols = module_symbols
-            .entry(entry.module_path.as_str())
-            .or_default();
-        collect_scope_symbol_names(&entry.scopes, symbols);
-    }
-
-    let mut refs = Vec::new();
-    for entry in entries {
-        for reference in &entry.summary.referenced_paths {
-            let resolved = resolve_rust_reference_path(
-                &entry.module_path,
-                &entry.summary.external_mods,
-                &reference.raw_path,
-                crate_name,
-            );
-            if let Some(target) = index.resolve_rust_module_target(
-                &resolved.canonical_path,
-                &known_modules,
-                &module_symbols,
-            ) && target.module != entry.module_path
-            {
-                refs.push(CrossModuleRefFact {
-                    source_module: entry.module_path.clone(),
-                    source_symbol: enclosing_scope_symbol(&entry.scopes, reference.line),
-                    target_module: target.module,
-                    target_symbol: target.symbol,
-                    line: reference.line,
-                });
-            }
-        }
-    }
-    refs.sort();
-    refs.dedup();
-    refs
-}
-
-fn collect_python_project_facts(
-    title: &str,
-    files: &[ProjectSourceFile],
-    index: &ProjectIndex<'_>,
-    scope: ProjectGraphScope,
-) -> Result<ProjectFacts, ArchitectureError> {
-    let spec = index.architecture_spec();
-    if let Some(error) = index.architecture_error() {
-        return Err(error.clone());
-    }
-    let python_files: Vec<&ProjectSourceFile> = files
-        .iter()
-        .filter(|file| {
-            file.lang == Language::Python
-                && !(scope == ProjectGraphScope::FullProject
-                    && index
-                        .layout()
-                        .python_architecture_module_of_path(&file.full_path)
-                        .is_none()
-                    && spec.is_some_and(|resolved| {
-                        let fallback = index.layout().fallback_python_module_path(
-                            &file.full_path,
-                            &file.relative_path,
-                            is_python_package_init(&file.full_path),
-                        );
-                        resolve_component_of_module(resolved, &fallback, Language::Python).is_none()
-                    }))
-        })
-        .collect();
-    let module_paths = resolved_python_module_paths(&python_files, index.layout());
-    let entries: Vec<PythonModuleEntry> = python_files
-        .into_iter()
-        .zip(module_paths)
-        .map(|(file, module_path)| parse_python_module(file, module_path, index))
-        .collect();
-    let cross_module_refs = resolve_python_cross_module_refs(&entries, index);
-    let mut modules = Vec::with_capacity(entries.len());
-
-    for entry in entries {
-        let declared_component = spec.and_then(|resolved| {
-            resolve_component_of_module(resolved, &entry.module_path, Language::Python)
-        });
-        let is_unmapped_pure_router = declared_component.is_none()
-            && entry.is_package_init
-            && !entry.has_non_routing_items
-            && spec
-                .is_some_and(|resolved| routes_to_python_component(resolved, &entry.module_path));
-        if !is_unmapped_pure_router {
-            let component = declared_component.map_or_else(
-                || python_component_name(&entry.module_path, title),
-                str::to_owned,
-            );
-            modules.push(ModuleFact {
-                module_path: entry.module_path,
-                path: entry.path,
-                component,
-                scopes: entry.scopes,
-                intra_file_refs: entry.intra_file_refs,
-            });
-        }
-    }
-
-    Ok(ProjectFacts::build(
-        title,
-        spec,
-        modules,
-        cross_module_refs,
-        scope,
-    ))
-}
-
-struct PythonModuleEntry {
-    path: String,
-    module_path: String,
-    is_package_init: bool,
-    has_non_routing_items: bool,
-    references: Vec<(usize, String)>,
-    scopes: Vec<ScopeFacts>,
-    intra_file_refs: Vec<IntraFileReference>,
-}
-
-fn resolved_python_module_paths(
-    python_files: &[&ProjectSourceFile],
-    layout: &ProjectLayout,
-) -> Vec<String> {
-    resolve_unique_module_paths(
-        python_files,
-        |file| {
-            let is_package_init = is_python_package_init(&file.full_path);
-            layout
-                .python_module_of_path(&file.full_path)
-                .unwrap_or_else(|| {
-                    layout.fallback_python_module_path(
-                        &file.full_path,
-                        &file.relative_path,
-                        is_package_init,
-                    )
-                })
-        },
-        |file| python_dotted_path(&file.relative_path, false),
-    )
-}
-
-fn parse_python_module(
-    file: &ProjectSourceFile,
-    module_path: String,
-    index: &ProjectIndex<'_>,
-) -> PythonModuleEntry {
-    let is_package_init = is_python_package_init(&file.full_path);
-    let parsed = ParsedFile::new(&file.source, Language::Python);
-    let summary = index.seed_python_module(&file.full_path, &module_path, &parsed);
-    let has_non_routing_items = !summary.non_routing_items.is_empty();
-    let scopes = collect_scope_facts(&parsed);
-    let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
-    let references = collect_path_references(&parsed);
-    PythonModuleEntry {
-        path: file.relative_path.clone(),
-        module_path,
-        is_package_init,
-        has_non_routing_items,
-        references,
-        scopes,
-        intra_file_refs,
-    }
-}
-
-fn resolve_python_cross_module_refs(
-    entries: &[PythonModuleEntry],
-    index: &ProjectIndex<'_>,
-) -> Vec<CrossModuleRefFact> {
-    let known_modules: HashSet<&str> = entries
-        .iter()
-        .map(|entry| entry.module_path.as_str())
-        .collect();
-    let mut module_symbols: HashMap<&str, HashSet<String>> = HashMap::new();
-    for entry in entries {
-        let symbols = module_symbols
-            .entry(entry.module_path.as_str())
-            .or_default();
-        collect_scope_symbol_names(&entry.scopes, symbols);
-    }
-    let mut refs = Vec::new();
-    for entry in entries {
-        for &(line, ref raw_path) in &entry.references {
-            let dots = raw_path
-                .chars()
-                .take_while(|&character| character == '.')
-                .count();
-            let Some(normalized) = resolve_relative_python_module(
-                &entry.module_path,
-                entry.is_package_init,
-                u32::try_from(dots).unwrap_or(u32::MAX),
-                Some(&raw_path[dots..]),
-            ) else {
-                continue;
-            };
-            if let Some(target) =
-                index.resolve_python_module_target(&normalized, &known_modules, &module_symbols)
-                && target.module != entry.module_path
-            {
-                refs.push(CrossModuleRefFact {
-                    source_module: entry.module_path.clone(),
-                    source_symbol: enclosing_scope_symbol(&entry.scopes, line),
-                    target_module: target.module,
-                    target_symbol: target.symbol,
-                    line,
-                });
-            }
-        }
-    }
-    refs.sort();
-    refs.dedup();
-    refs
-}
-
-fn python_component_name(module_path: &str, fallback_title: &str) -> String {
-    module_path
-        .split('.')
-        .next()
-        .filter(|segment| !segment.is_empty() && *segment != INIT_STEM)
-        .unwrap_or(fallback_title)
-        .to_owned()
-}
-
-fn merge_discovered_python_subpackage_roots(
-    files: &[ProjectSourceFile],
-    source: &dyn FileSource,
-    index: &mut ProjectIndex<'_>,
-) {
-    if index.project_config().has_configured_source_roots() {
-        return;
-    }
-    let project_root = index.layout().project_root.clone();
-    let mut visited_directories = HashSet::new();
-    let mut inferred_roots = Vec::new();
-    for file in files {
-        if file.lang != Language::Python {
-            continue;
-        }
-        let mut cursor = file.full_path.parent();
-        while let Some(directory) = cursor {
-            if !directory.starts_with(&project_root)
-                || directory == project_root
-                || !visited_directories.insert(directory.to_path_buf())
-            {
-                break;
-            }
-            if let Some(root) = index.layout().infer_package_source_root(directory, source) {
-                inferred_roots.push(root);
-            }
-            cursor = directory.parent();
-        }
-    }
-    if !inferred_roots.is_empty() {
-        index.merge_python_source_roots(&inferred_roots);
-    }
-}
-
 fn determine_graph_scope(
     paths: &[PathBuf],
     source: &dyn FileSource,
@@ -547,16 +170,7 @@ fn determine_graph_scope(
         .filter(|path| source.is_dir(path))
         .map(|path| layout.resolve_query_path(path))
         .collect();
-    let covers_project_or_rust_root = resolved_dirs.iter().any(|resolved_dir| {
-        *resolved_dir == layout.project_root || *resolved_dir == layout.rust_source_root
-    });
-    let covers_python_source_roots = !layout.python_source_roots.is_empty()
-        && layout.python_source_roots.iter().all(|python_root| {
-            resolved_dirs
-                .iter()
-                .any(|resolved_dir| python_root.starts_with(resolved_dir))
-        });
-    if covers_project_or_rust_root || covers_python_source_roots {
+    if layout.covers_source_roots(&resolved_dirs) {
         ProjectGraphScope::FullProject
     } else {
         ProjectGraphScope::Subset
@@ -592,10 +206,6 @@ fn collect_directory_source_files(
 ) {
     let resolved_dir = layout.resolve_query_path(dir);
     let allow_test_files = config.is_test_directory(&resolved_dir);
-    let restrict_rust_to_source_root = resolved_dir == layout.project_root
-        && layout.rust_source_root != layout.project_root
-        && source.is_file(&layout.project_root.join(CARGO_TOML_NAME));
-
     let Ok(walked_files) = source.walk_files(dir) else {
         return;
     };
@@ -607,10 +217,7 @@ fn collect_directory_source_files(
         if !allow_test_files && config.is_test_path(&full_path) {
             continue;
         }
-        if restrict_rust_to_source_root
-            && lang == Language::Rust
-            && !full_path.starts_with(&layout.rust_source_root)
-        {
+        if layout.is_outside_primary_source_root(&resolved_dir, &full_path, lang) {
             continue;
         }
         let Ok(file_source) = source.read_to_string(&entry_path) else {
@@ -633,11 +240,13 @@ fn collect_directory_source_files(
 
 #[cfg(test)]
 mod tests {
-    use super::super::foundation::{ArchitectureConfig, ComponentFact, MemoryFileSource};
     use super::*;
+    use crate::code_lint::project::foundation::{
+        ArchitectureConfig, ComponentFact, CrossModuleRefFact, MemoryFileSource,
+    };
 
     #[test]
-    fn rust_project_facts_resolve_components_reexports_and_skip_pure_routers() {
+    fn project_facts_resolve_components_reexports_and_skip_pure_routers() {
         let files = [
             (
                 "src/lib.rs",
@@ -733,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn python_project_facts_resolve_package_and_relative_imports() {
+    fn project_facts_resolve_package_and_relative_imports() {
         let files = [
             (
                 "pkg/__init__.py",
@@ -776,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_cross_module_refs_attribute_method_sources_and_associated_fn_targets() {
+    fn cross_module_refs_attribute_method_sources_and_associated_fn_targets() {
         let files = [
             (
                 "src/core.rs",
@@ -822,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn python_project_facts_honor_declared_toml_architecture_and_non_transitive_mode() {
+    fn project_facts_honor_declared_toml_architecture_and_non_transitive_mode() {
         let files = [
             ("pkg/__init__.py", "from .core import low\n"),
             ("pkg/core.py", "def low() -> int:\n    return 1\n"),
@@ -901,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn python_project_facts_follow_reexports_and_reexported_submodules_via_project_index() {
+    fn project_facts_follow_reexports_and_reexported_submodules_via_project_index() {
         let files = [
             (
                 "pkg/__init__.py",
@@ -1017,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_project_facts_normalize_self_crate_paths_from_cargo_toml() {
+    fn project_facts_normalize_self_crate_paths_from_cargo_toml() {
         let files = [
             (
                 "Cargo.toml",
@@ -1055,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn python_project_facts_honor_source_roots_and_keep_distinct_out_of_root_scripts() {
+    fn project_facts_honor_source_roots_and_keep_distinct_out_of_root_scripts() {
         let files = [
             (
                 ".omnicoach.toml",
@@ -1168,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn discover_project_sources_merges_nested_python_subpackage_roots() {
+    fn discover_project_sources_merges_nested_subpackage_roots() {
         let files = [
             (".omnicoach.toml", ""),
             (
@@ -1257,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn python_project_facts_skip_pure_package_routers_and_out_of_root_scripts_under_architecture() {
+    fn project_facts_skip_pure_package_routers_and_out_of_root_scripts_under_architecture() {
         let files = [
             (
                 "pyproject.toml",
@@ -1342,6 +951,113 @@ mod tests {
                     line: 4,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn collect_rust_project_facts_preseeds_index_without_rereading_files() {
+        struct CountingFileSource {
+            inner: MemoryFileSource,
+            reads: std::sync::Mutex<std::collections::HashMap<PathBuf, usize>>,
+        }
+
+        impl FileSource for CountingFileSource {
+            fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
+                let result = self.inner.read_to_string(path);
+                if result.is_ok() {
+                    *self
+                        .reads
+                        .lock()
+                        .unwrap()
+                        .entry(path.to_path_buf())
+                        .or_insert(0) += 1;
+                }
+                result
+            }
+
+            fn is_file(&self, path: &Path) -> bool {
+                self.inner.is_file(path)
+            }
+
+            fn is_dir(&self, path: &Path) -> bool {
+                self.inner.is_dir(path)
+            }
+
+            fn read_dir(&self, directory: &Path) -> std::io::Result<Vec<PathBuf>> {
+                self.inner.read_dir(directory)
+            }
+
+            fn current_dir(&self) -> Option<PathBuf> {
+                self.inner.current_dir()
+            }
+        }
+
+        let root = PathBuf::from(MemoryFileSource::VIRTUAL_ROOT);
+        let source = CountingFileSource {
+            inner: MemoryFileSource::from_relative_files(
+                &root,
+                &[
+                    ("Cargo.toml", "[package]\nname = \"demo\"\n"),
+                    (
+                        "src/lib.rs",
+                        indoc::indoc! {r"
+                            mod architecture;
+                            mod core;
+                            mod runner;
+                        "},
+                    ),
+                    (
+                        "src/architecture.rs",
+                        indoc::indoc! {r"
+                            architecture_component!(Architecture);
+                            define_architecture! {
+                                Architecture => [],
+                                Core => [],
+                                Runner => [Core],
+                            }
+                        "},
+                    ),
+                    (
+                        "src/core.rs",
+                        "architecture_component!(Core);\npub fn helper() -> usize { 1 }\n",
+                    ),
+                    (
+                        "src/runner.rs",
+                        indoc::indoc! {r"
+                            architecture_component!(Runner);
+                            use crate::core::helper;
+                            pub fn run() -> usize { helper() }
+                        "},
+                    ),
+                ],
+            ),
+            reads: std::sync::Mutex::new(std::collections::HashMap::new()),
+        };
+
+        let discovered = discover_project_sources_in(
+            std::slice::from_ref(&root),
+            &source,
+            &ProjectConfig::default(),
+        )
+        .expect("discover virtual project sources");
+        let facts = discovered
+            .collect_project_facts("demo", Language::Rust)
+            .expect("collect rust project facts");
+        let rs_reads: Vec<(PathBuf, usize)> = source
+            .reads
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| {
+                path.extension().and_then(|extension| extension.to_str()) == Some("rs")
+            })
+            .map(|(path, &count)| (path.clone(), count))
+            .collect();
+
+        assert_eq!(facts.components.len(), 3);
+        assert!(
+            rs_reads.iter().all(|(_, count)| *count == 1),
+            "expected every `.rs` file to be read once via RustIndex pre-seeding, got: {rs_reads:?}"
         );
     }
 
