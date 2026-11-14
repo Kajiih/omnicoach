@@ -4,39 +4,34 @@
 architecture_component!(CodeLintProject);
 
 mod architecture;
-mod config;
 mod context;
 mod facts;
+mod foundation;
 mod index;
 mod layout;
 mod paths;
-mod source;
 
-pub use self::architecture::{
-    ArchitectureError, ArchitectureSpec, ComponentSpec, CrossComponentRelativePathFinding,
-    ExportPattern, FileArchitectureFindings, InheritedComponent,
-    InvalidArchitectureComponentFinding, InvalidArchitectureComponentKind,
-    PrivateComponentImportFinding, ReexportedPublicItemFinding, SiblingModuleDependencyFinding,
-    UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding,
-    UnownedExternalDependencyFinding, resolve_inherited_component_with_root,
-};
-pub(crate) use self::config::compile_glob;
-pub use self::config::{
-    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME,
-    ContextConfig, ProjectConfig, ProjectTomlError, is_rooted_path, lexical_normalize,
-    resolve_against_cwd,
-};
-pub use self::context::{DocumentedOverrideMethod, ProjectContext};
 #[cfg(test)]
+pub(in crate::code_lint) use self::facts::discover_project_sources_in;
 pub(in crate::code_lint) use self::facts::{
-    ComponentFact, CrossModuleRefFact, discover_project_sources_in,
+    DiscoveredProjectSources, derive_project_title, discover_project_sources,
+    resolve_effective_paths,
 };
-pub(in crate::code_lint) use self::facts::{
-    DiscoveredProjectSources, ModuleFact, ProjectFacts, ProjectSourceFile, derive_project_title,
-    discover_project_sources, resolve_effective_paths,
+pub(crate) use self::foundation::{ArchitectureConfig, compile_glob};
+#[cfg(test)]
+pub(in crate::code_lint) use self::foundation::{ComponentFact, CrossModuleRefFact};
+pub(in crate::code_lint) use self::foundation::{
+    InvalidArchitectureComponentKind, ModuleFact, ProjectFacts, ProjectSourceFile,
+};
+
+pub use self::architecture::{InheritedComponent, resolve_inherited_component_with_root};
+pub use self::context::{DocumentedOverrideMethod, ProjectContext};
+pub use self::foundation::{
+    ArchitectureConfigError, ArchitectureError, ArchitectureSpec, CONFIG_FILE_NAME, ComponentSpec,
+    ContextConfig, DiskFileSource, FileSource, MemoryFileSource, OverlayFileSource, ProjectConfig,
+    ProjectTomlError, is_rooted_path, lexical_normalize, resolve_against_cwd,
 };
 pub use self::index::{
     ImportedProtocolSummary, ProjectIndex, PythonClassId, ResolvedClassAncestors,
 };
 pub use self::layout::ProjectLayout;
-pub use self::source::{DiskFileSource, FileSource, MemoryFileSource, OverlayFileSource};

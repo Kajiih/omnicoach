@@ -1,47 +1,30 @@
 //! Multi-file project abstraction facts, source discovery, and cross-module symbol resolution (`CodeLintProject`).
 
-use super::architecture::{ArchitectureError, ArchitectureSpec};
-use super::config::{ProjectConfig, resolve_against_cwd};
+use super::architecture::{resolve_component_of_module, routes_to_python_component};
+use super::foundation::{
+    ArchitectureError, CrossModuleRefFact, DiskFileSource, FileSource, ModuleFact, ProjectConfig,
+    ProjectFacts, ProjectGraphScope, ProjectSourceFile, normalize_relative_path,
+    resolve_against_cwd, resolve_unique_module_paths,
+};
 use super::index::ProjectIndex;
 use super::layout::ProjectLayout;
 use super::paths::{
-    // TODO: Is this the right abstraction to contain language specific components?
-    INIT_STEM,
-    disambiguated_rust_module_path,
-    is_python_package_init,
-    is_rust_crate_root,
-    normalize_relative_path,
-    python_dotted_path,
-    resolve_relative_python_module,
-    resolve_rust_reference_path,
+    INIT_STEM, disambiguated_rust_module_path, is_python_package_init, is_rust_crate_root,
+    python_dotted_path, resolve_relative_python_module, resolve_rust_reference_path,
     rust_module_path,
 };
-use super::source::{DiskFileSource, FileSource};
 use crate::code_lint::ast::python::collect_path_references;
 use crate::code_lint::ast::rust::{RustFileSummary, summarize_rust_file};
 use crate::code_lint::ast::{
-    DeclarationScopeKind, IntraFileReference, ParsedFile, ScopeFacts,
-    collect_intra_file_references, collect_scope_facts, enclosing_scope_symbol,
+    IntraFileReference, ParsedFile, ScopeFacts, collect_intra_file_references, collect_scope_facts,
+    collect_scope_symbol_names, enclosing_scope_symbol,
 };
 use crate::diagnostic::Language;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const CARGO_TOML_NAME: &str = "Cargo.toml";
-
-/// A project source file discovered via [`FileSource`], paired with its full query path,
-/// normalized display path, and UTF-8 source text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct ProjectSourceFile {
-    full_path: PathBuf,
-    /// Forward-slash-normalized display path relative to the project root.
-    pub(in crate::code_lint) relative_path: String,
-    /// Detected source language (`Rust` or `Python`).
-    pub(in crate::code_lint) lang: Language,
-    /// Full UTF-8 source text.
-    pub(in crate::code_lint) source: String,
-}
 
 /// Discovered source files paired with the shared [`ProjectIndex`] governing their repository.
 pub(in crate::code_lint) struct DiscoveredProjectSources<'s> {
@@ -49,69 +32,6 @@ pub(in crate::code_lint) struct DiscoveredProjectSources<'s> {
     /// Deterministic, deduplicated source files under the requested paths.
     pub(in crate::code_lint) files: Vec<ProjectSourceFile>,
     scope: ProjectGraphScope,
-}
-
-/// Multi-file project facts across a Rust crate or Python package.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct ProjectFacts {
-    /// Human-readable project or package name.
-    pub(in crate::code_lint) title: String,
-    /// True if architectural components and their allowed dependencies are explicitly declared
-    /// (for example via `define_architecture!` + `architecture_component!` or `.omnicoach.toml`).
-    pub(in crate::code_lint) has_declared_architecture: bool,
-    /// Architectural components (declared or inferred from top-level directory / package structure).
-    pub(in crate::code_lint) components: Vec<ComponentFact>,
-    /// Parsed modules in deterministic path order.
-    pub(in crate::code_lint) modules: Vec<ModuleFact>,
-    /// Resolved cross-module reference edges (`source_module -> target_module`).
-    pub(in crate::code_lint) cross_module_refs: Vec<CrossModuleRefFact>,
-}
-
-/// An architectural component, its direct `depends_on` list (when declared), and its allowed
-/// dependency targets within this graph.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct ComponentFact {
-    /// Component identifier (e.g. `"CodeLintAst"` or `"zoneinfo"`).
-    pub(in crate::code_lint) name: String,
-    /// Directly declared dependency component names present in this graph (`Some(...)` when this
-    /// component is explicitly declared in architecture, `None` when inferred or unmapped).
-    pub(in crate::code_lint) declared_dependencies: Option<Vec<String>>,
-    /// Active component names in this graph to which [`ArchitectureSpec::allows_dependency`]
-    /// permits references from `name` (honoring `transitive-dependencies` and elided subset
-    /// intermediates).
-    pub(in crate::code_lint) allowed_dependencies: Vec<String>,
-}
-
-/// One module file within [`ProjectFacts`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::code_lint) struct ModuleFact {
-    /// Canonical module path (`"code_lint::ast"` or `"zoneinfo._tzpath"`).
-    pub(in crate::code_lint) module_path: String,
-    /// Relative source file path (`"src/code_lint/ast.rs"`).
-    pub(in crate::code_lint) path: String,
-    /// Owning component name.
-    pub(in crate::code_lint) component: String,
-    /// Per-scope facts inside this module (`scopes[0]` is the module scope).
-    pub(in crate::code_lint) scopes: Vec<ScopeFacts>,
-    /// Intra-file references between module declarations and methods in this module.
-    pub(in crate::code_lint) intra_file_refs: Vec<IntraFileReference>,
-}
-
-/// A resolved reference from one module (and optional top-level item) to another module in the
-/// same project.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::code_lint) struct CrossModuleRefFact {
-    /// Referring module path.
-    pub(in crate::code_lint) source_module: String,
-    /// Referring top-level symbol in `source_module`, when the reference lies inside a top-level
-    /// declaration.
-    pub(in crate::code_lint) source_symbol: Option<String>,
-    /// Target module path.
-    pub(in crate::code_lint) target_module: String,
-    /// Referenced top-level symbol in `target_module`, when resolved to a specific item.
-    pub(in crate::code_lint) target_symbol: Option<String>,
-    /// 1-based line number of the reference in `source_module`.
-    pub(in crate::code_lint) line: usize,
 }
 
 impl DiscoveredProjectSources<'_> {
@@ -245,17 +165,6 @@ fn derive_project_title_with_cwd(paths: &[PathBuf], current_dir: Option<&Path>) 
     "project".to_owned()
 }
 
-/// Whether project-fact extraction covers a whole project/source root or a narrower file/directory subset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProjectGraphScope {
-    /// Full project or source root: include all declared components from [`ArchitectureSpec`],
-    /// preserving empty components and `Absent` Reflexion edges.
-    FullProject,
-    /// Subdirectory or explicit file subset: resolve each module's true declared component from
-    /// [`ArchitectureSpec`] while retaining only components that own at least one collected module.
-    Subset,
-}
-
 fn collect_rust_project_facts(
     title: &str,
     files: &[ProjectSourceFile],
@@ -277,11 +186,11 @@ fn collect_rust_project_facts(
     if let Some(error) = index.architecture_error() {
         return Err(error.clone());
     }
-    let mut cross_module_refs = resolve_rust_cross_module_refs(&entries, index);
+    let cross_module_refs = resolve_rust_cross_module_refs(&entries, index);
     let mut modules = Vec::with_capacity(entries.len());
     for entry in entries {
         let declared_component = spec.and_then(|resolved| {
-            resolved.resolve_component_of_module(&entry.module_path, Language::Rust)
+            resolve_component_of_module(resolved, &entry.module_path, Language::Rust)
         });
         if declared_component.is_none()
             && entry.summary.non_namespace_items.is_empty()
@@ -309,22 +218,13 @@ fn collect_rust_project_facts(
         });
     }
 
-    let retained_module_paths: HashSet<&str> = modules
-        .iter()
-        .map(|module| module.module_path.as_str())
-        .collect();
-    cross_module_refs.retain(|reference| {
-        retained_module_paths.contains(reference.source_module.as_str())
-            && retained_module_paths.contains(reference.target_module.as_str())
-    });
-    let finalized = finalize_components(spec, &modules, scope);
-    Ok(ProjectFacts {
-        title: title.to_owned(),
-        has_declared_architecture: finalized.has_declared_architecture,
-        components: finalized.components,
+    Ok(ProjectFacts::build(
+        title,
+        spec,
         modules,
         cross_module_refs,
-    })
+        scope,
+    ))
 }
 
 struct RustModuleEntry {
@@ -443,9 +343,7 @@ fn collect_python_project_facts(
                             &file.relative_path,
                             is_python_package_init(&file.full_path),
                         );
-                        resolved
-                            .resolve_component_of_module(&fallback, Language::Python)
-                            .is_none()
+                        resolve_component_of_module(resolved, &fallback, Language::Python).is_none()
                     }))
         })
         .collect();
@@ -455,17 +353,18 @@ fn collect_python_project_facts(
         .zip(module_paths)
         .map(|(file, module_path)| parse_python_module(file, module_path, index))
         .collect();
-    let mut cross_module_refs = resolve_python_cross_module_refs(&entries, index);
+    let cross_module_refs = resolve_python_cross_module_refs(&entries, index);
     let mut modules = Vec::with_capacity(entries.len());
 
     for entry in entries {
         let declared_component = spec.and_then(|resolved| {
-            resolved.resolve_component_of_module(&entry.module_path, Language::Python)
+            resolve_component_of_module(resolved, &entry.module_path, Language::Python)
         });
         let is_unmapped_pure_router = declared_component.is_none()
             && entry.is_package_init
             && !entry.has_non_routing_items
-            && spec.is_some_and(|resolved| resolved.routes_to_python_component(&entry.module_path));
+            && spec
+                .is_some_and(|resolved| routes_to_python_component(resolved, &entry.module_path));
         if !is_unmapped_pure_router {
             let component = declared_component.map_or_else(
                 || python_component_name(&entry.module_path, title),
@@ -481,22 +380,13 @@ fn collect_python_project_facts(
         }
     }
 
-    let retained_module_paths: HashSet<&str> = modules
-        .iter()
-        .map(|module| module.module_path.as_str())
-        .collect();
-    cross_module_refs.retain(|reference| {
-        retained_module_paths.contains(reference.source_module.as_str())
-            && retained_module_paths.contains(reference.target_module.as_str())
-    });
-    let finalized = finalize_components(spec, &modules, scope);
-    Ok(ProjectFacts {
-        title: title.to_owned(),
-        has_declared_architecture: finalized.has_declared_architecture,
-        components: finalized.components,
+    Ok(ProjectFacts::build(
+        title,
+        spec,
         modules,
         cross_module_refs,
-    })
+        scope,
+    ))
 }
 
 struct PythonModuleEntry {
@@ -504,7 +394,7 @@ struct PythonModuleEntry {
     module_path: String,
     is_package_init: bool,
     has_non_routing_items: bool,
-    references: Vec<RawSymbolReference>,
+    references: Vec<(usize, String)>,
     scopes: Vec<ScopeFacts>,
     intra_file_refs: Vec<IntraFileReference>,
 }
@@ -542,14 +432,7 @@ fn parse_python_module(
     let has_non_routing_items = !summary.non_routing_items.is_empty();
     let scopes = collect_scope_facts(&parsed);
     let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
-    let references = collect_path_references(&parsed)
-        .into_iter()
-        .map(|(line, raw_path)| RawSymbolReference {
-            line,
-            source_symbol: enclosing_scope_symbol(&scopes, line),
-            raw_path,
-        })
-        .collect();
+    let references = collect_path_references(&parsed);
     PythonModuleEntry {
         path: file.relative_path.clone(),
         module_path,
@@ -578,9 +461,8 @@ fn resolve_python_cross_module_refs(
     }
     let mut refs = Vec::new();
     for entry in entries {
-        for reference in &entry.references {
-            let dots = reference
-                .raw_path
+        for &(line, ref raw_path) in &entry.references {
+            let dots = raw_path
                 .chars()
                 .take_while(|&character| character == '.')
                 .count();
@@ -588,7 +470,7 @@ fn resolve_python_cross_module_refs(
                 &entry.module_path,
                 entry.is_package_init,
                 u32::try_from(dots).unwrap_or(u32::MAX),
-                Some(&reference.raw_path[dots..]),
+                Some(&raw_path[dots..]),
             ) else {
                 continue;
             };
@@ -598,10 +480,10 @@ fn resolve_python_cross_module_refs(
             {
                 refs.push(CrossModuleRefFact {
                     source_module: entry.module_path.clone(),
-                    source_symbol: reference.source_symbol.clone(),
+                    source_symbol: enclosing_scope_symbol(&entry.scopes, line),
                     target_module: target.module,
                     target_symbol: target.symbol,
-                    line: reference.line,
+                    line,
                 });
             }
         }
@@ -620,126 +502,12 @@ fn python_component_name(module_path: &str, fallback_title: &str) -> String {
         .to_owned()
 }
 
-struct RawSymbolReference {
-    line: usize,
-    source_symbol: Option<String>,
-    raw_path: String,
-}
-
-fn resolve_unique_module_paths(
-    files: &[&ProjectSourceFile],
-    initial: impl Fn(&ProjectSourceFile) -> String,
-    disambiguate: impl Fn(&ProjectSourceFile) -> String,
-) -> Vec<String> {
-    let mut paths: Vec<String> = files.iter().copied().map(&initial).collect();
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for module_path in &paths {
-        *counts.entry(module_path.clone()).or_insert(0) += 1;
-    }
-    for (module_path, file) in paths.iter_mut().zip(files) {
-        if counts.get(module_path).copied().unwrap_or(0) > 1 {
-            *module_path = disambiguate(file);
-        }
-    }
-    paths
-}
-
-struct FinalizedComponents {
-    components: Vec<ComponentFact>,
-    has_declared_architecture: bool,
-}
-
-fn finalize_components(
-    spec: Option<&ArchitectureSpec>,
-    modules: &[ModuleFact],
-    scope: ProjectGraphScope,
-) -> FinalizedComponents {
-    let mut components = Vec::new();
-    let mut seen_components = BTreeSet::new();
-
-    if let Some(resolved) = spec.filter(|resolved| !resolved.components.is_empty()) {
-        let included_declared: HashSet<&str> = match scope {
-            ProjectGraphScope::FullProject => resolved
-                .components
-                .iter()
-                .map(|component| component.name.as_str())
-                .collect(),
-            ProjectGraphScope::Subset => modules
-                .iter()
-                .map(|module| module.component.as_str())
-                .collect(),
-        };
-        for component_spec in &resolved.components {
-            if !included_declared.contains(component_spec.name.as_str()) {
-                continue;
-            }
-            let declared_dependencies = component_spec
-                .depends_on
-                .iter()
-                .filter(|dependency| included_declared.contains(dependency.as_str()))
-                .cloned()
-                .collect();
-            let allowed_dependencies = resolved
-                .components
-                .iter()
-                .map(|candidate| candidate.name.as_str())
-                .filter(|&candidate| {
-                    candidate != component_spec.name
-                        && included_declared.contains(candidate)
-                        && resolved.allows_dependency(&component_spec.name, candidate)
-                })
-                .map(str::to_owned)
-                .collect();
-            seen_components.insert(component_spec.name.clone());
-            components.push(ComponentFact {
-                name: component_spec.name.clone(),
-                declared_dependencies: Some(declared_dependencies),
-                allowed_dependencies,
-            });
-        }
-    }
-
-    let has_declared_architecture = !components.is_empty();
-    for module in modules {
-        if seen_components.insert(module.component.clone()) {
-            components.push(ComponentFact {
-                name: module.component.clone(),
-                declared_dependencies: None,
-                allowed_dependencies: Vec::new(),
-            });
-        }
-    }
-
-    FinalizedComponents {
-        components,
-        has_declared_architecture,
-    }
-}
-
-fn collect_scope_symbol_names(scopes: &[ScopeFacts], out: &mut HashSet<String>) {
-    for scope in scopes {
-        match &scope.scope {
-            DeclarationScopeKind::Module => {
-                for item in &scope.items {
-                    out.insert(item.name.clone());
-                }
-            }
-            DeclarationScopeKind::Class { name }
-            | DeclarationScopeKind::Impl { type_name: name } => {
-                for item in &scope.items {
-                    out.insert(format!("{name}::{}", item.name));
-                }
-            }
-        }
-    }
-}
-
 fn merge_discovered_python_subpackage_roots(
     files: &[ProjectSourceFile],
     source: &dyn FileSource,
     index: &mut ProjectIndex<'_>,
 ) {
-    if index.project_config().has_configured_python_roots() {
+    if index.project_config().has_configured_source_roots() {
         return;
     }
     let project_root = index.layout().project_root.clone();
@@ -865,8 +633,7 @@ fn collect_directory_source_files(
 
 #[cfg(test)]
 mod tests {
-    use super::super::config::ArchitectureConfig;
-    use super::super::source::MemoryFileSource;
+    use super::super::foundation::{ArchitectureConfig, ComponentFact, MemoryFileSource};
     use super::*;
 
     #[test]

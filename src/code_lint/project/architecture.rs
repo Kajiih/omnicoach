@@ -1,31 +1,26 @@
-//! Language-agnostic architectural component specification (`ArchitectureSpec`) and per-file
-//! conformance evaluators (`CodeLintProject`).
+//! Per-file Rust and Python architectural conformance evaluators (`CodeLintProject`).
 
-use super::config::{
-    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, ProjectTomlError,
-    compile_export_glob, validate_component_dag,
+use super::foundation::{
+    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureError, ArchitectureSpec,
+    ComponentSpec, CrossComponentRelativePathFinding, ExportPattern, FileArchitectureFindings,
+    FileSource, InvalidArchitectureComponentFinding, InvalidArchitectureComponentKind,
+    PrivateComponentImportFinding, ROOT_MODULE_TAG, ReexportedPublicItemFinding,
+    SiblingModuleDependencyFinding, UndeclaredComponentDependencyFinding,
+    UnmappedArchitectureModuleFinding, build_architecture_spec, deduplicate_findings,
 };
 use super::layout::ProjectLayout;
 use super::paths::{
-    // TODO: Is this the right abstraction to contain language specific components?
-    INIT_STEM,
-    PathOrigin,
-    ROOT_MODULE_TAG,
-    is_in_python_module_subtree,
-    is_in_rust_module_subtree,
-    is_python_package_init,
-    is_rust_crate_root,
-    resolve_relative_python_package,
+    INIT_STEM, PathOrigin, is_in_python_module_subtree, is_in_rust_module_subtree,
+    is_python_package_init, is_rust_crate_root, resolve_relative_python_package,
     resolve_rust_reference_path,
 };
-use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     PythonImportReference, collect_python_import_references, summarize_python_file,
 };
 use crate::code_lint::ast::rust::{DefinedComponentEntry, RustFileSummary, summarize_rust_file};
 use crate::diagnostic::{Language, SourceSpan};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -36,293 +31,6 @@ pub(super) const RUST_ARCHITECTURE_MODULE: &str = "architecture";
 const RUST_MODULE_SEPARATOR: &str = "::";
 const PYTHON_MODULE_SEPARATOR: &str = ".";
 const PREFIX_MATCH_RANK: usize = 3;
-
-/// Errors raised when loading or validating a project's [`ArchitectureSpec`].
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ArchitectureError {
-    /// Both `.omnicoach.toml` `[[architecture.components]]` and Rust `define_architecture!` exist.
-    #[error(
-        "conflicting architecture declarations: both `.omnicoach.toml` `[[architecture.components]]` and Rust `define_architecture!` are present"
-    )]
-    ConflictingDeclarations,
-    /// Invalid `[architecture]` configuration or synthesized component DAG.
-    #[error(transparent)]
-    InvalidConfig(#[from] ArchitectureConfigError),
-    /// Invalid TOML syntax or unknown keys in `.omnicoach.toml`.
-    #[error(transparent)]
-    InvalidProjectToml(#[from] toml::de::Error),
-}
-
-impl From<ProjectTomlError> for ArchitectureError {
-    fn from(error: ProjectTomlError) -> Self {
-        match error {
-            ProjectTomlError::Toml(toml_error) => Self::InvalidProjectToml(toml_error),
-            ProjectTomlError::Architecture(architecture_error) => {
-                Self::InvalidConfig(architecture_error)
-            }
-        }
-    }
-}
-
-/// Validated, language-agnostic architectural specification for a project.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArchitectureSpec {
-    /// Whether unmapped production files are flagged.
-    pub require_component_coverage: bool,
-    /// Whether Python imports inside `if TYPE_CHECKING:` blocks are exempt.
-    pub ignore_type_checking_imports: bool,
-    /// True when component roots were synthesized from `define_architecture!` and
-    /// `architecture_component!(...)` module headers rather than `.omnicoach.toml`.
-    pub from_rust_macros: bool,
-    /// Topologically ordered components.
-    pub components: Vec<ComponentSpec>,
-    external_package_owners: BTreeMap<String, ExternalPackageOwner>,
-    component_roots: BTreeMap<String, String>,
-    allowed_dependencies: HashMap<String, HashSet<String>>,
-    component_by_name: HashMap<String, usize>,
-    rust_sibling_rules: Vec<SiblingIsolationRule>,
-}
-
-/// Validated component entry in [`ArchitectureSpec`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentSpec {
-    /// Component identifier.
-    pub name: String,
-    /// Canonical root module paths.
-    pub roots: Vec<String>,
-    /// Direct allowed component names.
-    pub depends_on: Vec<String>,
-    /// Whether sibling subtrees inside this component are isolated from each other.
-    pub isolate_children: bool,
-    /// External third-party crates or packages encapsulated by this component.
-    pub owns_external: Vec<String>,
-    /// Optional public interface export rules per root module (`None` = unrestricted submodules).
-    pub public_exports: Option<Vec<ExportPattern>>,
-}
-
-/// Export allowlist glob pattern on a component root.
-#[derive(Debug, Clone)]
-pub struct ExportPattern {
-    matcher: globset::GlobMatcher,
-}
-
-impl PartialEq for ExportPattern {
-    fn eq(&self, other: &Self) -> bool {
-        self.matcher.glob().glob() == other.matcher.glob().glob()
-    }
-}
-
-impl Eq for ExportPattern {}
-
-impl ExportPattern {
-    const fn from_matcher(matcher: globset::GlobMatcher) -> Self {
-        Self { matcher }
-    }
-
-    #[must_use]
-    fn matches(&self, candidate: &str) -> bool {
-        self.matcher.is_match(candidate)
-    }
-}
-
-impl ArchitectureSpec {
-    /// Canonical root module paths mapped to their owning component name.
-    #[must_use]
-    pub const fn component_roots(&self) -> &BTreeMap<String, String> {
-        &self.component_roots
-    }
-
-    /// Resolves the owning component name of `module_path` for `lang`, if mapped by this spec.
-    #[must_use]
-    pub fn resolve_component_of_module(&self, module_path: &str, lang: Language) -> Option<&str> {
-        match lang {
-            Language::Rust => {
-                resolve_inherited_component_with_root(module_path, &self.component_roots)
-                    .map(|inherited| inherited.component.as_str())
-            }
-            Language::Python => {
-                resolve_python_component(module_path, self).map(|matched| matched.component_name)
-            }
-        }
-    }
-
-    /// Returns true if `from_component` is permitted to depend on `target_component` under this
-    /// specification (honoring `transitive_dependencies`).
-    #[must_use]
-    pub fn allows_dependency(&self, from_component: &str, target_component: &str) -> bool {
-        self.allowed_dependencies
-            .get(from_component)
-            .is_some_and(|allowed| allowed.contains(target_component))
-    }
-
-    /// Returns true if `module_path` is a root initializer (`"<root>"` or `"__init__"`) or a
-    /// package ancestor of any declared Python component root.
-    // TODO: Is it normal to have python specific logic in this module/component?
-    #[must_use]
-    pub(super) fn routes_to_python_component(&self, module_path: &str) -> bool {
-        if self.from_rust_macros || self.components.is_empty() {
-            return false;
-        }
-        module_path == ROOT_MODULE_TAG
-            || module_path == INIT_STEM
-            || self.components.iter().any(|component| {
-                component
-                    .roots
-                    .iter()
-                    .any(|root| is_in_python_module_subtree(root, module_path))
-            })
-    }
-
-    fn component_spec(&self, name: &str) -> Option<&ComponentSpec> {
-        self.component_by_name
-            .get(name)
-            .and_then(|&index| self.components.get(index))
-    }
-}
-
-/// Violation finding for `undeclared-component-dependency`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UndeclaredComponentDependencyFinding {
-    /// AST byte span of the offending import or path reference.
-    pub span: SourceSpan,
-    /// Enclosing component name.
-    pub component: String,
-    /// Referenced target component name.
-    pub dependency: String,
-}
-
-/// Violation finding for `sibling-module-dependency`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SiblingModuleDependencyFinding {
-    /// AST byte span of the offending import or path reference.
-    pub span: SourceSpan,
-    /// Enclosing module path.
-    pub module: String,
-    /// Forbidden sibling module subtree prefix.
-    pub dependency: String,
-    /// Enclosing component name.
-    pub component: String,
-}
-
-/// Violation finding for `cross-component-relative-path`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CrossComponentRelativePathFinding {
-    /// AST byte span of the offending relative import or path reference.
-    pub span: SourceSpan,
-    /// Resolved target module path outside the component root.
-    pub dependency: String,
-    /// Enclosing component name.
-    pub component: String,
-}
-
-/// Violation finding for `unowned-external-dependency`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnownedExternalDependencyFinding {
-    /// AST byte span of the offending external import or path reference.
-    pub span: SourceSpan,
-    /// Enclosing module path.
-    pub module: String,
-    /// External crate or package name.
-    pub dependency: String,
-    /// Permitted owner module prefixes.
-    pub owners: Vec<String>,
-}
-
-/// Violation finding for `private-component-import`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrivateComponentImportFinding {
-    /// AST byte span of the offending import or path reference.
-    pub span: SourceSpan,
-    /// Enclosing component name.
-    pub component: String,
-    /// Imported symbol or submodule name, or `None` for wildcard (`*`) and bare root-module imports.
-    pub name: Option<String>,
-    /// Target component root module path.
-    pub module: String,
-    /// Target component name whose `public-exports` were bypassed.
-    pub dependency: String,
-}
-
-/// Violation finding for `unmapped-architecture-module`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnmappedArchitectureModuleFinding {
-    /// AST byte span of the offending declaration or module header.
-    pub span: SourceSpan,
-    /// Unmapped item or declaration name.
-    pub name: String,
-    /// Unmapped or impure router module path.
-    pub module: String,
-}
-
-/// Reason an `architecture_component!(...)` macro call in Rust source code has no effect.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InvalidArchitectureComponentKind {
-    /// No `define_architecture!` declaration exists in the crate's `architecture` module.
-    MissingDefineArchitecture,
-    /// `.omnicoach.toml` declares `[[architecture.components]]`, so Rust component macros are inactive.
-    TomlArchitectureActive,
-    /// `architecture_component!` appears inside an inner item instead of at the module root.
-    NotAtModuleRoot,
-    /// A second top-level `architecture_component!` appears in the same module.
-    DuplicateInModule {
-        /// Component name from the first top-level `architecture_component!` in the module.
-        first_component: String,
-    },
-    /// Component identifier is not declared in `define_architecture!`.
-    UnknownComponent,
-    /// An ancestor module in the module tree already declares a component root.
-    NestedUnderComponent {
-        /// Ancestor module path that owns the subtree.
-        ancestor_module: String,
-        /// Component declared on `ancestor_module`.
-        ancestor_component: String,
-    },
-}
-
-/// Violation finding for `invalid-architecture-component`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidArchitectureComponentFinding {
-    /// AST byte span of the ignored `architecture_component!(...)` macro call.
-    pub span: SourceSpan,
-    /// Raw component argument inside `architecture_component!(...)`.
-    pub component: String,
-    /// Enclosing Rust module path.
-    pub module: String,
-    /// Structured reason the declaration has no effect.
-    pub kind: InvalidArchitectureComponentKind,
-}
-
-/// Violation finding for `reexported-public-item`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReexportedPublicItemFinding {
-    /// AST byte span of the offending `pub use` or `pub(...) use` item.
-    pub span: SourceSpan,
-    /// Source text of the re-export item.
-    pub expression: String,
-    /// Enclosing Rust module path.
-    pub module: String,
-}
-
-/// All architectural conformance findings evaluated for a single source file.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct FileArchitectureFindings {
-    /// Findings for `undeclared-component-dependency`.
-    pub undeclared_component_dependencies: Vec<UndeclaredComponentDependencyFinding>,
-    /// Findings for `sibling-module-dependency`.
-    pub sibling_module_dependencies: Vec<SiblingModuleDependencyFinding>,
-    /// Findings for `cross-component-relative-path`.
-    pub cross_component_relative_paths: Vec<CrossComponentRelativePathFinding>,
-    /// Findings for `unowned-external-dependency`.
-    pub unowned_external_dependencies: Vec<UnownedExternalDependencyFinding>,
-    /// Findings for `private-component-import`.
-    pub private_component_imports: Vec<PrivateComponentImportFinding>,
-    /// Findings for `unmapped-architecture-module`.
-    pub unmapped_architecture_modules: Vec<UnmappedArchitectureModuleFinding>,
-    /// Findings for `invalid-architecture-component`.
-    pub invalid_architecture_components: Vec<InvalidArchitectureComponentFinding>,
-    /// Findings for `reexported-public-item`.
-    pub reexported_public_items: Vec<ReexportedPublicItemFinding>,
-}
 
 /// An inherited component and the nearest ancestor module that declared it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -356,6 +64,49 @@ pub fn resolve_inherited_component_with_root<'a, T>(
     }
 }
 
+/// Resolves the owning component name of `module_path` for `lang`, if mapped by `spec`.
+#[must_use]
+pub(super) fn resolve_component_of_module<'a>(
+    spec: &'a ArchitectureSpec,
+    module_path: &str,
+    lang: Language,
+) -> Option<&'a str> {
+    match lang {
+        Language::Rust => {
+            resolve_inherited_component_with_root(module_path, spec.component_roots())
+                .map(|inherited| inherited.component.as_str())
+        }
+        Language::Python => {
+            resolve_python_component(module_path, spec).map(|matched| matched.component_name)
+        }
+    }
+}
+
+/// Returns true if `module_path` is a root initializer (`"<root>"` or `"__init__"`) or a
+/// package ancestor of any declared Python component root.
+#[must_use]
+pub(super) fn routes_to_python_component(spec: &ArchitectureSpec, module_path: &str) -> bool {
+    if spec.from_macro_declarations || spec.components.is_empty() {
+        return false;
+    }
+    module_path == ROOT_MODULE_TAG
+        || module_path == INIT_STEM
+        || spec.components.iter().any(|component| {
+            component
+                .roots
+                .iter()
+                .any(|root| is_in_python_module_subtree(root, module_path))
+        })
+}
+
+/// Precomputed Rust sibling-module isolation rule for a multi-root component or `pub mod` root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SiblingIsolationRule {
+    component_name: String,
+    subject_prefix: String,
+    forbidden_siblings: Vec<String>,
+}
+
 /// Evaluates the component-level architectural conformance rules for `file` (`path`).
 #[must_use]
 pub(super) fn evaluate_file_architecture(
@@ -364,9 +115,12 @@ pub(super) fn evaluate_file_architecture(
     layout: &ProjectLayout,
     source: &dyn FileSource,
     spec: &ArchitectureSpec,
+    rust_sibling_rules: &[SiblingIsolationRule],
 ) -> FileArchitectureFindings {
     match file.lang() {
-        Language::Rust => evaluate_rust_file_architecture(file, path, layout, spec),
+        Language::Rust => {
+            evaluate_rust_file_architecture(file, path, layout, spec, rust_sibling_rules)
+        }
         Language::Python => evaluate_python_file_architecture(file, path, layout, source, spec),
     }
 }
@@ -432,15 +186,69 @@ pub(super) fn resolve_architecture_spec(
             return Err(ArchitectureError::ConflictingDeclarations);
         }
         let synthesized_config = architecture_config_from_rust_headers(rust_headers);
-        return build_architecture_spec(&synthesized_config, true, rust_headers).map(Some);
+        return build_architecture_spec(&synthesized_config, true).map(Some);
     }
 
     match toml_config {
-        Some(config) if has_toml_components => {
-            build_architecture_spec(config, false, rust_headers).map(Some)
-        }
+        Some(config) if has_toml_components => build_architecture_spec(config, false).map(Some),
         _ => Ok(None),
     }
+}
+
+/// Builds Rust sibling-isolation rules across multi-root components and public `pub mod` children
+/// of component roots.
+#[must_use]
+pub(super) fn build_rust_sibling_isolation_rules(
+    rust_headers: &BTreeMap<String, Arc<RustFileSummary>>,
+    components: &[ComponentSpec],
+) -> Vec<SiblingIsolationRule> {
+    let mut rules = Vec::new();
+    for component in components {
+        if !component.isolate_children {
+            continue;
+        }
+        if component.roots.len() > 1 {
+            for root in &component.roots {
+                let forbidden_siblings: Vec<String> = component
+                    .roots
+                    .iter()
+                    .filter(|other| *other != root)
+                    .cloned()
+                    .collect();
+                rules.push(SiblingIsolationRule {
+                    component_name: component.name.clone(),
+                    subject_prefix: root.clone(),
+                    forbidden_siblings,
+                });
+            }
+        }
+        for root in &component.roots {
+            let Some(root_summary) = rust_headers.get(root) else {
+                continue;
+            };
+            let direct_children: Vec<String> = root_summary
+                .external_mods
+                .iter()
+                .filter(|declaration| !declaration.is_private)
+                .map(|declaration| format!("{root}::{}", declaration.name))
+                .collect();
+            if direct_children.len() > 1 {
+                for child in &direct_children {
+                    let forbidden_siblings: Vec<String> = direct_children
+                        .iter()
+                        .filter(|other| *other != child)
+                        .cloned()
+                        .collect();
+                    rules.push(SiblingIsolationRule {
+                        component_name: component.name.clone(),
+                        subject_prefix: child.clone(),
+                        forbidden_siblings,
+                    });
+                }
+            }
+        }
+    }
+    rules
 }
 
 fn evaluate_rust_file_architecture(
@@ -448,6 +256,7 @@ fn evaluate_rust_file_architecture(
     path: &Path,
     layout: &ProjectLayout,
     spec: &ArchitectureSpec,
+    sibling_rules: &[SiblingIsolationRule],
 ) -> FileArchitectureFindings {
     let Some(module_path) = layout.rust_module_of_path(path) else {
         return FileArchitectureFindings::default();
@@ -457,7 +266,7 @@ fn evaluate_rust_file_architecture(
         reexported_public_items: collect_rust_reexported_public_items(&module_path, &summary),
         ..FileArchitectureFindings::default()
     };
-    if spec.components.is_empty() && !spec.from_rust_macros {
+    if spec.components.is_empty() && !spec.from_macro_declarations {
         deduplicate_findings(&mut findings);
         return findings;
     }
@@ -468,7 +277,7 @@ fn evaluate_rust_file_architecture(
         spec,
         &mut findings.invalid_architecture_components,
     );
-    if !(spec.from_rust_macros && has_invalid_macro) {
+    if !(spec.from_macro_declarations && has_invalid_macro) {
         check_rust_file_coverage_and_routers(
             file,
             &module_path,
@@ -478,7 +287,7 @@ fn evaluate_rust_file_architecture(
         );
     }
 
-    let enclosing = resolve_inherited_component_with_root(&module_path, &spec.component_roots);
+    let enclosing = resolve_inherited_component_with_root(&module_path, spec.component_roots());
 
     for reference in &summary.referenced_paths {
         let resolved = resolve_rust_reference_path(
@@ -507,14 +316,13 @@ fn evaluate_rust_file_architecture(
         }
 
         if !resolved.is_crate_local() {
-            check_rust_external_owner(
+            spec.collect_unowned_external_dependencies(
                 &module_path,
                 enclosing
                     .as_ref()
                     .map(|inherited| inherited.component.as_str()),
-                &resolved.canonical_path,
                 reference.span,
-                spec,
+                |package_name| is_in_rust_module_subtree(&resolved.canonical_path, package_name),
                 &mut findings.unowned_external_dependencies,
             );
         }
@@ -522,7 +330,7 @@ fn evaluate_rust_file_architecture(
         if let Some(ref from_component) = enclosing
             && let Some(target_component) = resolve_inherited_component_with_root(
                 &resolved.canonical_path,
-                &spec.component_roots,
+                spec.component_roots(),
             )
             && from_component.component != target_component.component
         {
@@ -542,7 +350,7 @@ fn evaluate_rust_file_architecture(
             &module_path,
             &resolved.canonical_path,
             reference.span,
-            &spec.rust_sibling_rules,
+            sibling_rules,
             &mut findings.sibling_module_dependencies,
         );
     }
@@ -627,34 +435,6 @@ fn collect_rust_reexported_public_items(
     items
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ExternalPackageOwner {
-    components: Vec<String>,
-    display_owners: Vec<String>,
-}
-
-fn check_rust_external_owner(
-    module_path: &str,
-    enclosing_component: Option<&str>,
-    canonical_path: &str,
-    span: SourceSpan,
-    spec: &ArchitectureSpec,
-    out: &mut Vec<UnownedExternalDependencyFinding>,
-) {
-    for (package_name, owner) in &spec.external_package_owners {
-        let is_allowed_owner = enclosing_component
-            .is_some_and(|component| owner.components.iter().any(|allowed| allowed == component));
-        if is_in_rust_module_subtree(canonical_path, package_name) && !is_allowed_owner {
-            out.push(UnownedExternalDependencyFinding {
-                span,
-                module: module_path.to_owned(),
-                dependency: package_name.clone(),
-                owners: owner.display_owners.clone(),
-            });
-        }
-    }
-}
-
 fn check_rust_invalid_component_markers(
     module_path: &str,
     summary: &RustFileSummary,
@@ -664,7 +444,7 @@ fn check_rust_invalid_component_markers(
     if summary.architecture_components.is_empty() {
         return false;
     }
-    if !spec.from_rust_macros {
+    if !spec.from_macro_declarations {
         for (span, component) in &summary.architecture_components {
             out.push(InvalidArchitectureComponentFinding {
                 span: *span,
@@ -679,7 +459,7 @@ fn check_rust_invalid_component_markers(
     let ancestor_root = module_path
         .rsplit_once(RUST_MODULE_SEPARATOR)
         .and_then(|(parent, _)| {
-            resolve_inherited_component_with_root(parent, &spec.component_roots)
+            resolve_inherited_component_with_root(parent, spec.component_roots())
         });
     let mut first_top_level_component: Option<&str> = None;
     let before_len = out.len();
@@ -707,7 +487,7 @@ fn check_rust_invalid_component_markers(
         }
         first_top_level_component = Some(component_name.as_str());
 
-        if !spec.component_by_name.contains_key(component_name.as_str()) {
+        if !spec.contains_component(component_name.as_str()) {
             out.push(InvalidArchitectureComponentFinding {
                 span: *span,
                 component: component_name.clone(),
@@ -741,7 +521,7 @@ fn check_rust_file_coverage_and_routers(
         return;
     }
 
-    let component_roots = &spec.component_roots;
+    let component_roots = spec.component_roots();
     if component_roots.contains_key(module_path)
         || resolve_inherited_component_with_root(module_path, component_roots).is_some()
     {
@@ -749,7 +529,7 @@ fn check_rust_file_coverage_and_routers(
     }
 
     let is_crate_root = is_rust_crate_root(module_path);
-    let header_span = default_file_header_span(file);
+    let header_span = file.first_line_span();
     let before_count = out.len();
     for external_mod in &summary.external_mods {
         let child_prefix = if is_crate_root {
@@ -757,7 +537,8 @@ fn check_rust_file_coverage_and_routers(
         } else {
             format!("{module_path}::{}", external_mod.name)
         };
-        let routes_child = (spec.from_rust_macros && child_prefix == RUST_ARCHITECTURE_MODULE)
+        let routes_child = (spec.from_macro_declarations
+            && child_prefix == RUST_ARCHITECTURE_MODULE)
             || component_roots
                 .keys()
                 .any(|root| is_in_rust_module_subtree(root, &child_prefix));
@@ -802,13 +583,6 @@ fn check_rust_file_coverage_and_routers(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SiblingIsolationRule {
-    component_name: String,
-    subject_prefix: String,
-    forbidden_siblings: Vec<String>,
-}
-
 fn check_rust_sibling_isolation(
     module_path: &str,
     canonical_path: &str,
@@ -840,7 +614,7 @@ fn evaluate_python_file_architecture(
     source: &dyn FileSource,
     spec: &ArchitectureSpec,
 ) -> FileArchitectureFindings {
-    if spec.from_rust_macros {
+    if spec.from_macro_declarations {
         return FileArchitectureFindings::default();
     }
     let Some(module_path) = layout.python_architecture_module_of_path(path) else {
@@ -892,12 +666,13 @@ fn evaluate_python_file_architecture(
 
             if !is_first_party_python_import(&resolved.module_path, layout, source, spec) {
                 if import_ref.level == 0 {
-                    check_python_external_owner(
+                    spec.collect_unowned_external_dependencies(
                         &module_path,
                         enclosing.as_ref().map(|matched| matched.component_name),
-                        &resolved,
                         import_ref.span,
-                        spec,
+                        |package_name| {
+                            is_in_python_module_subtree(&resolved.full_target_path, package_name)
+                        },
                         &mut findings.unowned_external_dependencies,
                     );
                 }
@@ -920,25 +695,6 @@ fn evaluate_python_file_architecture(
 
     deduplicate_findings(&mut findings);
     findings
-}
-
-fn deduplicate_findings(findings: &mut FileArchitectureFindings) {
-    sort_and_dedup(&mut findings.undeclared_component_dependencies, |f| f.span);
-    sort_and_dedup(&mut findings.sibling_module_dependencies, |f| f.span);
-    sort_and_dedup(&mut findings.cross_component_relative_paths, |f| f.span);
-    sort_and_dedup(&mut findings.unowned_external_dependencies, |f| f.span);
-    sort_and_dedup(&mut findings.private_component_imports, |f| f.span);
-    sort_and_dedup(&mut findings.unmapped_architecture_modules, |f| f.span);
-    sort_and_dedup(&mut findings.invalid_architecture_components, |f| f.span);
-    sort_and_dedup(&mut findings.reexported_public_items, |f| f.span);
-}
-
-fn sort_and_dedup<T: PartialEq>(items: &mut Vec<T>, span_of: fn(&T) -> SourceSpan) {
-    items.sort_by_key(|item| {
-        let span = span_of(item);
-        (span.start, span.end)
-    });
-    items.dedup();
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1345,10 +1101,10 @@ fn collect_python_unmapped_findings(
     let py_summary = summarize_python_file(file);
     if py_summary.non_routing_items.is_empty() {
         let is_pure_package_router =
-            is_python_package_init(path) && spec.routes_to_python_component(module_path);
+            is_python_package_init(path) && routes_to_python_component(spec, module_path);
         if !is_pure_package_router {
             out.push(UnmappedArchitectureModuleFinding {
-                span: default_file_header_span(file),
+                span: file.first_line_span(),
                 name: module_path.to_owned(),
                 module: module_path.to_owned(),
             });
@@ -1359,36 +1115,6 @@ fn collect_python_unmapped_findings(
                 span: item.span,
                 name: item.name.clone(),
                 module: module_path.to_owned(),
-            });
-        }
-    }
-}
-
-fn default_file_header_span(file: &ParsedFile) -> SourceSpan {
-    let source = file.source_text();
-    let end = source.lines().next().map_or(0, str::len);
-    SourceSpan::new(0, end)
-}
-
-fn check_python_external_owner(
-    module_path: &str,
-    enclosing_component: Option<&str>,
-    resolved: &ResolvedPythonImport,
-    span: SourceSpan,
-    spec: &ArchitectureSpec,
-    out: &mut Vec<UnownedExternalDependencyFinding>,
-) {
-    for (package_name, owner) in &spec.external_package_owners {
-        let is_allowed_owner = enclosing_component
-            .is_some_and(|component| owner.components.iter().any(|allowed| allowed == component));
-        if is_in_python_module_subtree(&resolved.full_target_path, package_name)
-            && !is_allowed_owner
-        {
-            out.push(UnownedExternalDependencyFinding {
-                span,
-                module: module_path.to_owned(),
-                dependency: package_name.clone(),
-                owners: owner.display_owners.clone(),
             });
         }
     }
@@ -1457,68 +1183,6 @@ fn is_rust_path_allowed_by_exports(
     exports.iter().any(|export| export.matches(relative_symbol))
 }
 
-fn build_architecture_spec(
-    config: &ArchitectureConfig,
-    from_rust_macros: bool,
-    rust_headers: &BTreeMap<String, Arc<RustFileSummary>>,
-) -> Result<ArchitectureSpec, ArchitectureError> {
-    validate_component_dag(&config.components)?;
-    let mut components = Vec::with_capacity(config.components.len());
-    for entry in &config.components {
-        let public_exports = match &entry.public_exports {
-            Some(patterns) => Some(
-                patterns
-                    .iter()
-                    .map(|pattern| {
-                        compile_export_glob(&entry.name, pattern).map(ExportPattern::from_matcher)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            None => None,
-        };
-        components.push(ComponentSpec {
-            name: entry.name.clone(),
-            roots: entry.roots.clone(),
-            depends_on: entry.depends_on.clone(),
-            isolate_children: entry.isolate_children,
-            owns_external: entry
-                .owns_external
-                .iter()
-                .map(|package| normalize_external_package_name(package))
-                .collect(),
-            public_exports,
-        });
-    }
-
-    let require_component_coverage =
-        (!components.is_empty() || from_rust_macros) && config.require_component_coverage;
-    let external_package_owners = build_external_package_owners(&components);
-    let component_roots = build_component_root_map(&components);
-    let allowed_dependencies =
-        build_allowed_dependency_map(&components, config.transitive_dependencies);
-    let component_by_name = components
-        .iter()
-        .enumerate()
-        .map(|(index, component)| (component.name.clone(), index))
-        .collect();
-    let rust_sibling_rules = build_rust_sibling_isolation_rules(rust_headers, &components);
-    Ok(ArchitectureSpec {
-        require_component_coverage,
-        ignore_type_checking_imports: config.ignore_type_checking_imports,
-        from_rust_macros,
-        components,
-        external_package_owners,
-        component_roots,
-        allowed_dependencies,
-        component_by_name,
-        rust_sibling_rules,
-    })
-}
-
-fn normalize_external_package_name(raw: &str) -> String {
-    raw.trim().replace('-', "_")
-}
-
 /// Synthesizes the component DAG of a crate that declares `define_architecture!` in its
 /// `architecture` module: components and dependencies from `define_architecture!`, roots from the
 /// modules declaring `architecture_component!(...)`.
@@ -1582,145 +1246,9 @@ fn architecture_config_from_rust_headers(
     }
 }
 
-fn build_external_package_owners(
-    components: &[ComponentSpec],
-) -> BTreeMap<String, ExternalPackageOwner> {
-    let mut owners: BTreeMap<String, ExternalPackageOwner> = BTreeMap::new();
-    for component in components {
-        let has_wildcard_or_empty_roots = component.roots.is_empty()
-            || component
-                .roots
-                .iter()
-                .any(|root| root.is_empty() || root == ROOT_MODULE_TAG || root.contains('*'));
-        for package in &component.owns_external {
-            let entry = owners.entry(package.clone()).or_default();
-            if !entry.components.contains(&component.name) {
-                entry.components.push(component.name.clone());
-            }
-            if has_wildcard_or_empty_roots {
-                if !entry.display_owners.contains(&component.name) {
-                    entry.display_owners.push(component.name.clone());
-                }
-            } else {
-                for root in &component.roots {
-                    if !entry.display_owners.contains(root) {
-                        entry.display_owners.push(root.clone());
-                    }
-                }
-            }
-        }
-    }
-    owners
-}
-
-fn build_component_root_map(components: &[ComponentSpec]) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-    for component in components {
-        for root in &component.roots {
-            map.insert(root.clone(), component.name.clone());
-        }
-    }
-    map
-}
-
-fn build_allowed_dependency_map(
-    components: &[ComponentSpec],
-    transitive_dependencies: bool,
-) -> HashMap<String, HashSet<String>> {
-    if !transitive_dependencies {
-        return components
-            .iter()
-            .map(|component| {
-                (
-                    component.name.clone(),
-                    component.depends_on.iter().cloned().collect(),
-                )
-            })
-            .collect();
-    }
-    let direct: HashMap<&str, HashSet<&str>> = components
-        .iter()
-        .map(|component| {
-            let dependencies: HashSet<&str> =
-                component.depends_on.iter().map(String::as_str).collect();
-            (component.name.as_str(), dependencies)
-        })
-        .collect();
-    let mut reachable_by_component = HashMap::with_capacity(components.len());
-    for component in components {
-        let mut reachable = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(component.name.as_str());
-        while let Some(current) = queue.pop_front() {
-            if let Some(dependencies) = direct.get(current) {
-                for &dependency in dependencies {
-                    if reachable.insert(dependency.to_owned()) {
-                        queue.push_back(dependency);
-                    }
-                }
-            }
-        }
-        reachable_by_component.insert(component.name.clone(), reachable);
-    }
-    reachable_by_component
-}
-
-fn build_rust_sibling_isolation_rules(
-    rust_headers: &BTreeMap<String, Arc<RustFileSummary>>,
-    components: &[ComponentSpec],
-) -> Vec<SiblingIsolationRule> {
-    let mut rules = Vec::new();
-    for component in components {
-        if !component.isolate_children {
-            continue;
-        }
-        if component.roots.len() > 1 {
-            for root in &component.roots {
-                let forbidden_siblings: Vec<String> = component
-                    .roots
-                    .iter()
-                    .filter(|other| *other != root)
-                    .cloned()
-                    .collect();
-                rules.push(SiblingIsolationRule {
-                    component_name: component.name.clone(),
-                    subject_prefix: root.clone(),
-                    forbidden_siblings,
-                });
-            }
-        }
-        for root in &component.roots {
-            let Some(root_summary) = rust_headers.get(root) else {
-                continue;
-            };
-            let direct_children: Vec<String> = root_summary
-                .external_mods
-                .iter()
-                .filter(|declaration| !declaration.is_private)
-                .map(|declaration| format!("{root}::{}", declaration.name))
-                .collect();
-            if direct_children.len() > 1 {
-                for child in &direct_children {
-                    let forbidden_siblings: Vec<String> = direct_children
-                        .iter()
-                        .filter(|other| *other != child)
-                        .cloned()
-                        .collect();
-                    rules.push(SiblingIsolationRule {
-                        component_name: component.name.clone(),
-                        subject_prefix: child.clone(),
-                        forbidden_siblings,
-                    });
-                }
-            }
-        }
-    }
-    rules
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::source::MemoryFileSource;
+    use super::super::foundation::MemoryFileSource;
     use super::*;
 
     #[test]
@@ -1776,7 +1304,7 @@ mod tests {
         let layout = ProjectLayout::discover(root, &source, &[]);
         let parsed = ParsedFile::rust(app_source);
         let findings =
-            evaluate_rust_file_architecture(&parsed, &root.join("src/app.rs"), &layout, &spec);
+            evaluate_rust_file_architecture(&parsed, &root.join("src/app.rs"), &layout, &spec, &[]);
 
         assert_eq!(findings.unowned_external_dependencies.len(), 1);
         assert_eq!(

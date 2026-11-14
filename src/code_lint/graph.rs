@@ -193,11 +193,11 @@ mod tests {
             "expected declared CodeLintProject component in:\n{rendered}"
         );
         assert!(
-            rendered.contains("### Module [L0] code_lint::project::config"),
+            rendered.contains("### Module [L0] code_lint::project::foundation::config"),
             "expected L0 config module to render untruncated in:\n{rendered}"
         );
         assert!(
-            rendered.contains("### Module [L1] code_lint::project::source"),
+            rendered.contains("### Module [L1] code_lint::project::foundation::source"),
             "expected L1 source module to render untruncated in:\n{rendered}"
         );
         assert!(

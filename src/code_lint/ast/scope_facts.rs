@@ -276,6 +276,28 @@ pub fn enclosing_scope_symbol(scopes: &[ScopeFacts], line: usize) -> Option<Stri
     None
 }
 
+/// Inserts all module-level item names and `Type::method` member names from `scopes` into `out`.
+pub(in crate::code_lint) fn collect_scope_symbol_names(
+    scopes: &[ScopeFacts],
+    out: &mut HashSet<String>,
+) {
+    for scope in scopes {
+        match &scope.scope {
+            DeclarationScopeKind::Module => {
+                for item in &scope.items {
+                    out.insert(item.name.clone());
+                }
+            }
+            DeclarationScopeKind::Class { name }
+            | DeclarationScopeKind::Impl { type_name: name } => {
+                for item in &scope.items {
+                    out.insert(format!("{name}::{}", item.name));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::call_clusters::RelationKind;
@@ -725,5 +747,34 @@ mod tests {
         assert!(!scopes.iter().any(|scope| {
             matches!(&scope.scope, DeclarationScopeKind::Class { name } if name == "InnerLocal")
         }));
+    }
+
+    #[test]
+    fn collect_scope_symbol_names_records_module_items_and_qualified_members() {
+        let source = indoc::indoc! {r"
+            pub struct Parser;
+
+            impl Parser {
+                pub fn parse() -> Self {
+                    Self
+                }
+            }
+
+            pub fn run() -> Parser {
+                Parser::parse()
+            }
+        "};
+        let scopes = collect_scope_facts(&ParsedFile::rust(source));
+        let mut names = HashSet::new();
+        collect_scope_symbol_names(&scopes, &mut names);
+
+        assert_eq!(
+            names,
+            HashSet::from([
+                "Parser".to_owned(),
+                "Parser::parse".to_owned(),
+                "run".to_owned(),
+            ])
+        );
     }
 }

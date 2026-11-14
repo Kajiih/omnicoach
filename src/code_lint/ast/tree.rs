@@ -79,6 +79,14 @@ impl ParsedFile {
         self.source.get(span.start..span.end).unwrap_or_default()
     }
 
+    /// Returns the byte [`SourceSpan`] covering the first line of this file (excluding the
+    /// line terminator), or `0..0` when the file is empty.
+    #[must_use]
+    pub(in crate::code_lint) fn first_line_span(&self) -> SourceSpan {
+        let end = self.source.lines().next().map_or(0, str::len);
+        SourceSpan::new(0, end)
+    }
+
     /// Returns whether the parser had to recover from invalid or missing syntax.
     #[must_use]
     pub fn has_syntax_error(&self) -> bool {
@@ -227,6 +235,11 @@ mod tests {
                 SourceSpan::new(16, 31),
                 LineColumn { line: 2, column: 5 },
             )
+        );
+        assert_eq!(file.first_line_span(), SourceSpan::new(0, 11));
+        assert_eq!(
+            ParsedFile::rust("").first_line_span(),
+            SourceSpan::new(0, 0)
         );
     }
 }

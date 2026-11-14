@@ -1,16 +1,19 @@
 //! Memoized cross-file module summary index (`ProjectIndex`).
 
 use super::architecture::{
-    ArchitectureError, ArchitectureSpec, FileArchitectureFindings, RUST_ARCHITECTURE_MODULE,
+    RUST_ARCHITECTURE_MODULE, SiblingIsolationRule, build_rust_sibling_isolation_rules,
     evaluate_file_architecture, evaluate_stray_rust_component_markers, resolve_architecture_spec,
 };
-use super::config::{CONFIG_FILE_NAME, ProjectConfig, ProjectTomlError};
-use super::layout::{ProjectLayout, is_vcs_boundary};
+use super::foundation::{
+    ArchitectureError, ArchitectureSpec, CONFIG_FILE_NAME, FileArchitectureFindings, FileSource,
+    KnownModulePrefix, ProjectConfig, ProjectTomlError, ResolvedModuleTarget, SplitModulePath,
+    is_vcs_boundary, longest_known_module_prefix, split_module_and_segments,
+};
+use super::layout::ProjectLayout;
 use super::paths::{
     LIB_CRATE_ROOT, is_python_package_init, resolve_relative_python_module,
     resolve_rust_reference_path,
 };
-use super::source::FileSource;
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
     ExportedAll, OwnedDocstring, PythonClassInfo, PythonFileSummary, PythonImportBinding,
@@ -72,16 +75,6 @@ pub struct ImportedProtocolSummary {
     pub ancestor_ids: HashSet<PythonClassId>,
 }
 
-/// Canonical module and optional symbol (`"fn"`, `"Type"`, or `"Type::method"`) resolved for
-/// a cross-module reference.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ResolvedModuleTarget {
-    /// Canonical target module path within the project.
-    pub(super) module: String,
-    /// Target top-level symbol or `Type::method` within `module`, when resolved below module level.
-    pub(super) symbol: Option<String>,
-}
-
 /// Outcome of resolving a symbol reference in a Python module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ResolvedPythonTarget {
@@ -110,6 +103,7 @@ pub struct ProjectIndex<'s> {
     python_slots: Mutex<HashMap<String, PythonSlot>>,
     rust_slots: Mutex<HashMap<String, RustSlot>>,
     all_rust_headers: OnceLock<BTreeMap<String, Arc<RustFileSummary>>>,
+    rust_sibling_rules: OnceLock<Vec<SiblingIsolationRule>>,
     resolved_architecture: OnceLock<Result<Option<ArchitectureSpec>, ArchitectureError>>,
     architecture_findings_cache: Mutex<HashMap<PathBuf, CachedArchitectureFindings>>,
 }
@@ -125,6 +119,7 @@ impl<'s> ProjectIndex<'s> {
             python_slots: Mutex::new(HashMap::new()),
             rust_slots: Mutex::new(HashMap::new()),
             all_rust_headers: OnceLock::new(),
+            rust_sibling_rules: OnceLock::new(),
             resolved_architecture: OnceLock::new(),
             architecture_findings_cache: Mutex::new(HashMap::new()),
         }
@@ -235,7 +230,7 @@ impl<'s> ProjectIndex<'s> {
     /// when Python source roots were neither explicitly configured nor inferred from a container
     /// root (`src/`, `python/`, `Lib/`).
     pub fn merge_python_source_roots(&mut self, additional: &[PathBuf]) {
-        if !self.project_config.has_configured_python_roots()
+        if !self.project_config.has_configured_source_roots()
             && self
                 .layout
                 .python_source_roots
@@ -789,7 +784,26 @@ impl<'s> ProjectIndex<'s> {
         let evaluated = Arc::new(spec.map_or_else(
             || evaluate_stray_rust_component_markers(file, &normalized_path, &self.layout),
             |spec| {
-                evaluate_file_architecture(file, &normalized_path, &self.layout, self.source, spec)
+                let rust_sibling_rules: &[SiblingIsolationRule] = if file.lang() == Language::Rust {
+                    self.rust_sibling_rules
+                        .get_or_init(|| {
+                            build_rust_sibling_isolation_rules(
+                                self.rust_headers_map(),
+                                &spec.components,
+                            )
+                        })
+                        .as_slice()
+                } else {
+                    &[]
+                };
+                evaluate_file_architecture(
+                    file,
+                    &normalized_path,
+                    &self.layout,
+                    self.source,
+                    spec,
+                    rust_sibling_rules,
+                )
             },
         ));
         {
@@ -1506,63 +1520,6 @@ fn source_fingerprint(source: &str) -> SourceFingerprint {
     }
 }
 
-struct SplitModulePath {
-    module: String,
-    symbol: Option<String>,
-    remainder: Option<String>,
-}
-
-fn split_module_and_segments(
-    path: &str,
-    separator: &str,
-    known_modules: &HashSet<&str>,
-) -> Option<SplitModulePath> {
-    if known_modules.contains(path) {
-        return Some(SplitModulePath {
-            module: path.to_owned(),
-            symbol: None,
-            remainder: None,
-        });
-    }
-    let KnownModulePrefix { module, remainder } =
-        longest_known_module_prefix(path, separator, known_modules)?;
-    let mut segments = remainder
-        .split(separator)
-        .filter(|segment| !segment.is_empty());
-    let symbol = segments.next().map(str::to_owned);
-    let tail: Vec<&str> = segments.collect();
-    let remainder = (!tail.is_empty()).then(|| tail.join(separator));
-    Some(SplitModulePath {
-        module: module.to_owned(),
-        symbol,
-        remainder,
-    })
-}
-
-struct KnownModulePrefix<'a> {
-    module: &'a str,
-    remainder: &'a str,
-}
-
-fn longest_known_module_prefix<'a>(
-    path: &'a str,
-    separator: &str,
-    known_modules: &HashSet<&str>,
-) -> Option<KnownModulePrefix<'a>> {
-    let mut current = path;
-    while let Some((prefix, _)) = current.rsplit_once(separator) {
-        if known_modules.contains(prefix) {
-            let remainder = &path[prefix.len() + separator.len()..];
-            return Some(KnownModulePrefix {
-                module: prefix,
-                remainder,
-            });
-        }
-        current = prefix;
-    }
-    None
-}
-
 struct ModuleHeaderEntry {
     module: String,
     summary: Arc<RustFileSummary>,
@@ -1614,7 +1571,7 @@ fn c3_merge<T: Clone + PartialEq>(head: T, mut sequences: Vec<Vec<T>>) -> Vec<T>
 mod tests {
     use super::*;
     use crate::code_lint::ast::python::extract_classes;
-    use crate::code_lint::project::source::MemoryFileSource;
+    use crate::code_lint::project::foundation::MemoryFileSource;
     use rstest::rstest;
 
     #[test]

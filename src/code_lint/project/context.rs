@@ -1,6 +1,6 @@
 //! Read-only cross-file query handle (`ProjectContext`) passed to project-aware rules.
 
-use super::architecture::FileArchitectureFindings;
+use super::foundation::FileArchitectureFindings;
 use super::index::{
     ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, ResolvedClassAncestors,
 };
@@ -152,7 +152,7 @@ impl<'a> ProjectContext<'a> {
 
     /// Evaluates (or returns cached) architectural conformance findings for `file` at `path`.
     #[must_use]
-    pub fn file_architecture_findings(
+    pub(in crate::code_lint) fn file_architecture_findings(
         &self,
         file: &ParsedFile,
         path: &Path,
@@ -165,9 +165,9 @@ impl<'a> ProjectContext<'a> {
 mod tests {
     use super::*;
     use crate::code_lint::ast::python::extract_classes;
+    use crate::code_lint::project::foundation::{MemoryFileSource, ProjectConfig};
     use crate::code_lint::project::index::PythonClassId;
     use crate::code_lint::project::layout::ProjectLayout;
-    use crate::code_lint::project::source::MemoryFileSource;
     use crate::diagnostic::Language;
 
     #[test]
@@ -236,8 +236,8 @@ mod tests {
                 ("pkg/cli.py", "def run_cli(): pass\n"),
             ],
         );
-        let project_config = super::super::config::ProjectConfig::from_toml_str(toml_content)
-            .expect("valid project TOML");
+        let project_config =
+            ProjectConfig::from_toml_str(toml_content).expect("valid project TOML");
         let layout = ProjectLayout::discover(root, &source, &[]);
         let index = ProjectIndex::new(layout, &source).with_project_config(project_config);
         let context = ProjectContext::new(&index);

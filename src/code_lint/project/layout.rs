@@ -1,11 +1,13 @@
 //! Project boundary, source-root layout, and file-system module mapping (`ProjectLayout`).
 
-use super::config::{CONFIG_FILE_NAME, is_rooted_path, lexical_normalize, resolve_against_cwd};
-use super::paths::{
-    INIT_PY, INIT_PYI, INIT_STEM, LIB_CRATE_ROOT, MAIN_CRATE_ROOT, ROOT_MODULE_TAG,
-    is_python_package_init, normalize_relative_path, python_dotted_path, rust_module_from_relative,
+use super::foundation::{
+    CONFIG_FILE_NAME, FileSource, ROOT_MODULE_TAG, is_rooted_path, is_vcs_boundary,
+    lexical_normalize, normalize_relative_path, resolve_against_cwd,
 };
-use super::source::FileSource;
+use super::paths::{
+    INIT_PY, INIT_PYI, INIT_STEM, LIB_CRATE_ROOT, MAIN_CRATE_ROOT, is_python_package_init,
+    python_dotted_path, rust_module_from_relative,
+};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -317,15 +319,6 @@ impl ProjectLayout {
     }
 }
 
-/// Returns true if `directory` contains a `.jj` or `.git` repository/worktree boundary.
-#[must_use]
-pub(super) fn is_vcs_boundary(directory: &Path, source: &dyn FileSource) -> bool {
-    let git_marker = directory.join(".git");
-    source.is_dir(&directory.join(".jj"))
-        || source.is_dir(&git_marker)
-        || source.is_file(&git_marker)
-}
-
 fn parse_cargo_crate_name(project_root: &Path, source: &dyn FileSource) -> Option<String> {
     let content = source.read_to_string(&project_root.join(CARGO_TOML)).ok()?;
     let manifest: CargoManifest = toml::from_str(&content).ok()?;
@@ -499,7 +492,7 @@ fn is_python_package_dir(directory: &Path, source: &dyn FileSource) -> bool {
 mod tests {
     use super::super::paths::{resolve_rust_reference_path, rust_module_path};
     use super::*;
-    use crate::code_lint::project::source::MemoryFileSource;
+    use crate::code_lint::project::foundation::{MemoryFileSource, ProjectConfig};
 
     #[test]
     fn python_module_file_prefers_stub_and_package_init_over_module_file() {
@@ -573,10 +566,10 @@ mod tests {
                 ("packages/app/src/app/main.py", ""),
             ],
         );
-        let config = super::super::config::ProjectConfig {
+        let config = ProjectConfig {
             context: toml::from_str(r#"source-roots = ["packages/app/src"]"#).unwrap(),
             root_dir: Some(root.to_path_buf()),
-            ..super::super::config::ProjectConfig::default()
+            ..ProjectConfig::default()
         };
         let layout = ProjectLayout::discover(
             &root.join("packages/app/src/app/main.py"),

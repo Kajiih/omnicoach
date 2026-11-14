@@ -1,4 +1,5 @@
-//! Filesystem abstraction for disk, hermetic in-memory tests, and unsaved hook buffer overlays.
+//! Filesystem abstraction for disk, hermetic in-memory tests, and unsaved hook buffer overlays
+//! (`CodeLintProjectFoundation`).
 
 use super::config::{lexical_normalize, resolve_against_cwd};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -302,6 +303,18 @@ impl<B: FileSource> FileSource for OverlayFileSource<B> {
     fn current_dir(&self) -> Option<PathBuf> {
         self.base.current_dir()
     }
+}
+
+/// Returns true if `directory` contains a `.jj` or `.git` repository/worktree boundary.
+#[must_use]
+pub(in crate::code_lint::project) fn is_vcs_boundary(
+    directory: &Path,
+    source: &dyn FileSource,
+) -> bool {
+    let git_marker = directory.join(".git");
+    source.is_dir(&directory.join(".jj"))
+        || source.is_dir(&git_marker)
+        || source.is_file(&git_marker)
 }
 
 fn should_skip_overlay_path<S: FileSource + ?Sized>(

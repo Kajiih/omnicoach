@@ -1,6 +1,6 @@
 //! Rule-registry-independent project layout, path context (`[context]`), and architectural DAG
 //! (`[architecture]`) configuration resolved from `.omnicoach.toml`, along with lexical path and
-//! glob normalization helpers.
+//! glob normalization helpers (`CodeLintProjectFoundation`).
 
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
@@ -10,13 +10,14 @@ use serde::Deserialize;
 /// The default configuration file name.
 pub const CONFIG_FILE_NAME: &str = ".omnicoach.toml";
 
+const CURRENT_DIR_PREFIX: &str = "./";
 const DEFAULT_TEST_PATTERNS: &[&str] =
     &["**/tests/**", "**/test_*.py", "**/*_test.py", "**/tests.rs"];
 
 static CACHED_CURRENT_DIR: std::sync::LazyLock<Option<PathBuf>> =
     std::sync::LazyLock::new(|| std::env::current_dir().ok());
 
-/// Configuration settings for path context detection (e.g. test paths) and Python source roots.
+/// Configuration settings for path context detection (e.g. test paths) and import source roots.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ContextConfig {
@@ -26,7 +27,7 @@ pub struct ContextConfig {
         deserialize_with = "deserialize_test_patterns"
     )]
     pub test_patterns: globset::GlobSet,
-    /// Optional Python import source roots relative to the project root (e.g. `["src", "python"]`).
+    /// Optional import source roots relative to the project root (e.g. `["src", "python"]`).
     #[serde(default)]
     pub source_roots: Vec<String>,
 }
@@ -75,7 +76,7 @@ pub enum ArchitectureConfigError {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ArchitectureConfig {
-    /// Optional Python import source roots relative to the project root.
+    /// Optional import source roots relative to the project root.
     #[serde(default)]
     pub source_roots: Vec<String>,
     /// Whether `depends-on` edges are transitive across the component DAG (default `true`).
@@ -162,12 +163,12 @@ pub enum ProjectTomlError {
 /// Rule-registry-independent project layout, path context, and `[architecture]` settings from `.omnicoach.toml`.
 #[derive(Debug, Default, Clone)]
 pub struct ProjectConfig {
-    /// Path context classifier and Python source-root settings.
+    /// Path context classifier and import source-root settings.
     pub context: ContextConfig,
     /// Project or configuration root directory used to anchor `test-patterns` globs and `source-roots`.
     pub root_dir: Option<PathBuf>,
     /// Optional validated `[architecture]` block declared in `.omnicoach.toml`.
-    pub architecture: Option<ArchitectureConfig>,
+    pub(crate) architecture: Option<ArchitectureConfig>,
 }
 
 impl ProjectConfig {
@@ -206,10 +207,10 @@ impl ProjectConfig {
         self.context.test_patterns.is_match(probe)
     }
 
-    /// Returns true if any Python `source-roots` are explicitly configured in `[context]` or
+    /// Returns true if any `source-roots` are explicitly configured in `[context]` or
     /// `[architecture]`.
     #[must_use]
-    pub fn has_configured_python_roots(&self) -> bool {
+    pub fn has_configured_source_roots(&self) -> bool {
         !self.context.source_roots.is_empty()
             || self
                 .architecture
@@ -217,7 +218,7 @@ impl ProjectConfig {
                 .is_some_and(|architecture| !architecture.source_roots.is_empty())
     }
 
-    /// Collects deduplicated Python source roots configured in `[context]` and `[architecture]`.
+    /// Collects deduplicated import source roots configured in `[context]` and `[architecture]`.
     ///
     /// Like the other paths of `.omnicoach.toml`, the roots are anchored at the configuration root
     /// ([`Self::root_dir`]), so that they name the same directories from every sub-package; without
@@ -298,6 +299,13 @@ pub fn resolve_against_cwd(path: &Path, cwd: Option<&Path>) -> PathBuf {
         || lexical_normalize(path),
         |base| lexical_normalize(&base.join(path)),
     )
+}
+
+/// Normalizes `path` using forward slashes, stripping any leading `./` prefix.
+#[must_use]
+pub(in crate::code_lint::project) fn normalize_relative_path(path: &Path) -> String {
+    let clean_path = path.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(path);
+    clean_path.to_string_lossy().replace('\\', "/")
 }
 
 /// Compiles `pattern` with `*` matching across `/`, as all config globs do.

@@ -1,5 +1,6 @@
 //! Syntactic module-path and reference-path resolution for Rust and Python (`CodeLintProject`).
 
+use super::foundation::ROOT_MODULE_TAG;
 use crate::code_lint::ast::rust::ExternalModDeclaration;
 use std::path::Path;
 
@@ -14,8 +15,6 @@ pub(super) const INIT_PYI: &str = "__init__.pyi";
 pub(super) const LIB_CRATE_ROOT: &str = "lib";
 /// Crate-relative module identifier assigned to a Rust `main.rs` crate root.
 pub(super) const MAIN_CRATE_ROOT: &str = "main";
-/// Synthetic module identifier representing a root `__init__.py` directly inside a Python source root.
-pub(super) const ROOT_MODULE_TAG: &str = "<root>";
 
 const PYTHON_SUFFIX: &str = ".py";
 const PYTHON_STUB_SUFFIX: &str = ".pyi";
@@ -26,7 +25,6 @@ const RUST_MODULE_SEP: &str = "::";
 const PYTHON_MODULE_SEP: &str = ".";
 const SELF_SEGMENT: &str = "self";
 const SUPER_SEGMENT: &str = "super";
-const CURRENT_DIR_PREFIX: &str = "./";
 
 /// A referenced path normalized to a canonical crate-relative (or external crate) path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,13 +80,6 @@ pub(super) fn is_python_package_init(path: &Path) -> bool {
         path.file_name().and_then(|name| name.to_str()),
         Some(INIT_PY | INIT_PYI)
     )
-}
-
-/// Normalizes `path` using forward slashes, stripping any leading `./` prefix.
-#[must_use]
-pub(super) fn normalize_relative_path(path: &Path) -> String {
-    let clean_path = path.strip_prefix(CURRENT_DIR_PREFIX).unwrap_or(path);
-    clean_path.to_string_lossy().replace('\\', "/")
 }
 
 /// Resolves a Python module specifier (`level == 0` absolute or `level >= 1` relative) from
