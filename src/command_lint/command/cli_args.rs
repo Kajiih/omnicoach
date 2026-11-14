@@ -6,6 +6,32 @@ use std::slice::Iter;
 
 use super::shell::{CommandArg, InterceptedCommand};
 
+/// CLI schema definition for Jujutsu (`jj`) commands.
+pub const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+    program_name: "jj",
+    options_with_values: &[
+        "-r",
+        "--revision",
+        "--revisions",
+        "-n",
+        "--limit",
+        "-T",
+        "--template",
+        "--tool",
+        "--context",
+        "-m",
+        "--message",
+        "-R",
+        "--repository",
+        "--at-operation",
+        "--at-op",
+        "--color",
+        "--config",
+        "--config-toml",
+        "--config-file",
+    ],
+};
+
 /// Schema defining a program's command-line interface options layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramCliSchema {
@@ -43,6 +69,12 @@ impl ParsedArgs {
             .get(option)
             .and_then(|values| values.first())
             .map(String::as_str)
+    }
+
+    /// Returns all values associated with `option` in the order they were provided.
+    #[must_use]
+    pub fn option_values(&self, option: &str) -> &[String] {
+        self.options.get(option).map_or(&[], Vec::as_slice)
     }
 
     /// Returns `true` if the positional arguments start with `sequence`.
@@ -145,7 +177,8 @@ impl<'a> ArgParser<'a> {
 
             if is_option_with_value {
                 if char_indices.peek().is_some() {
-                    let attached_value = argument[byte_offset + character.len_utf8()..].to_string();
+                    let rest = &argument[byte_offset + character.len_utf8()..];
+                    let attached_value = rest.strip_prefix('=').unwrap_or(rest).to_string();
                     self.options.entry(flag).or_default().push(attached_value);
                     break;
                 }
@@ -168,6 +201,7 @@ impl<'a> ArgParser<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::shell::ParsedCommand;
     use super::*;
 
     #[test]
@@ -222,15 +256,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_args_posix_glued_value() {
-        let cmd = InterceptedCommand::parse_all("jj edit -R.").remove(0);
-        let schema = ProgramCliSchema {
-            program_name: "jj",
-            options_with_values: &["-R"],
-        };
-        let args = cmd.parse_args(&schema);
+    fn test_parse_args_posix_glued_value_and_short_equals() {
+        let cmd = InterceptedCommand::parse_all("jj edit -R. -r=kpqxywon").remove(0);
+        let args = cmd.parse_args(&JJ_CLI_SCHEMA);
         assert_eq!(args.positionals, vec!["edit"]);
         assert_eq!(args.get_option("-R"), Some("."));
+        assert_eq!(args.get_option("-r"), Some("kpqxywon"));
     }
 
     #[test]
@@ -271,5 +302,16 @@ mod tests {
         assert_eq!(args.positionals, vec!["describe", "@-"]);
         assert_eq!(args.get_option("-m"), Some("-wip"));
         assert_eq!(args.get_option("--message"), Some("-second"));
+    }
+
+    #[test]
+    fn test_option_values_returns_all_occurrences_in_order() {
+        let parsed = ParsedCommand::new("jj log -r a --revision b -rc --revisions=d -r=e");
+        let cmd = &parsed.commands()[0];
+        let args = cmd.parse_args(&JJ_CLI_SCHEMA);
+        assert_eq!(args.option_values("-r"), &["a", "c", "e"]);
+        assert_eq!(args.option_values("--revision"), &["b"]);
+        assert_eq!(args.option_values("--revisions"), &["d"]);
+        assert_eq!(args.option_values("--limit"), &[] as &[String]);
     }
 }

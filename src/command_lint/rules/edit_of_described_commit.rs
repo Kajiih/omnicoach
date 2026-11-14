@@ -1,28 +1,11 @@
 //! Validation checks for the `jj edit` command.
 
-use crate::command_lint::command::{InterceptedCommand, ParsedCommand, ProgramCliSchema};
+use crate::command_lint::command::{InterceptedCommand, JJ_CLI_SCHEMA, ParsedCommand};
 use crate::command_lint::contract::{CommandEnv, CommandRule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Precision, Reference,
     RuleDoc, RuleOptions, Topic,
-};
-
-/// CLI schema definition for Jujutsu commands.
-const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    program_name: "jj",
-    options_with_values: &[
-        "-r",
-        "--revision",
-        "-R",
-        "--repository",
-        "--config",
-        "--config-toml",
-        "--config-file",
-        "--at-operation",
-        "--at-op",
-        "--color",
-    ],
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -102,7 +85,12 @@ fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
         return None;
     }
     let args = cmd.parse_args(&JJ_CLI_SCHEMA);
-    if !args.has_subcommand_sequence(&["edit"]) {
+    if !args.has_subcommand_sequence(&["edit"])
+        || args.has_flag("-h")
+        || args.has_flag("--help")
+        || args.has_flag("-V")
+        || args.has_flag("--version")
+    {
         return None;
     }
     Some(
@@ -146,6 +134,10 @@ crate::test_utils::command_rule_test!(
             conflicted_described_commit_allowed => "jj edit c789",
             unknown_revision_error_ignored => "jj edit unknown_rev",
             unrelated_jj_subcommand_allowed => "jj log -r kpqxywon",
+            help_flag_exempt => "jj edit --help",
+            short_help_flag_exempt => "jj edit -h",
+            version_flag_exempt => "jj edit --version",
+            short_version_flag_exempt => "jj edit -V",
             non_jj_command_allowed => "git commit -m msg",
             redirect_on_empty_commit_not_treated_as_revision => "jj edit a456 > out.txt",
         ],
@@ -155,6 +147,7 @@ crate::test_utils::command_rule_test!(
             bare_edit_when_working_copy_described => "jj edit",
             short_revision_flag => "jj edit -r kpqxywon",
             short_glued_revision_flag => "jj edit -rkpqxywon",
+            short_equals_revision_flag => "jj edit -r=kpqxywon",
             long_revision_flag => "jj edit --revision kpqxywon",
             long_equals_revision_flag => "jj edit --revision=kpqxywon",
             with_global_repository_flag => "jj -R . edit kpqxywon",
