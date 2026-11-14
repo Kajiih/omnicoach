@@ -6,13 +6,13 @@ Lightweight, high-signal static analysis engine and command coach designed to en
 
 ## 📦 Installation
 
-### Python (`uv` or `pipx`)
+### Python (`uv`)
 
 ```bash
-uv tool install --managed-python omnicoach   # or: pipx install omnicoach
+uv tool install --managed-python omnicoach
 ```
 
-Or per-project (`uv add --dev omnicoach`), run via `uv run omnicoach` or `python -m omnicoach`.
+Or per-project (`uv add --dev omnicoach`), run via `uv run omnicoach`.
 
 ### Standalone Binary
 
