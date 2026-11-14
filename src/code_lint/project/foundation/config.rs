@@ -127,6 +127,20 @@ impl ArchitectureConfig {
     }
 }
 
+/// Single submodule entry inside a component or parent submodule (`submodules = [...]` in `.omnicoach.toml`).
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ArchitectureSubmoduleConfig {
+    /// Submodule name relative to its parent (`"foundation"`, `"source"`).
+    pub name: String,
+    /// Directly allowed sibling submodule dependencies (must appear earlier in the same `submodules` list).
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Optional recursive submodule DAG inside this submodule.
+    #[serde(default)]
+    pub submodules: Vec<Self>,
+}
+
 /// Single component entry (`[[architecture.components]]`) in `.omnicoach.toml`.
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -147,6 +161,9 @@ pub struct ArchitectureComponentConfig {
     /// Optional exported symbol glob patterns (`["parse_*", "Config"]`).
     #[serde(default)]
     pub public_exports: Option<Vec<String>>,
+    /// Optional intra-component submodule DAG (`submodules = [...]`).
+    #[serde(default)]
+    pub submodules: Vec<ArchitectureSubmoduleConfig>,
 }
 
 /// Failure while parsing project-layout or `[architecture]` sections of `.omnicoach.toml`.
@@ -356,23 +373,13 @@ pub fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
 pub(super) fn validate_component_dag(
     components: &[ArchitectureComponentConfig],
 ) -> Result<(), ArchitectureConfigError> {
-    let mut seen = HashSet::with_capacity(components.len());
-    for component in components {
-        for dependency in &component.depends_on {
-            if !seen.contains(dependency.as_str()) {
-                return Err(ArchitectureConfigError::ForwardOrUnknownDependency {
-                    component: component.name.clone(),
-                    dependency: dependency.clone(),
-                });
-            }
-        }
-        if !seen.insert(component.name.as_str()) {
-            return Err(ArchitectureConfigError::DuplicateComponent(
-                component.name.clone(),
-            ));
-        }
-    }
-    Ok(())
+    validate_topological_order(
+        components,
+        |component| component.name.as_str(),
+        |component| component.name.clone(),
+        |component| component.depends_on.as_slice(),
+        |component| validate_submodule_dag(&component.name, &component.submodules),
+    )
 }
 
 pub(super) fn compile_export_glob(
@@ -386,6 +393,49 @@ pub(super) fn compile_export_glob(
             pattern: pattern.to_owned(),
             message: error.to_string(),
         })
+}
+
+fn validate_submodule_dag(
+    parent_scope: &str,
+    submodules: &[ArchitectureSubmoduleConfig],
+) -> Result<(), ArchitectureConfigError> {
+    validate_topological_order(
+        submodules,
+        |submodule| submodule.name.as_str(),
+        |submodule| format!("{parent_scope}::{}", submodule.name),
+        |submodule| submodule.depends_on.as_slice(),
+        |submodule| {
+            let qualified = format!("{parent_scope}::{}", submodule.name);
+            validate_submodule_dag(&qualified, &submodule.submodules)
+        },
+    )
+}
+
+fn validate_topological_order<'a, T>(
+    entries: &'a [T],
+    local_name: impl Fn(&'a T) -> &'a str,
+    qualified_name: impl Fn(&'a T) -> String,
+    depends_on: impl Fn(&'a T) -> &'a [String],
+    validate_children: impl Fn(&'a T) -> Result<(), ArchitectureConfigError>,
+) -> Result<(), ArchitectureConfigError> {
+    let mut seen = HashSet::with_capacity(entries.len());
+    for entry in entries {
+        for dependency in depends_on(entry) {
+            if !seen.contains(dependency.as_str()) {
+                return Err(ArchitectureConfigError::ForwardOrUnknownDependency {
+                    component: qualified_name(entry),
+                    dependency: dependency.clone(),
+                });
+            }
+        }
+        if !seen.insert(local_name(entry)) {
+            return Err(ArchitectureConfigError::DuplicateComponent(qualified_name(
+                entry,
+            )));
+        }
+        validate_children(entry)?;
+    }
+    Ok(())
 }
 
 #[derive(Deserialize, Default)]
@@ -544,6 +594,7 @@ mod tests {
                 isolate_children: false,
                 owns_external: Vec::new(),
                 public_exports: Some(vec!["[unclosed".to_owned()]),
+                submodules: Vec::new(),
             }],
             ..ArchitectureConfig::default()
         };
@@ -644,5 +695,58 @@ mod tests {
                 ArchitectureConfigError::InvalidPublicExportGlob { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn test_from_toml_str_validates_nested_submodule_dag() {
+        let valid = ProjectConfig::from_toml_str(indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Project"
+            roots = ["pkg.project"]
+            submodules = [
+                { name = "foundation", submodules = [
+                    { name = "source" },
+                    { name = "config", depends-on = ["source"] },
+                ] },
+                { name = "context", depends-on = ["foundation"] },
+            ]
+        "#});
+        let duplicate_nested = ProjectConfig::from_toml_str(indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Project"
+            roots = ["pkg.project"]
+            submodules = [
+                { name = "foundation", submodules = [
+                    { name = "source" },
+                    { name = "source" },
+                ] },
+            ]
+        "#});
+        let forward_nested = ProjectConfig::from_toml_str(indoc::indoc! {r#"
+            [[architecture.components]]
+            name = "Project"
+            roots = ["pkg.project"]
+            submodules = [
+                { name = "foundation", submodules = [
+                    { name = "source", depends-on = ["config"] },
+                    { name = "config" },
+                ] },
+            ]
+        "#});
+
+        assert!(valid.is_ok());
+        assert_eq!(
+            duplicate_nested.expect_err("duplicate nested submodule must fail"),
+            ProjectTomlError::Architecture(ArchitectureConfigError::DuplicateComponent(
+                "Project::foundation::source".to_owned()
+            ))
+        );
+        assert_eq!(
+            forward_nested.expect_err("forward nested submodule dependency must fail"),
+            ProjectTomlError::Architecture(ArchitectureConfigError::ForwardOrUnknownDependency {
+                component: "Project::foundation::source".to_owned(),
+                dependency: "config".to_owned(),
+            })
+        );
     }
 }

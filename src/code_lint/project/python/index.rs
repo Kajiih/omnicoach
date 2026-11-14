@@ -79,7 +79,18 @@ impl<'s> PythonIndex<'s> {
         path: &Path,
         spec: &ArchitectureSpec,
     ) -> FileArchitectureFindings {
-        evaluate_python_file_architecture(file, path, &self.layout, self.source, spec)
+        evaluate_python_file_architecture(
+            file,
+            path,
+            &self.layout,
+            self.source,
+            spec,
+            |module, symbol| match self.resolve_written_name(module, symbol) {
+                ResolvedPythonTarget::Symbol { module, .. }
+                | ResolvedPythonTarget::Module(module) => Some(module),
+                ResolvedPythonTarget::Unknown => None,
+            },
+        )
     }
 
     /// Seeds the memoized summary for `path` from an already-parsed Python [`ParsedFile`].

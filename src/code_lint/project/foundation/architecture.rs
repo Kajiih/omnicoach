@@ -2,8 +2,8 @@
 //! and component DAG builders (`CodeLintProjectFoundation`).
 
 use super::config::{
-    ArchitectureConfig, ArchitectureConfigError, ProjectTomlError, compile_export_glob,
-    validate_component_dag,
+    ArchitectureConfig, ArchitectureConfigError, ArchitectureSubmoduleConfig, ProjectTomlError,
+    compile_export_glob, validate_component_dag,
 };
 use crate::diagnostic::SourceSpan;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -113,6 +113,25 @@ impl ArchitectureSpec {
     }
 }
 
+/// Validated intra-component submodule entry in [`ComponentSpec`] or a parent [`SubmoduleSpec`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmoduleSpec {
+    /// Submodule identifier relative to its parent (`"foundation"`, `"source"`).
+    pub name: String,
+    /// Precomputed allowed sibling submodule names (honoring `transitive_dependencies`).
+    allowed_siblings: HashSet<String>,
+    /// Recursive submodule DAG inside this submodule.
+    pub submodules: Vec<Self>,
+}
+
+impl SubmoduleSpec {
+    /// Returns true if this submodule is permitted to depend on `sibling` in the same parent scope.
+    #[must_use]
+    pub fn allows_sibling_dependency(&self, sibling: &str) -> bool {
+        self.allowed_siblings.contains(sibling)
+    }
+}
+
 /// Validated component entry in [`ArchitectureSpec`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentSpec {
@@ -128,6 +147,102 @@ pub struct ComponentSpec {
     owns_external: Vec<String>,
     /// Optional public interface export rules per root module (`None` = unrestricted submodules).
     pub(in crate::code_lint::project) public_exports: Option<Vec<ExportPattern>>,
+    /// Optional recursive submodule DAG inside this component.
+    pub submodules: Vec<SubmoduleSpec>,
+}
+
+impl ComponentSpec {
+    /// Returns the declared [`SubmoduleSpec`] slice at `rel_subpath` beneath a root of this
+    /// component (`None` at the component root itself; `Some("foundation::source")` at a nested
+    /// scope split by `separator`), or `&[]` when no submodules are declared at that scope.
+    #[must_use]
+    pub(in crate::code_lint::project) fn declared_submodules_at(
+        &self,
+        rel_subpath: Option<&str>,
+        separator: &str,
+    ) -> &[SubmoduleSpec] {
+        let Some(subpath) = rel_subpath else {
+            return &self.submodules;
+        };
+        subpath
+            .split(separator)
+            .try_fold(self.submodules.as_slice(), |current, segment| {
+                current
+                    .iter()
+                    .find(|entry| entry.name == segment)
+                    .map(|sub| sub.submodules.as_slice())
+            })
+            .unwrap_or(&[])
+    }
+
+    /// Returns true when `rel_subpath` beneath a root of this component is permitted by its
+    /// declared `submodules` DAG (treating scopes with an empty `submodules` list as leaf scopes
+    /// that allow arbitrary child modules).
+    #[must_use]
+    pub(in crate::code_lint::project) fn is_declared_submodule_path(
+        &self,
+        rel_subpath: Option<&str>,
+        separator: &str,
+    ) -> bool {
+        let Some(subpath) = rel_subpath else {
+            return true;
+        };
+        let mut current = self.submodules.as_slice();
+        for segment in subpath.split(separator) {
+            if current.is_empty() {
+                return true;
+            }
+            let Some(sub) = current.iter().find(|entry| entry.name == segment) else {
+                return false;
+            };
+            current = &sub.submodules;
+        }
+        true
+    }
+
+    /// Evaluates whether a reference from `source_rel` to `target_rel` (both relative to
+    /// `root_prefix` and separated by `separator`) violates this component's recursive
+    /// `submodules` DAG at their lowest common ancestor scope, returning the forbidden sibling
+    /// prefix when disallowed.
+    #[must_use]
+    pub(in crate::code_lint::project) fn submodule_dag_violation(
+        &self,
+        source_rel: &str,
+        target_rel: &str,
+        root_prefix: &str,
+        separator: &str,
+    ) -> Option<String> {
+        let mut current_prefix = root_prefix.to_owned();
+        let mut current_submodules = self.submodules.as_slice();
+        for (src_seg, tgt_seg) in source_rel.split(separator).zip(target_rel.split(separator)) {
+            if src_seg != tgt_seg {
+                if current_submodules.is_empty() {
+                    return None;
+                }
+                let allowed = current_submodules
+                    .iter()
+                    .find(|sub| sub.name == src_seg)
+                    .is_some_and(|sub| sub.allows_sibling_dependency(tgt_seg));
+                return (!allowed).then(|| {
+                    if current_prefix.is_empty() {
+                        tgt_seg.to_owned()
+                    } else {
+                        format!("{current_prefix}{separator}{tgt_seg}")
+                    }
+                });
+            }
+            current_prefix = if current_prefix.is_empty() {
+                src_seg.to_owned()
+            } else {
+                format!("{current_prefix}{separator}{src_seg}")
+            };
+            current_submodules = current_submodules
+                .iter()
+                .find(|sub| sub.name == src_seg)
+                .map_or(&[], |sub| sub.submodules.as_slice());
+        }
+        None
+    }
 }
 
 /// Export allowlist glob pattern on a component root.
@@ -334,6 +449,7 @@ pub(in crate::code_lint::project) fn build_architecture_spec(
                 .map(|package| normalize_external_package_name(package))
                 .collect(),
             public_exports,
+            submodules: build_submodule_specs(&entry.submodules, config.transitive_dependencies),
         });
     }
 
@@ -418,34 +534,58 @@ fn build_component_root_map(components: &[ComponentSpec]) -> BTreeMap<String, St
     map
 }
 
+fn build_submodule_specs(
+    entries: &[ArchitectureSubmoduleConfig],
+    transitive_dependencies: bool,
+) -> Vec<SubmoduleSpec> {
+    let nodes: Vec<(&str, &[String])> = entries
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.depends_on.as_slice()))
+        .collect();
+    let mut allowed_by_name = compute_allowed_dependency_map(&nodes, transitive_dependencies);
+    entries
+        .iter()
+        .map(|entry| SubmoduleSpec {
+            name: entry.name.clone(),
+            allowed_siblings: allowed_by_name.remove(&entry.name).unwrap_or_default(),
+            submodules: build_submodule_specs(&entry.submodules, transitive_dependencies),
+        })
+        .collect()
+}
+
 fn build_allowed_dependency_map(
     components: &[ComponentSpec],
     transitive_dependencies: bool,
 ) -> HashMap<String, HashSet<String>> {
+    let nodes: Vec<(&str, &[String])> = components
+        .iter()
+        .map(|component| (component.name.as_str(), component.depends_on.as_slice()))
+        .collect();
+    compute_allowed_dependency_map(&nodes, transitive_dependencies)
+}
+
+fn compute_allowed_dependency_map(
+    nodes: &[(&str, &[String])],
+    transitive_dependencies: bool,
+) -> HashMap<String, HashSet<String>> {
     if !transitive_dependencies {
-        return components
+        return nodes
             .iter()
-            .map(|component| {
-                (
-                    component.name.clone(),
-                    component.depends_on.iter().cloned().collect(),
-                )
-            })
+            .map(|(name, depends_on)| ((*name).to_owned(), depends_on.iter().cloned().collect()))
             .collect();
     }
-    let direct: HashMap<&str, HashSet<&str>> = components
+    let direct: HashMap<&str, HashSet<&str>> = nodes
         .iter()
-        .map(|component| {
-            let dependencies: HashSet<&str> =
-                component.depends_on.iter().map(String::as_str).collect();
-            (component.name.as_str(), dependencies)
+        .map(|(name, depends_on)| {
+            let dependencies: HashSet<&str> = depends_on.iter().map(String::as_str).collect();
+            (*name, dependencies)
         })
         .collect();
-    let mut reachable_by_component = HashMap::with_capacity(components.len());
-    for component in components {
+    let mut reachable_by_node = HashMap::with_capacity(nodes.len());
+    for (name, _) in nodes {
         let mut reachable = HashSet::new();
         let mut queue = VecDeque::new();
-        queue.push_back(component.name.as_str());
+        queue.push_back(*name);
         while let Some(current) = queue.pop_front() {
             if let Some(dependencies) = direct.get(current) {
                 for &dependency in dependencies {
@@ -455,9 +595,9 @@ fn build_allowed_dependency_map(
                 }
             }
         }
-        reachable_by_component.insert(component.name.clone(), reachable);
+        reachable_by_node.insert((*name).to_owned(), reachable);
     }
-    reachable_by_component
+    reachable_by_node
 }
 
 fn normalize_external_package_name(raw: &str) -> String {

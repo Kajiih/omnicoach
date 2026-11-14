@@ -18,6 +18,8 @@ use std::collections::HashSet;
 
 const ARCHITECTURE_COMPONENT_MACRO: &str = "architecture_component";
 const DEFINE_ARCHITECTURE_MACRO: &str = "define_architecture";
+const MODULES_CLAUSE: &str = "modules";
+const OWNS_EXTERNAL_CLAUSE: &str = "owns_external";
 const SELF_PREFIX: &str = "self::";
 
 /// Visibility and name of a top-level external `mod <name>;` declaration in a Rust file.
@@ -65,15 +67,17 @@ pub struct VisibleUseDeclaration {
     pub reexports: Vec<(String, String)>,
 }
 
-/// Component entry extracted from a `define_architecture! { ... }` macro invocation.
+/// Component or recursive submodule entry extracted from a `define_architecture! { ... }` macro invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefinedComponentEntry {
-    /// Component variant identifier (e.g. `"CodeLintAst"`).
+    /// Component variant or submodule identifier (e.g. `"CodeLintAst"`, `"foundation"`).
     pub name: String,
-    /// Directly permitted dependency component names (`=> [Diagnostic]`).
+    /// Directly permitted dependency component or sibling submodule names (`=> [Diagnostic]`).
     pub depends_on: Vec<String>,
     /// External crates encapsulated by this component (`(owns_external: ["ra_ap_syntax"])`).
     pub owns_external: Vec<String>,
+    /// Optional intra-component submodule DAG (`(modules: { ... })`).
+    pub submodules: Vec<Self>,
 }
 
 /// Structural and dependency summary of the production code in a Rust source file,
@@ -229,7 +233,10 @@ fn summarize_rust_node(
         }
         if let Some(token_tree) = macro_call.token_tree() {
             if terminal_name == DEFINE_ARCHITECTURE_MACRO {
-                collect_defined_architecture(&token_tree, &mut summary.defined_architecture);
+                collect_defined_architecture(
+                    token_tree.syntax(),
+                    &mut summary.defined_architecture,
+                );
             } else if token_tree.syntax().text().contains_char(':') {
                 let statement_text = item_line_and_text(file, node).text;
                 collect_token_tree_paths(
@@ -339,7 +346,7 @@ fn summarize_top_level_items(
                         && let Some(token_tree) = macro_call.token_tree()
                     {
                         collect_defined_architecture(
-                            &token_tree,
+                            token_tree.syntax(),
                             &mut summary.defined_architecture,
                         );
                     }
@@ -608,45 +615,69 @@ fn item_line_and_text(file: &ParsedFile, node: &SyntaxNode) -> ItemDeclaration {
     ItemDeclaration { line, span, text }
 }
 
-fn collect_defined_architecture(token_tree: &ast::TokenTree, out: &mut Vec<DefinedComponentEntry>) {
+fn collect_defined_architecture(node: &SyntaxNode, out: &mut Vec<DefinedComponentEntry>) {
     let mut last_ident: Option<String> = None;
-    for element in token_tree.syntax().children_with_tokens() {
+    for element in node.children_with_tokens() {
         match element {
             SyntaxElement::Token(token) => match token.kind() {
                 SyntaxKind::IDENT => last_ident = Some(token.text().to_string()),
                 SyntaxKind::POUND => last_ident = None,
                 _ => {}
             },
-            SyntaxElement::Node(node) if node.kind() == SyntaxKind::TOKEN_TREE => {
-                let first_kind = node.first_token().map(|tok| tok.kind());
+            SyntaxElement::Node(child) if child.kind() == SyntaxKind::TOKEN_TREE => {
+                let first_kind = child.first_token().map(|tok| tok.kind());
                 if first_kind == Some(SyntaxKind::L_BRACK)
                     && let Some(name) = last_ident.take()
                 {
-                    let depends_on = node
-                        .children_with_tokens()
-                        .filter_map(SyntaxElement::into_token)
-                        .filter(|tok| tok.kind() == SyntaxKind::IDENT)
-                        .map(|tok| tok.text().to_string())
-                        .collect();
                     out.push(DefinedComponentEntry {
                         name,
-                        depends_on,
+                        depends_on: extract_ident_list(&child),
                         owns_external: Vec::new(),
+                        submodules: Vec::new(),
                     });
                 } else if first_kind == Some(SyntaxKind::L_PAREN)
-                    && node
-                        .descendants_with_tokens()
-                        .filter_map(SyntaxElement::into_token)
-                        .find(|tok| tok.kind() == SyntaxKind::IDENT)
-                        .is_some_and(|tok| tok.text() == "owns_external")
                     && let Some(last_entry) = out.last_mut()
                 {
-                    last_entry.owns_external = extract_string_literals_in_subtree(&node);
+                    match first_ident_in_node(&child).as_deref() {
+                        Some(OWNS_EXTERNAL_CLAUSE) => {
+                            last_entry.owns_external = extract_string_literals_in_subtree(&child);
+                        }
+                        Some(MODULES_CLAUSE) => {
+                            if let Some(curly) =
+                                child_token_tree_with_delimiter(&child, SyntaxKind::L_CURLY)
+                            {
+                                collect_defined_architecture(&curly, &mut last_entry.submodules);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             SyntaxElement::Node(_) => {}
         }
     }
+}
+
+fn extract_ident_list(node: &SyntaxNode) -> Vec<String> {
+    node.children_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .filter(|tok| tok.kind() == SyntaxKind::IDENT)
+        .map(|tok| tok.text().to_string())
+        .collect()
+}
+
+fn first_ident_in_node(node: &SyntaxNode) -> Option<String> {
+    node.children_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+        .find(|tok| tok.kind() == SyntaxKind::IDENT)
+        .map(|tok| tok.text().to_string())
+}
+
+fn child_token_tree_with_delimiter(node: &SyntaxNode, delimiter: SyntaxKind) -> Option<SyntaxNode> {
+    node.children().find(|child| {
+        child.kind() == SyntaxKind::TOKEN_TREE
+            && child.first_token().map(|tok| tok.kind()) == Some(delimiter)
+    })
 }
 
 fn extract_string_literals_in_subtree(node: &SyntaxNode) -> Vec<String> {
@@ -943,6 +974,59 @@ mod tests {
                 "crate::core::Builder",
                 "crate::core::Config::parse",
             ]
+        );
+    }
+
+    #[test]
+    fn test_summarize_rust_module_header_extracts_nested_submodules_in_define_architecture() {
+        let source = indoc::indoc! {r#"
+            define_architecture! {
+                CodeLintProject => [CodeLintAst] (owns_external: ["ignore"]) (modules: {
+                    foundation => [] (modules: {
+                        source => [],
+                        config => [source],
+                    }),
+                    context => [foundation],
+                }),
+            }
+        "#};
+        let file = ParsedFile::rust(source);
+        let summary = summarize_rust_module_header(&file);
+
+        assert_eq!(
+            summary.defined_architecture,
+            vec![DefinedComponentEntry {
+                name: "CodeLintProject".to_string(),
+                depends_on: vec!["CodeLintAst".to_string()],
+                owns_external: vec!["ignore".to_string()],
+                submodules: vec![
+                    DefinedComponentEntry {
+                        name: "foundation".to_string(),
+                        depends_on: Vec::new(),
+                        owns_external: Vec::new(),
+                        submodules: vec![
+                            DefinedComponentEntry {
+                                name: "source".to_string(),
+                                depends_on: Vec::new(),
+                                owns_external: Vec::new(),
+                                submodules: Vec::new(),
+                            },
+                            DefinedComponentEntry {
+                                name: "config".to_string(),
+                                depends_on: vec!["source".to_string()],
+                                owns_external: Vec::new(),
+                                submodules: Vec::new(),
+                            },
+                        ],
+                    },
+                    DefinedComponentEntry {
+                        name: "context".to_string(),
+                        depends_on: vec!["foundation".to_string()],
+                        owns_external: Vec::new(),
+                        submodules: Vec::new(),
+                    },
+                ],
+            }]
         );
     }
 }

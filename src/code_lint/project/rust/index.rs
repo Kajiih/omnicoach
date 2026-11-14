@@ -1,9 +1,9 @@
 //! Memoized Rust module header index and re-export resolution (`CodeLintProjectRust`).
 
 use super::architecture::{
-    RUST_ARCHITECTURE_MODULE, SiblingIsolationRule, architecture_config_from_rust_headers,
-    build_rust_sibling_isolation_rules, evaluate_rust_file_architecture,
-    evaluate_stray_rust_component_markers,
+    MAX_REEXPORT_HOPS, RUST_ARCHITECTURE_MODULE, SiblingIsolationRule,
+    architecture_config_from_rust_headers, build_rust_sibling_isolation_rules,
+    evaluate_rust_file_architecture, evaluate_stray_rust_component_markers,
 };
 use super::layout::RustLayout;
 use super::paths::{LIB_CRATE_ROOT, resolve_rust_reference_path};
@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 const RUST_EXTENSION: &str = "rs";
-const MAX_REEXPORT_HOPS: usize = 8;
 const ARCHITECTURE_COMPONENT_CALL_PREFIX: &str = "architecture_component!";
 const DEFINE_ARCHITECTURE_CALL_PREFIX: &str = "define_architecture!";
 
@@ -125,7 +124,14 @@ impl<'s> RustIndex<'s> {
                         self.summary(root)
                     })
                 });
-                evaluate_rust_file_architecture(file, path, &self.layout, resolved, sibling_rules)
+                evaluate_rust_file_architecture(
+                    file,
+                    path,
+                    &self.layout,
+                    resolved,
+                    sibling_rules,
+                    |module, symbol| self.resolve_reexport(module, symbol),
+                )
             },
         )
     }

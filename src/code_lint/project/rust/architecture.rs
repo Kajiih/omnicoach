@@ -9,11 +9,12 @@ use super::paths::{
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::rust::{DefinedComponentEntry, RustFileSummary, summarize_rust_file};
 use crate::code_lint::project::foundation::{
-    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureSpec, ComponentSpec,
-    CrossComponentRelativePathFinding, ExportPattern, FileArchitectureFindings,
+    ArchitectureComponentConfig, ArchitectureConfig, ArchitectureSpec, ArchitectureSubmoduleConfig,
+    ComponentSpec, CrossComponentRelativePathFinding, ExportPattern, FileArchitectureFindings,
     InvalidArchitectureComponentFinding, InvalidArchitectureComponentKind,
     PrivateComponentImportFinding, ReexportedPublicItemFinding, SiblingModuleDependencyFinding,
-    UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding, deduplicate_findings,
+    SubmoduleSpec, UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding,
+    deduplicate_findings,
 };
 use crate::diagnostic::SourceSpan;
 use std::collections::{BTreeMap, HashSet};
@@ -23,6 +24,9 @@ use std::sync::Arc;
 /// Canonical Rust module name (`src/architecture.rs` or `src/architecture/mod.rs`) where
 /// `define_architecture!` is recognized.
 pub(super) const RUST_ARCHITECTURE_MODULE: &str = "architecture";
+
+/// Maximum number of `pub use` re-export hops resolved across module headers.
+pub(super) const MAX_REEXPORT_HOPS: usize = 8;
 
 const RUST_MODULE_SEPARATOR: &str = "::";
 
@@ -42,6 +46,7 @@ pub(super) fn evaluate_rust_file_architecture(
     layout: &RustLayout,
     spec: &ArchitectureSpec,
     sibling_rules: &[SiblingIsolationRule],
+    resolve_reexport: impl Fn(&str, &str) -> Option<String>,
 ) -> FileArchitectureFindings {
     let Some(module_path) = layout.module_of_path(path) else {
         return FileArchitectureFindings::default();
@@ -56,13 +61,14 @@ pub(super) fn evaluate_rust_file_architecture(
         return findings;
     }
 
+    let enclosing = resolve_inherited_component_with_root(&module_path, spec.component_roots());
     let has_invalid_macro = check_rust_invalid_component_markers(
         &module_path,
         &summary,
         spec,
         &mut findings.invalid_architecture_components,
     );
-    if !(spec.from_macro_declarations && has_invalid_macro) {
+    if !(spec.from_macro_declarations && has_invalid_macro && enclosing.is_none()) {
         check_rust_file_coverage_and_routers(
             file,
             &module_path,
@@ -71,8 +77,6 @@ pub(super) fn evaluate_rust_file_architecture(
             &mut findings.unmapped_architecture_modules,
         );
     }
-
-    let enclosing = resolve_inherited_component_with_root(&module_path, spec.component_roots());
 
     for reference in &summary.referenced_paths {
         let resolved = resolve_rust_reference_path(
@@ -131,9 +135,14 @@ pub(super) fn evaluate_rust_file_architecture(
             );
         }
 
+        let sibling_target_path = resolve_intra_component_reexports(
+            &resolved.canonical_path,
+            enclosing.as_ref().map(|inherited| inherited.root_module),
+            &resolve_reexport,
+        );
         check_rust_sibling_isolation(
             &module_path,
-            &resolved.canonical_path,
+            &sibling_target_path,
             reference.span,
             sibling_rules,
             &mut findings.sibling_module_dependencies,
@@ -227,6 +236,7 @@ pub(super) fn architecture_config_from_rust_headers(
                 isolate_children: true,
                 owns_external: entry.owns_external.clone(),
                 public_exports: None,
+                submodules: submodule_configs_from_defined(&entry.submodules),
             }
         })
         .collect();
@@ -240,8 +250,22 @@ pub(super) fn architecture_config_from_rust_headers(
     }
 }
 
-/// Builds Rust sibling-isolation rules across multi-root components and public `pub mod` children
-/// of component roots.
+fn submodule_configs_from_defined(
+    entries: &[DefinedComponentEntry],
+) -> Vec<ArchitectureSubmoduleConfig> {
+    entries
+        .iter()
+        .map(|entry| ArchitectureSubmoduleConfig {
+            name: entry.name.clone(),
+            depends_on: entry.depends_on.clone(),
+            submodules: submodule_configs_from_defined(&entry.submodules),
+        })
+        .collect()
+}
+
+/// Builds Rust sibling-isolation rules across multi-root components, declared intra-component
+/// `submodules` DAGs (including private `mod` children at all depths), and public `pub mod`
+/// children of component roots without an explicit `submodules` DAG.
 #[must_use]
 pub(super) fn build_rust_sibling_isolation_rules(
     components: &[ComponentSpec],
@@ -249,10 +273,10 @@ pub(super) fn build_rust_sibling_isolation_rules(
 ) -> Vec<SiblingIsolationRule> {
     let mut rules = Vec::new();
     for component in components {
-        if !component.isolate_children {
+        if !component.isolate_children && component.submodules.is_empty() {
             continue;
         }
-        if component.roots.len() > 1 {
+        if component.isolate_children && component.roots.len() > 1 {
             for root in &component.roots {
                 let forbidden_siblings: Vec<String> = component
                     .roots
@@ -268,32 +292,71 @@ pub(super) fn build_rust_sibling_isolation_rules(
             }
         }
         for root in &component.roots {
-            let Some(root_summary) = summary_of(root) else {
-                continue;
-            };
-            let direct_children: Vec<String> = root_summary
-                .external_mods
-                .iter()
-                .filter(|declaration| !declaration.is_private)
-                .map(|declaration| format!("{root}::{}", declaration.name))
-                .collect();
-            if direct_children.len() > 1 {
-                for child in &direct_children {
-                    let forbidden_siblings: Vec<String> = direct_children
-                        .iter()
-                        .filter(|other| *other != child)
-                        .cloned()
-                        .collect();
-                    rules.push(SiblingIsolationRule {
-                        component_name: component.name.clone(),
-                        subject_prefix: child.clone(),
-                        forbidden_siblings,
-                    });
+            if !component.submodules.is_empty() {
+                append_declared_submodule_isolation_rules(
+                    &component.name,
+                    root,
+                    &component.submodules,
+                    &mut rules,
+                );
+            } else if let Some(root_summary) = summary_of(root) {
+                let direct_children: Vec<String> = root_summary
+                    .external_mods
+                    .iter()
+                    .filter(|declaration| !declaration.is_private)
+                    .map(|declaration| format!("{root}::{}", declaration.name))
+                    .collect();
+                if direct_children.len() > 1 {
+                    for child in &direct_children {
+                        let forbidden_siblings: Vec<String> = direct_children
+                            .iter()
+                            .filter(|other| *other != child)
+                            .cloned()
+                            .collect();
+                        rules.push(SiblingIsolationRule {
+                            component_name: component.name.clone(),
+                            subject_prefix: child.clone(),
+                            forbidden_siblings,
+                        });
+                    }
                 }
             }
         }
     }
     rules
+}
+
+fn append_declared_submodule_isolation_rules(
+    component_name: &str,
+    parent_prefix: &str,
+    declared_submodules: &[SubmoduleSpec],
+    rules: &mut Vec<SiblingIsolationRule>,
+) {
+    for sub in declared_submodules {
+        let child_prefix = format!("{parent_prefix}::{}", sub.name);
+        let forbidden_siblings: Vec<String> = declared_submodules
+            .iter()
+            .filter(|other| {
+                other.name != sub.name && !sub.allows_sibling_dependency(other.name.as_str())
+            })
+            .map(|other| format!("{parent_prefix}::{}", other.name))
+            .collect();
+        if !forbidden_siblings.is_empty() {
+            rules.push(SiblingIsolationRule {
+                component_name: component_name.to_owned(),
+                subject_prefix: child_prefix.clone(),
+                forbidden_siblings,
+            });
+        }
+        if !sub.submodules.is_empty() {
+            append_declared_submodule_isolation_rules(
+                component_name,
+                &child_prefix,
+                &sub.submodules,
+                rules,
+            );
+        }
+    }
 }
 
 #[expect(
@@ -454,9 +517,28 @@ fn check_rust_file_coverage_and_routers(
     }
 
     let component_roots = spec.component_roots();
-    if component_roots.contains_key(module_path)
-        || resolve_inherited_component_with_root(module_path, component_roots).is_some()
-    {
+    if let Some(inherited) = resolve_inherited_component_with_root(module_path, component_roots) {
+        if let Some(comp_spec) = spec.component_spec(inherited.component) {
+            let rel_subpath = module_path
+                .strip_prefix(inherited.root_module)
+                .and_then(|rest| rest.strip_prefix(RUST_MODULE_SEPARATOR));
+            let declared_submodules =
+                comp_spec.declared_submodules_at(rel_subpath, RUST_MODULE_SEPARATOR);
+            if !declared_submodules.is_empty() {
+                for external_mod in &summary.external_mods {
+                    if !declared_submodules
+                        .iter()
+                        .any(|sub| sub.name == external_mod.name)
+                    {
+                        out.push(UnmappedArchitectureModuleFinding {
+                            span: external_mod.span,
+                            name: external_mod.name.clone(),
+                            module: module_path.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -512,6 +594,53 @@ fn check_rust_file_coverage_and_routers(
             name: module_path.to_owned(),
             module: module_path.to_owned(),
         });
+    }
+}
+
+fn resolve_intra_component_reexports(
+    canonical_path: &str,
+    root_module: Option<&str>,
+    resolve_reexport: &impl Fn(&str, &str) -> Option<String>,
+) -> String {
+    let Some(root) = root_module else {
+        return canonical_path.to_owned();
+    };
+    let mut current = canonical_path.to_owned();
+    for _ in 0..MAX_REEXPORT_HOPS {
+        let Some(next) = step_reexport_within_root(&current, root, resolve_reexport) else {
+            break;
+        };
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+fn step_reexport_within_root(
+    current: &str,
+    root_module: &str,
+    resolve_reexport: &impl Fn(&str, &str) -> Option<String>,
+) -> Option<String> {
+    let suffix = current
+        .strip_prefix(root_module)?
+        .strip_prefix(RUST_MODULE_SEPARATOR)?;
+    let mut module_prefix = root_module.to_owned();
+    let mut remaining = suffix;
+    loop {
+        let (symbol, tail) = remaining
+            .split_once(RUST_MODULE_SEPARATOR)
+            .map_or((remaining, None), |(head, rest)| (head, Some(rest)));
+        if let Some(target) = resolve_reexport(&module_prefix, symbol) {
+            return Some(match tail {
+                Some(rest) => format!("{target}::{rest}"),
+                None => target,
+            });
+        }
+        let rest = tail?;
+        module_prefix = format!("{module_prefix}::{symbol}");
+        remaining = rest;
     }
 }
 
@@ -623,8 +752,14 @@ mod tests {
         let spec = build_architecture_spec(&config, false).unwrap();
         let layout = RustLayout::discover(WorkspaceAnchor::new(root.to_path_buf(), None), &source);
         let parsed = ParsedFile::rust(app_source);
-        let findings =
-            evaluate_rust_file_architecture(&parsed, &root.join("src/app.rs"), &layout, &spec, &[]);
+        let findings = evaluate_rust_file_architecture(
+            &parsed,
+            &root.join("src/app.rs"),
+            &layout,
+            &spec,
+            &[],
+            |_, _| None,
+        );
 
         assert_eq!(findings.unowned_external_dependencies.len(), 1);
         assert_eq!(

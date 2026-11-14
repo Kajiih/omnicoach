@@ -33,10 +33,12 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
         doc: RuleDoc {
             summary: "Flags references between peer submodules inside an isolated architecture component.",
             what_it_does: indoc::indoc! {r"
-                When an architecture component enables `isolate-children = true` in `.omnicoach.toml`
-                (or is declared via `architecture_component!` in Rust), its direct child submodules
-                form independent vertical slices. This rule reports any import or path reference from
-                one direct child subtree of that component to a peer child subtree."},
+                When an architecture component enables `isolate-children = true` in `.omnicoach.toml`,
+                is declared via `architecture_component!` in Rust, or defines a recursive
+                `submodules` / `modules: { ... }` DAG, peer child subtrees are isolated unless a
+                directed dependency edge is declared between them. This rule reports any import or
+                path reference from one child subtree to a peer child subtree not in its allowed
+                submodule dependencies."},
             why_is_this_bad: indoc::indoc! {r"
                 Peer submodules under a feature or language dispatcher (such as `ast::python` and
                 `ast::rust`, or peer domain handlers) stay maintainable when each slice depends only
@@ -152,6 +154,34 @@ crate::test_utils::rule_test!(
                         from pkg.handlers import SHARED_LIMIT
                     ",
                 },
+                declared_submodule_dag_allows_forward_edges_at_all_depths => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "Project"
+                        roots = ["pkg.project"]
+                        submodules = [
+                            { name = "foundation", submodules = [
+                                { name = "source" },
+                                { name = "config", depends-on = ["source"] },
+                            ] },
+                            { name = "middle", depends-on = ["foundation"] },
+                            { name = "context", depends-on = ["middle"] },
+                        ]
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/project/__init__.py" => "",
+                    "pkg/project/foundation/__init__.py" => "",
+                    "pkg/project/foundation/source.py" => "DEFAULT_ROOT = '.'",
+                    "pkg/project/foundation/config.py" => "
+                        from pkg.project.foundation.source import DEFAULT_ROOT
+                    ",
+                    "pkg/project/middle.py" => "
+                        from pkg.project.foundation.config import DEFAULT_ROOT
+                    ",
+                    "pkg/project/context.py" => "
+                        from pkg.project.foundation.config import DEFAULT_ROOT
+                    ",
+                },
             ],
             fail: [
                 imports_peer_submodule => {
@@ -182,6 +212,43 @@ crate::test_utils::rule_test!(
                         from pkg.handlers.billing import charge
                     ",
                 } => ("pkg/handlers/orders.py", "from pkg.handlers.billing import charge"),
+                declared_submodule_dag_rejects_reverse_edge_at_depth_two => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "Project"
+                        roots = ["pkg.project"]
+                        submodules = [
+                            { name = "foundation", submodules = [
+                                { name = "source" },
+                                { name = "config", depends-on = ["source"] },
+                            ] },
+                        ]
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/project/__init__.py" => "",
+                    "pkg/project/foundation/__init__.py" => "",
+                    "pkg/project/foundation/config.py" => "CONFIG_NAME = '.omnicoach.toml'",
+                    "pkg/project/foundation/source.py" => "
+                        from pkg.project.foundation.config import CONFIG_NAME
+                    ",
+                } => ("pkg/project/foundation/source.py", "from pkg.project.foundation.config import CONFIG_NAME"),
+                declared_submodule_dag_rejects_facade_reexport_laundering => {
+                    ".omnicoach.toml" => r#"
+                        [[architecture.components]]
+                        name = "Project"
+                        roots = ["pkg.project"]
+                        submodules = [
+                            { name = "foundation" },
+                            { name = "context", depends-on = ["foundation"] },
+                        ]
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/project/__init__.py" => "from pkg.project.context import ProjectContext",
+                    "pkg/project/context.py" => "class ProjectContext: pass",
+                    "pkg/project/foundation.py" => "
+                        from pkg.project import ProjectContext
+                    ",
+                } => ("pkg/project/foundation.py", "from pkg.project import ProjectContext"),
             ],
         },
         Rust => {
@@ -198,6 +265,43 @@ crate::test_utils::rule_test!(
                     "src/handlers/billing.rs" => "pub fn charge() {}",
                     "src/handlers/orders.rs" => "
                         use crate::handlers::shared;
+                    ",
+                },
+                declared_submodule_dag_allows_forward_edge_between_private_mods => {
+                    "src/lib.rs" => "
+                        mod architecture;
+                        pub mod project;
+                    ",
+                    "src/architecture.rs" => "
+                        define_architecture! {
+                            Project => [] (modules: {
+                                foundation => [] (modules: {
+                                    source => [],
+                                    config => [source],
+                                }),
+                                context => [foundation],
+                            }),
+                        }
+                    ",
+                    "src/project.rs" => "
+                        architecture_component!(Project);
+                        mod foundation;
+                        mod context;
+                        pub use self::context::ProjectContext;
+                    ",
+                    "src/project/foundation.rs" => "
+                        mod source;
+                        mod config;
+                        pub use self::config::ProjectConfig;
+                    ",
+                    "src/project/foundation/source.rs" => "pub struct FileSource;",
+                    "src/project/foundation/config.rs" => "
+                        use super::source::FileSource;
+                        pub struct ProjectConfig(pub FileSource);
+                    ",
+                    "src/project/context.rs" => "
+                        use super::foundation::ProjectConfig;
+                        pub struct ProjectContext(pub ProjectConfig);
                     ",
                 },
             ],
@@ -232,6 +336,53 @@ crate::test_utils::rule_test!(
                         }
                     ",
                 } => ("src/handlers/orders.rs", "super::billing::is_paid"),
+                declared_submodule_dag_rejects_reverse_edge_between_private_mods => {
+                    "src/lib.rs" => "
+                        mod architecture;
+                        pub mod project;
+                    ",
+                    "src/architecture.rs" => "
+                        define_architecture! {
+                            Project => [] (modules: {
+                                foundation => [],
+                                context => [foundation],
+                            }),
+                        }
+                    ",
+                    "src/project.rs" => "
+                        architecture_component!(Project);
+                        mod foundation;
+                        mod context;
+                    ",
+                    "src/project/context.rs" => "pub struct ProjectContext;",
+                    "src/project/foundation.rs" => "
+                        use super::context::ProjectContext;
+                    ",
+                } => ("src/project/foundation.rs", "use super::context::ProjectContext;"),
+                declared_submodule_dag_rejects_facade_reexport_laundering => {
+                    "src/lib.rs" => "
+                        mod architecture;
+                        pub mod project;
+                    ",
+                    "src/architecture.rs" => "
+                        define_architecture! {
+                            Project => [] (modules: {
+                                foundation => [],
+                                context => [foundation],
+                            }),
+                        }
+                    ",
+                    "src/project.rs" => "
+                        architecture_component!(Project);
+                        mod foundation;
+                        mod context;
+                        pub use self::context::ProjectContext;
+                    ",
+                    "src/project/context.rs" => "pub struct ProjectContext;",
+                    "src/project/foundation.rs" => "
+                        use crate::project::ProjectContext;
+                    ",
+                } => ("src/project/foundation.rs", "use crate::project::ProjectContext;"),
             ],
         },
     }

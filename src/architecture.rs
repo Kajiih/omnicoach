@@ -1,8 +1,8 @@
 //! Architectural component catalog and Directed Acyclic Graph (DAG) specification.
 //!
-//! Defines [`ArchitectureComponent`], [`ComponentDefinition`], and [`ARCHITECTURE_GRAPH`],
-//! providing compile-time validation for [`crate::architecture_component!`] declarations
-//! across the codebase and the canonical topology for `tests/architecture_conformance.rs`.
+//! Defines [`ArchitectureComponent`] and compile-time topological acyclicity assertions for
+//! [`crate::architecture_component!`] declarations and intra-component `modules` DAGs across
+//! the codebase.
 //!
 //! The `define_architecture!` block at the end of this file is the single list of components
 //! and their allowed dependencies; design rationale is in
@@ -25,25 +25,53 @@ architecture_component!(Architecture);
 
 use strum::{AsRefStr, Display, EnumString, VariantArray};
 
-/// Bounded specification of an architectural component, its direct dependencies, and the
-/// external crates it encapsulates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ComponentDefinition {
-    /// The target architectural component being defined.
-    pub component: ArchitectureComponent,
-    /// Directly permitted dependency components (transitive dependencies are computed automatically).
-    pub depends_on: &'static [ArchitectureComponent],
-    /// External third-party crates encapsulated by this component (`unowned-external-dependency`).
-    pub owns_external: &'static [&'static str],
+macro_rules! define_submodules {
+    ($(
+        $sub:ident => [ $( $sub_dep:ident ),* $(,)? ] $( (modules: { $($nested:tt)* }) )?
+    ),* $(,)?) => {
+        const _: () = {
+            struct _SubmoduleOrder {
+                $( $sub: usize, )*
+            }
+            let mut _index = 0usize;
+            let _order = _SubmoduleOrder {
+                $(
+                    $sub: {
+                        let current = _index;
+                        _index += 1;
+                        current
+                    },
+                )*
+            };
+            let _ = ( $( _order.$sub, )* );
+            $(
+                $(
+                    assert!(
+                        _order.$sub_dep < _order.$sub,
+                        concat!(
+                            "submodule `",
+                            stringify!($sub),
+                            "` cannot depend on sibling `",
+                            stringify!($sub_dep),
+                            "`: dependencies must be declared before their dependents in `modules: {{ ... }}` to guarantee acyclicity",
+                        ),
+                    );
+                )*
+                define_submodules!($( $($nested)* )?);
+            )*
+        };
+    };
 }
 
-/// Defines `pub enum ArchitectureComponent`, `pub const ARCHITECTURE_GRAPH`, and a compile-time
-/// `const` assertion requiring every dependency to be declared before its dependent (making the
-/// graph acyclic by construction).
+/// Defines `pub enum ArchitectureComponent` and compile-time `const` assertions requiring every
+/// component and submodule dependency to be declared before its dependent (making the graph
+/// acyclic by construction).
 macro_rules! define_architecture {
     ($(
         $(#[$meta:meta])*
-        $node:ident => [ $( $dep:ident ),* $(,)? ] $( (owns_external: [ $( $ext:literal ),* $(,)? ]) )?
+        $node:ident => [ $( $dep:ident ),* $(,)? ]
+            $( (owns_external: [ $( $ext:literal ),* $(,)? ]) )?
+            $( (modules: { $($mods:tt)* }) )?
     ),* $(,)?) => {
         /// Architectural components representing bounded functional units across the codebase.
         #[derive(
@@ -67,19 +95,9 @@ macro_rules! define_architecture {
             )*
         }
 
-        /// The canonical architectural Directed Acyclic Graph (DAG) specification.
-        pub const ARCHITECTURE_GRAPH: &[ComponentDefinition] = &[
-            $(
-                ComponentDefinition {
-                    component: ArchitectureComponent::$node,
-                    depends_on: &[ $( ArchitectureComponent::$dep ),* ],
-                    owns_external: &[ $( $( $ext ),* )? ],
-                },
-            )*
-        ];
-
         const _: () = {
             $(
+                let _ = ( $( $( $ext, )* )? );
                 $(
                     assert!(
                         (ArchitectureComponent::$dep as usize) < (ArchitectureComponent::$node as usize),
@@ -92,6 +110,7 @@ macro_rules! define_architecture {
                         ),
                     );
                 )*
+                define_submodules!($( $($mods)* )?);
             )*
         };
     };

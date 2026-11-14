@@ -40,8 +40,10 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 declares its component graph via `define_architecture!`), every production source
                 file must either belong to a declared component's module subtree or act as a pure
                 namespace router containing only child `mod` declarations (or an empty `__init__.py`
-                routing to declared child packages). Any unmapped file or non-routing item inside a
-                namespace router is flagged."},
+                routing to declared child packages). When a component or submodule scope declares an
+                explicit `submodules` / `modules: { ... }` DAG, every direct child submodule in that
+                scope must also be listed in that DAG. Any unmapped file, undeclared submodule, or
+                non-routing item inside a namespace router is flagged."},
             why_is_this_bad: indoc::indoc! {r"
                 Architectural dependency rules only govern modules mapped to a component. New files
                 or helper functions added outside every component root silently escape boundary
@@ -184,6 +186,28 @@ crate::test_utils::rule_test!(
                         def orphan_helper() -> int: return 1
                     ",
                 } => ("pkg/stray.py", "def orphan_helper() -> int: return 1"),
+                undeclared_submodule_under_component_with_submodules => {
+                    ".omnicoach.toml" => r#"
+                        [architecture]
+                        require-component-coverage = true
+
+                        [[architecture.components]]
+                        name = "Project"
+                        roots = ["pkg.project"]
+                        submodules = [
+                            { name = "foundation", submodules = [
+                                { name = "source" },
+                            ] },
+                        ]
+                    "#,
+                    "pkg/__init__.py" => "",
+                    "pkg/project/__init__.py" => "",
+                    "pkg/project/foundation/__init__.py" => "",
+                    "pkg/project/foundation/source.py" => "class FileSource: pass",
+                    "pkg/project/foundation/stray.py" => "
+                        def unmapped_submodule() -> int: return 1
+                    ",
+                } => ("pkg/project/foundation/stray.py", "def unmapped_submodule() -> int: return 1"),
             ],
         },
         Rust => {
@@ -281,6 +305,51 @@ crate::test_utils::rule_test!(
                     "src/domain.rs" => "pub struct Order;",
                     "src/orphan.rs" => "pub mod nothing;",
                 } => ("src/orphan.rs", "pub mod nothing;"),
+                undeclared_mod_in_component_with_modules_dag => {
+                    "src/lib.rs" => "
+                        mod architecture;
+                        pub mod project;
+                    ",
+                    "src/architecture.rs" => "
+                        define_architecture! {
+                            Project => [] (modules: {
+                                foundation => [],
+                            }),
+                        }
+                    ",
+                    "src/project.rs" => "
+                        architecture_component!(Project);
+                        mod foundation;
+                        mod undeclared_child;
+                    ",
+                    "src/project/foundation.rs" => "pub struct Config;",
+                    "src/project/undeclared_child.rs" => "pub struct Secret;",
+                } => ("src/project.rs", "mod undeclared_child;"),
+                undeclared_nested_mod_in_submodule_with_modules_dag => {
+                    "src/lib.rs" => "
+                        mod architecture;
+                        pub mod project;
+                    ",
+                    "src/architecture.rs" => "
+                        define_architecture! {
+                            Project => [] (modules: {
+                                foundation => [] (modules: {
+                                    source => [],
+                                }),
+                            }),
+                        }
+                    ",
+                    "src/project.rs" => "
+                        architecture_component!(Project);
+                        mod foundation;
+                    ",
+                    "src/project/foundation.rs" => "
+                        mod source;
+                        mod undeclared_leaf;
+                    ",
+                    "src/project/foundation/source.rs" => "pub struct FileSource;",
+                    "src/project/foundation/undeclared_leaf.rs" => "pub struct Secret;",
+                } => ("src/project/foundation.rs", "mod undeclared_leaf;"),
             ],
         },
     }

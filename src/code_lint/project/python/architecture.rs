@@ -9,9 +9,10 @@ use crate::code_lint::ast::python::{
     PythonImportReference, collect_python_import_references, summarize_python_file,
 };
 use crate::code_lint::project::foundation::{
-    ArchitectureSpec, CrossComponentRelativePathFinding, ExportPattern, FileArchitectureFindings,
-    FileSource, PrivateComponentImportFinding, ROOT_MODULE_TAG, SiblingModuleDependencyFinding,
-    UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding, deduplicate_findings,
+    ArchitectureSpec, ComponentSpec, CrossComponentRelativePathFinding, ExportPattern,
+    FileArchitectureFindings, FileSource, PrivateComponentImportFinding, ROOT_MODULE_TAG,
+    SiblingModuleDependencyFinding, UndeclaredComponentDependencyFinding,
+    UnmappedArchitectureModuleFinding, deduplicate_findings,
 };
 use crate::diagnostic::SourceSpan;
 use std::path::Path;
@@ -34,6 +35,7 @@ pub(super) fn evaluate_python_file_architecture(
     layout: &PythonLayout,
     source: &dyn FileSource,
     spec: &ArchitectureSpec,
+    resolve_reexport: impl Fn(&str, &str) -> Option<String>,
 ) -> FileArchitectureFindings {
     if spec.from_macro_declarations {
         return FileArchitectureFindings::default();
@@ -44,14 +46,24 @@ pub(super) fn evaluate_python_file_architecture(
     let mut findings = FileArchitectureFindings::default();
 
     let enclosing = resolve_python_component(&module_path, spec);
-    if spec.require_component_coverage && enclosing.is_none() {
-        collect_python_unmapped_findings(
-            file,
-            path,
-            &module_path,
-            spec,
-            &mut findings.unmapped_architecture_modules,
-        );
+    if spec.require_component_coverage {
+        let is_undeclared_submodule = enclosing.as_ref().is_some_and(|matched| {
+            spec.component_spec(matched.component_name)
+                .is_some_and(|comp_spec| {
+                    let root_base = python_root_base(matched.matched_root);
+                    let rel_subpath = relative_python_subpath(&module_path, root_base);
+                    !comp_spec.is_declared_submodule_path(rel_subpath, PYTHON_MODULE_SEPARATOR)
+                })
+        });
+        if enclosing.is_none() || is_undeclared_submodule {
+            collect_python_unmapped_findings(
+                file,
+                path,
+                &module_path,
+                spec,
+                &mut findings.unmapped_architecture_modules,
+            );
+        }
     }
 
     let is_package_init = is_python_package_init(path);
@@ -109,6 +121,7 @@ pub(super) fn evaluate_python_file_architecture(
                 &resolved,
                 import_ref.span,
                 spec,
+                &resolve_reexport,
                 &mut findings,
             );
         }
@@ -191,6 +204,7 @@ fn check_python_first_party_edge(
     resolved: &ResolvedPythonImport,
     span: SourceSpan,
     spec: &ArchitectureSpec,
+    resolve_reexport: &impl Fn(&str, &str) -> Option<String>,
     findings: &mut FileArchitectureFindings,
 ) {
     let Some(target_match) = resolve_python_component(&resolved.module_path, spec) else {
@@ -207,13 +221,27 @@ fn check_python_first_party_edge(
     };
 
     if from_match.component_name == target_match.component_name {
+        let reexported_target = resolved
+            .imported_member
+            .as_deref()
+            .filter(|member| *member != "*")
+            .and_then(|member| resolve_reexport(&resolved.module_path, member))
+            .and_then(|reexported_module| {
+                let matched = resolve_python_component(&reexported_module, spec)?;
+                (matched.component_name == from_match.component_name)
+                    .then_some((reexported_module, matched.matched_root))
+            });
+        let (sibling_target_module, sibling_target_root) = reexported_target.as_ref().map_or(
+            (resolved.module_path.as_str(), target_match.matched_root),
+            |(module, root)| (module.as_str(), *root),
+        );
         if let Some(comp_spec) = spec.component_spec(from_match.component_name)
-            && comp_spec.isolate_children
             && let Some(sibling_target) = python_sibling_violation(
                 module_path,
                 from_match.matched_root,
-                &resolved.module_path,
-                target_match.matched_root,
+                sibling_target_module,
+                sibling_target_root,
+                comp_spec,
             )
         {
             findings
@@ -273,14 +301,36 @@ fn python_sibling_violation(
     source_root: &str,
     target_module: &str,
     target_root: &str,
+    comp_spec: &ComponentSpec,
 ) -> Option<String> {
     let source_base = python_root_base(source_root);
     let target_base = python_root_base(target_root);
     if source_base != target_base {
+        if !comp_spec.isolate_children {
+            return None;
+        }
         if target_base == "*" || target_base == ROOT_MODULE_TAG {
             return (target_module != ROOT_MODULE_TAG).then(|| target_module.to_owned());
         }
         return Some(target_base.to_owned());
+    }
+    if !comp_spec.submodules.is_empty() {
+        let source_rel = relative_python_subpath(source_module, source_base)?;
+        let target_rel = relative_python_subpath(target_module, source_base)?;
+        let root_prefix = if source_base == "*" || source_base == ROOT_MODULE_TAG {
+            ""
+        } else {
+            source_base
+        };
+        return comp_spec.submodule_dag_violation(
+            source_rel,
+            target_rel,
+            root_prefix,
+            PYTHON_MODULE_SEPARATOR,
+        );
+    }
+    if !comp_spec.isolate_children {
+        return None;
     }
     let source_child = direct_child_in_python_root(source_module, source_root)?;
     let target_child = direct_child_in_python_root(target_module, target_root)?;
@@ -451,6 +501,19 @@ fn resolve_imported_members_on_base(
             )
         })
         .collect()
+}
+
+fn relative_python_subpath<'a>(module_path: &'a str, root_base: &str) -> Option<&'a str> {
+    if module_path == ROOT_MODULE_TAG {
+        return None;
+    }
+    if root_base == "*" || root_base == ROOT_MODULE_TAG {
+        return (!module_path.is_empty()).then_some(module_path);
+    }
+    let rest = module_path
+        .strip_prefix(root_base)?
+        .strip_prefix(PYTHON_MODULE_SEPARATOR)?;
+    (!rest.is_empty()).then_some(rest)
 }
 
 fn python_root_base(root: &str) -> &str {
@@ -663,6 +726,7 @@ mod tests {
             &layout,
             &source,
             &spec,
+            |_, _| None,
         );
 
         assert_eq!(
