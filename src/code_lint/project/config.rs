@@ -114,30 +114,11 @@ impl ArchitectureConfig {
     /// Returns [`ArchitectureConfigError`] on duplicate component names, forward/unknown
     /// `depends-on` references, or invalid `public-exports` glob syntax.
     pub fn validate(&self) -> Result<(), ArchitectureConfigError> {
-        let mut seen = HashSet::with_capacity(self.components.len());
+        validate_component_dag(&self.components)?;
         for component in &self.components {
-            for dependency in &component.depends_on {
-                if !seen.contains(dependency.as_str()) {
-                    return Err(ArchitectureConfigError::ForwardOrUnknownDependency {
-                        component: component.name.clone(),
-                        dependency: dependency.clone(),
-                    });
-                }
-            }
-            if !seen.insert(component.name.as_str()) {
-                return Err(ArchitectureConfigError::DuplicateComponent(
-                    component.name.clone(),
-                ));
-            }
             if let Some(ref patterns) = component.public_exports {
                 for pattern in patterns {
-                    if let Err(error) = compile_glob(pattern) {
-                        return Err(ArchitectureConfigError::InvalidPublicExportGlob {
-                            component: component.name.clone(),
-                            pattern: pattern.clone(),
-                            message: error.to_string(),
-                        });
-                    }
+                    compile_export_glob(&component.name, pattern)?;
                 }
             }
         }
@@ -328,6 +309,41 @@ pub fn compile_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
     globset::GlobBuilder::new(pattern)
         .literal_separator(false)
         .build()
+}
+
+pub(super) fn validate_component_dag(
+    components: &[ArchitectureComponentConfig],
+) -> Result<(), ArchitectureConfigError> {
+    let mut seen = HashSet::with_capacity(components.len());
+    for component in components {
+        for dependency in &component.depends_on {
+            if !seen.contains(dependency.as_str()) {
+                return Err(ArchitectureConfigError::ForwardOrUnknownDependency {
+                    component: component.name.clone(),
+                    dependency: dependency.clone(),
+                });
+            }
+        }
+        if !seen.insert(component.name.as_str()) {
+            return Err(ArchitectureConfigError::DuplicateComponent(
+                component.name.clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn compile_export_glob(
+    component: &str,
+    pattern: &str,
+) -> Result<globset::GlobMatcher, ArchitectureConfigError> {
+    compile_glob(pattern)
+        .map(|glob| glob.compile_matcher())
+        .map_err(|error| ArchitectureConfigError::InvalidPublicExportGlob {
+            component: component.to_owned(),
+            pattern: pattern.to_owned(),
+            message: error.to_string(),
+        })
 }
 
 #[derive(Deserialize, Default)]

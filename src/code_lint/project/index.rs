@@ -52,11 +52,11 @@ pub struct ResolvedClassAncestors {
 
 /// Inherited method docstring resolved in Python C3 MRO order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InheritedDocstringMatch {
+pub(super) struct InheritedDocstringMatch {
     /// Name of the ancestor class declaring the docstring.
-    pub ancestor_name: String,
+    pub(super) ancestor_name: String,
     /// Owned docstring text of the ancestor method.
-    pub docstring: OwnedDocstring,
+    pub(super) docstring: OwnedDocstring,
 }
 
 /// Summary of a `Protocol` imported into a Python module.
@@ -282,10 +282,18 @@ impl<'s> ProjectIndex<'s> {
         summary
     }
 
-    /// Seeds the memoized [`RustFileSummary`] for `module` from an already-computed summary.
-    pub(super) fn seed_rust_summary(&self, module: &str, summary: RustFileSummary) {
+    /// Seeds the memoized header slot for `module` (if unpopulated) and returns `summary` wrapped
+    /// in an [`Arc`] so callers retain full-body `referenced_paths` even when `rust_headers_map`
+    /// previously cached a header-only summary in the slot.
+    pub(super) fn seed_rust_summary(
+        &self,
+        module: &str,
+        summary: RustFileSummary,
+    ) -> Arc<RustFileSummary> {
+        let shared = Arc::new(summary);
         let slot = self.rust_slot(module);
-        let _ = slot.get_or_init(|| Some(Arc::new(summary)));
+        let _ = slot.get_or_init(|| Some(Arc::clone(&shared)));
+        shared
     }
 
     /// Returns the memoized [`PythonFileSummary`] for `module`, loading it on demand if needed.
@@ -801,6 +809,8 @@ impl<'s> ProjectIndex<'s> {
         if let Some(headers) = self.all_rust_headers.get() {
             return headers;
         }
+        // Compute outside `OnceLock::get_or_init` so Rayon work-stealing inside
+        // `collect_rust_headers` cannot re-enter and deadlock on `self.all_rust_headers`.
         let headers = self.collect_rust_headers();
         self.all_rust_headers.get_or_init(|| headers)
     }

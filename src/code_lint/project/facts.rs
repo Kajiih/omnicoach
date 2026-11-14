@@ -18,7 +18,7 @@ use super::paths::{
 };
 use super::source::{DiskFileSource, FileSource};
 use crate::code_lint::ast::python::collect_path_references;
-use crate::code_lint::ast::rust::{ExternalModDeclaration, summarize_rust_file};
+use crate::code_lint::ast::rust::{RustFileSummary, summarize_rust_file};
 use crate::code_lint::ast::{
     DeclarationScopeKind, IntraFileReference, ParsedFile, ScopeFacts,
     collect_intra_file_references, collect_scope_facts, enclosing_scope_symbol,
@@ -26,6 +26,7 @@ use crate::code_lint::ast::{
 use crate::diagnostic::Language;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const CARGO_TOML_NAME: &str = "Cargo.toml";
 
@@ -276,14 +277,15 @@ fn collect_rust_project_facts(
     if let Some(error) = index.architecture_error() {
         return Err(error.clone());
     }
-    let mut modules = Vec::new();
-    for entry in &entries {
+    let mut cross_module_refs = resolve_rust_cross_module_refs(&entries, index);
+    let mut modules = Vec::with_capacity(entries.len());
+    for entry in entries {
         let declared_component = spec.and_then(|resolved| {
             resolved.resolve_component_of_module(&entry.module_path, Language::Rust)
         });
         if declared_component.is_none()
-            && !entry.has_non_namespace_items
-            && !entry.has_macro_definitions
+            && entry.summary.non_namespace_items.is_empty()
+            && entry.summary.macro_definitions.is_empty()
             && (entry.is_crate_root || spec.is_some())
         {
             continue;
@@ -292,24 +294,30 @@ fn collect_rust_project_facts(
             || {
                 entry
                     .module_path
-                    .split("::")
-                    .next()
-                    .unwrap_or("root")
+                    .split_once("::")
+                    .map_or(entry.module_path.as_str(), |(head, _)| head)
                     .to_owned()
             },
             str::to_owned,
         );
         modules.push(ModuleFact {
-            module_path: entry.module_path.clone(),
-            path: entry.path.clone(),
+            module_path: entry.module_path,
+            path: entry.path,
             component,
-            scopes: entry.scopes.clone(),
-            intra_file_refs: entry.intra_file_refs.clone(),
+            scopes: entry.scopes,
+            intra_file_refs: entry.intra_file_refs,
         });
     }
 
+    let retained_module_paths: HashSet<&str> = modules
+        .iter()
+        .map(|module| module.module_path.as_str())
+        .collect();
+    cross_module_refs.retain(|reference| {
+        retained_module_paths.contains(reference.source_module.as_str())
+            && retained_module_paths.contains(reference.target_module.as_str())
+    });
     let finalized = finalize_components(spec, &modules, scope);
-    let cross_module_refs = resolve_rust_cross_module_refs(&entries, index);
     Ok(ProjectFacts {
         title: title.to_owned(),
         has_declared_architecture: finalized.has_declared_architecture,
@@ -323,10 +331,7 @@ struct RustModuleEntry {
     path: String,
     module_path: String,
     is_crate_root: bool,
-    external_mods: Vec<ExternalModDeclaration>,
-    has_non_namespace_items: bool,
-    has_macro_definitions: bool,
-    references: Vec<RawSymbolReference>,
+    summary: Arc<RustFileSummary>,
     scopes: Vec<ScopeFacts>,
     intra_file_refs: Vec<IntraFileReference>,
 }
@@ -353,30 +358,14 @@ fn parse_rust_module(
 ) -> RustModuleEntry {
     let is_crate_root = is_rust_crate_root(&module_path);
     let parsed = ParsedFile::rust(&file.source);
-    let summary = summarize_rust_file(&parsed);
-    index.seed_rust_summary(&module_path, summary.clone());
-    let external_mods = summary.external_mods;
-    let has_non_namespace_items = !summary.non_namespace_items.is_empty();
-    let has_macro_definitions = !summary.macro_definitions.is_empty();
+    let summary = index.seed_rust_summary(&module_path, summarize_rust_file(&parsed));
     let scopes = collect_scope_facts(&parsed);
     let intra_file_refs = collect_intra_file_references(&parsed, &scopes);
-    let references = summary
-        .referenced_paths
-        .into_iter()
-        .map(|reference| RawSymbolReference {
-            line: reference.line,
-            source_symbol: enclosing_scope_symbol(&scopes, reference.line),
-            raw_path: reference.raw_path,
-        })
-        .collect();
     RustModuleEntry {
         path: file.relative_path.clone(),
         module_path,
         is_crate_root,
-        external_mods,
-        has_non_namespace_items,
-        has_macro_definitions,
-        references,
+        summary,
         scopes,
         intra_file_refs,
     }
@@ -401,10 +390,10 @@ fn resolve_rust_cross_module_refs(
 
     let mut refs = Vec::new();
     for entry in entries {
-        for reference in &entry.references {
+        for reference in &entry.summary.referenced_paths {
             let resolved = resolve_rust_reference_path(
                 &entry.module_path,
-                &entry.external_mods,
+                &entry.summary.external_mods,
                 &reference.raw_path,
                 crate_name,
             );
@@ -416,7 +405,7 @@ fn resolve_rust_cross_module_refs(
             {
                 refs.push(CrossModuleRefFact {
                     source_module: entry.module_path.clone(),
-                    source_symbol: reference.source_symbol.clone(),
+                    source_symbol: enclosing_scope_symbol(&entry.scopes, reference.line),
                     target_module: target.module,
                     target_symbol: target.symbol,
                     line: reference.line,
@@ -444,12 +433,11 @@ fn collect_python_project_facts(
         .filter(|file| {
             file.lang == Language::Python
                 && !(scope == ProjectGraphScope::FullProject
-                    && spec.is_some()
                     && index
                         .layout()
                         .python_architecture_module_of_path(&file.full_path)
                         .is_none()
-                    && spec.is_none_or(|resolved| {
+                    && spec.is_some_and(|resolved| {
                         let fallback = index.layout().fallback_python_module_path(
                             &file.full_path,
                             &file.relative_path,
@@ -928,6 +916,7 @@ mod tests {
                 indoc::indoc! {r"
                     architecture_component!(Runner);
                     use crate::core::{Config, parse_input};
+                    use crate::router;
 
                     pub fn execute() -> Config {
                         parse_input()
@@ -944,16 +933,36 @@ mod tests {
         );
 
         assert_eq!(project.components.len(), 3);
-        assert!(project.cross_module_refs.iter().any(|reference| {
-            reference.source_module == "runner"
-                && reference.target_module == "core"
-                && reference.target_symbol.as_deref() == Some("parse_input")
-        }));
-        assert!(project.cross_module_refs.iter().any(|reference| {
-            reference.source_module == "runner"
-                && reference.target_module == "core::detail"
-                && reference.target_symbol.as_deref() == Some("Config")
-        }));
+        assert!(
+            project
+                .modules
+                .iter()
+                .all(|module| module.module_path != "lib" && module.module_path != "router")
+        );
+        assert_eq!(
+            cross_module_edges(&project),
+            vec![
+                ("core", None, "core::detail", Some("Config"), 3),
+                (
+                    "core",
+                    Some("parse_input"),
+                    "core::detail",
+                    Some("Config"),
+                    5
+                ),
+                (
+                    "core",
+                    Some("parse_input"),
+                    "core::detail",
+                    Some("Config"),
+                    6
+                ),
+                ("runner", None, "core", Some("parse_input"), 2),
+                ("runner", None, "core::detail", Some("Config"), 2),
+                ("runner", Some("execute"), "core", Some("parse_input"), 6),
+                ("runner", Some("execute"), "core::detail", Some("Config"), 5),
+            ]
+        );
     }
 
     #[test]
@@ -1048,11 +1057,13 @@ mod tests {
     #[test]
     fn python_project_facts_honor_declared_toml_architecture_and_non_transitive_mode() {
         let files = [
+            ("pkg/__init__.py", "from .core import low\n"),
             ("pkg/core.py", "def low() -> int:\n    return 1\n"),
             ("pkg/domain.py", "def compute() -> int:\n    return 1\n"),
             (
                 "pkg/api.py",
                 indoc::indoc! {"
+                    import pkg
                     from pkg.domain import compute
 
                     def serve() -> int:
@@ -1088,6 +1099,13 @@ mod tests {
         let project = collect_virtual_facts("sample_py", Language::Python, &files, &config);
 
         assert!(project.has_declared_architecture);
+        assert!(
+            project
+                .cross_module_refs
+                .iter()
+                .all(|reference| reference.source_module != "pkg"
+                    && reference.target_module != "pkg")
+        );
         assert_eq!(
             project.components,
             vec![
@@ -1573,5 +1591,23 @@ mod tests {
         discovered
             .collect_project_facts(title, lang)
             .expect("collect virtual project facts")
+    }
+
+    type CrossModuleEdge<'a> = (&'a str, Option<&'a str>, &'a str, Option<&'a str>, usize);
+
+    fn cross_module_edges(project: &ProjectFacts) -> Vec<CrossModuleEdge<'_>> {
+        project
+            .cross_module_refs
+            .iter()
+            .map(|reference| {
+                (
+                    reference.source_module.as_str(),
+                    reference.source_symbol.as_deref(),
+                    reference.target_module.as_str(),
+                    reference.target_symbol.as_deref(),
+                    reference.line,
+                )
+            })
+            .collect()
     }
 }

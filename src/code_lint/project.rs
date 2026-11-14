@@ -36,8 +36,7 @@ pub(in crate::code_lint) use self::facts::{
     discover_project_sources, resolve_effective_paths,
 };
 pub use self::index::{
-    ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, PythonClassId,
-    ResolvedClassAncestors,
+    ImportedProtocolSummary, ProjectIndex, PythonClassId, ResolvedClassAncestors,
 };
 pub use self::layout::ProjectLayout;
 pub use self::source::{DiskFileSource, FileSource, MemoryFileSource, OverlayFileSource};

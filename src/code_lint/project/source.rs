@@ -126,17 +126,6 @@ pub struct MemoryFileSource {
     directories: HashSet<PathBuf>,
 }
 
-impl Default for MemoryFileSource {
-    fn default() -> Self {
-        let root = lexical_normalize(Path::new(Self::VIRTUAL_ROOT));
-        Self {
-            directories: HashSet::from([root.clone()]),
-            root,
-            files: HashMap::new(),
-        }
-    }
-}
-
 impl MemoryFileSource {
     /// Canonical virtual root path for hermetic in-memory projects.
     pub const VIRTUAL_ROOT: &'static str = "/proj";
@@ -411,6 +400,36 @@ mod tests {
     }
 
     #[test]
+    fn overlay_file_source_checks_file_existence() {
+        let root = Path::new("/virtual/repo");
+        let base = MemoryFileSource::from_relative_files(root, &[("pkg/a.py", "A = 1")]);
+        let overlay = OverlayFileSource::new(
+            base,
+            HashMap::from([(root.join("pkg/sub/b.py"), "B = 3".to_owned())]),
+        );
+
+        assert!(overlay.is_file(Path::new("pkg/a.py")));
+        assert!(overlay.is_file(Path::new("pkg/sub/b.py")));
+        assert!(!overlay.is_file(Path::new("pkg/missing.py")));
+    }
+
+    #[test]
+    fn overlay_file_source_reads_overlay_only_directories() {
+        let root = Path::new("/virtual/repo");
+        let base = MemoryFileSource::from_relative_files(root, &[("pkg/a.py", "A = 1")]);
+        let overlay = OverlayFileSource::new(
+            base,
+            HashMap::from([(root.join("pkg/sub/b.py"), "B = 3".to_owned())]),
+        );
+
+        assert_eq!(
+            overlay.read_dir(Path::new("pkg/sub")).unwrap(),
+            vec![root.join("pkg/sub/b.py")]
+        );
+        assert!(overlay.read_dir(Path::new("pkg/nonexistent")).is_err());
+    }
+
+    #[test]
     fn walk_files_skips_ignored_directories_and_includes_overlays() {
         let root = Path::new("/virtual/repo");
         let base = MemoryFileSource::from_relative_files(
@@ -425,7 +444,15 @@ mod tests {
         );
         let overlay = OverlayFileSource::new(
             base,
-            HashMap::from([(PathBuf::from("pkg/sub/b.py"), "B = 3".to_owned())]),
+            HashMap::from([
+                (PathBuf::from("pkg/sub/b.py"), "B = 3".to_owned()),
+                (PathBuf::from("pkg/.hidden.py"), "H = 1".to_owned()),
+                (PathBuf::from(".jj/repo"), "ignored".to_owned()),
+                (
+                    PathBuf::from("target/debug/overlay.rs"),
+                    "ignored".to_owned(),
+                ),
+            ]),
         );
 
         assert_eq!(

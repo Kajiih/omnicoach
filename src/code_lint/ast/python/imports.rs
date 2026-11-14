@@ -19,22 +19,18 @@ pub struct PythonImportReference {
     /// Imported symbol names (`vec!["x", "y"]` for `from pkg.mod import x, y`, `vec!["*"]` for
     /// wildcard, empty `vec![]` for `import pkg.mod`).
     pub imported_names: Vec<String>,
-    /// Whether this import appears inside a `def` / `async def` body.
-    pub in_function: bool,
     /// Whether this import appears inside the true branch of an `if TYPE_CHECKING:` guard.
     pub in_type_checking: bool,
 }
 
 /// Collects all `import` and `from ... import ...` references across `file`, annotating each
-/// with its statement span, relative level, function scope flag, and `if TYPE_CHECKING:` flag.
+/// with its statement span, relative level, and `if TYPE_CHECKING:` flag.
 #[must_use]
 pub fn collect_python_import_references(file: &ParsedFile) -> Vec<PythonImportReference> {
     let Some(parsed) = file.py_module() else {
         return Vec::new();
     };
     let mut visitor = PythonImportVisitor {
-        _file: file,
-        function_depth: 0,
         type_checking_depth: 0,
         references: Vec::new(),
     };
@@ -72,14 +68,12 @@ pub(super) fn is_type_checking_guard(expr: &Expr) -> bool {
     }
 }
 
-struct PythonImportVisitor<'a> {
-    _file: &'a ParsedFile,
-    function_depth: usize,
+struct PythonImportVisitor {
     type_checking_depth: usize,
     references: Vec<PythonImportReference>,
 }
 
-impl PythonImportVisitor<'_> {
+impl PythonImportVisitor {
     fn visit_guarded_body(&mut self, is_type_checking: bool, body: &[Stmt]) {
         if is_type_checking {
             self.type_checking_depth += 1;
@@ -91,7 +85,7 @@ impl PythonImportVisitor<'_> {
     }
 }
 
-impl StatementVisitor<'_> for PythonImportVisitor<'_> {
+impl StatementVisitor<'_> for PythonImportVisitor {
     fn visit_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Import(import) => {
@@ -102,7 +96,6 @@ impl StatementVisitor<'_> for PythonImportVisitor<'_> {
                         level: 0,
                         module: Some(alias.name.to_string()),
                         imported_names: Vec::new(),
-                        in_function: self.function_depth > 0,
                         in_type_checking: self.type_checking_depth > 0,
                     });
                 }
@@ -120,14 +113,8 @@ impl StatementVisitor<'_> for PythonImportVisitor<'_> {
                     level: import_from.level,
                     module,
                     imported_names,
-                    in_function: self.function_depth > 0,
                     in_type_checking: self.type_checking_depth > 0,
                 });
-            }
-            Stmt::FunctionDef(_) => {
-                self.function_depth += 1;
-                walk_stmt(self, stmt);
-                self.function_depth -= 1;
             }
             Stmt::If(if_statement) => {
                 self.visit_guarded_body(
@@ -229,8 +216,8 @@ mod tests {
     use crate::diagnostic::Language;
 
     #[test]
-    fn collect_python_import_references_tracks_function_and_type_checking_scopes() {
-        type ImportEntry<'a> = (&'a Option<String>, &'a [String], u32, bool, bool);
+    fn collect_python_import_references_tracks_nested_and_type_checking_scopes() {
+        type ImportEntry<'a> = (&'a Option<String>, &'a [String], u32, bool);
         let source = indoc::indoc! {"
             from typing import TYPE_CHECKING
             import pkg.core
@@ -252,7 +239,6 @@ mod tests {
                     &reference.module,
                     reference.imported_names.as_slice(),
                     reference.level,
-                    reference.in_function,
                     reference.in_type_checking,
                 )
             })
@@ -264,29 +250,25 @@ mod tests {
                     &Some("typing".to_string()),
                     &["TYPE_CHECKING".to_string()][..],
                     0,
-                    false,
                     false
                 ),
-                (&Some("pkg.core".to_string()), &[][..], 0, false, false),
+                (&Some("pkg.core".to_string()), &[][..], 0, false),
                 (
                     &Some("models".to_string()),
                     &["User".to_string()][..],
                     2,
-                    false,
                     true
                 ),
                 (
                     &Some("fallback".to_string()),
                     &["Guest".to_string()][..],
                     1,
-                    false,
                     false
                 ),
                 (
                     &Some("lazy".to_string()),
                     &["Loader".to_string()][..],
                     1,
-                    true,
                     false
                 ),
             ]

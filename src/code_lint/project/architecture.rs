@@ -3,7 +3,7 @@
 
 use super::config::{
     ArchitectureComponentConfig, ArchitectureConfig, ArchitectureConfigError, ProjectTomlError,
-    compile_glob,
+    compile_export_glob, validate_component_dag,
 };
 use super::layout::ProjectLayout;
 use super::paths::{
@@ -65,18 +65,10 @@ impl From<ProjectTomlError> for ArchitectureError {
 }
 
 /// Validated, language-agnostic architectural specification for a project.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent boolean policy switches from [architecture] config"
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchitectureSpec {
-    /// Whether `depends_on` reachability is transitive.
-    pub transitive_dependencies: bool,
     /// Whether unmapped production files are flagged.
     pub require_component_coverage: bool,
-    /// Whether Python function-local imports are checked (default `true`).
-    pub check_local_imports: bool,
     /// Whether Python imports inside `if TYPE_CHECKING:` blocks are exempt.
     pub ignore_type_checking_imports: bool,
     /// True when component roots were synthesized from `define_architecture!` and
@@ -88,7 +80,6 @@ pub struct ArchitectureSpec {
     component_roots: BTreeMap<String, String>,
     allowed_dependencies: HashMap<String, HashSet<String>>,
     component_by_name: HashMap<String, usize>,
-    known_components: HashSet<String>,
     rust_sibling_rules: Vec<SiblingIsolationRule>,
 }
 
@@ -112,31 +103,25 @@ pub struct ComponentSpec {
 /// Export allowlist glob pattern on a component root.
 #[derive(Debug, Clone)]
 pub struct ExportPattern {
-    /// Configured glob symbol pattern (`build_*`, `main`).
-    pub pattern: String,
     matcher: globset::GlobMatcher,
 }
 
 impl PartialEq for ExportPattern {
     fn eq(&self, other: &Self) -> bool {
-        self.pattern == other.pattern
+        self.matcher.glob().glob() == other.matcher.glob().glob()
     }
 }
 
 impl Eq for ExportPattern {}
 
 impl ExportPattern {
-    fn new(raw: &str) -> Result<Self, globset::Error> {
-        let matcher = compile_glob(raw)?.compile_matcher();
-        Ok(Self {
-            pattern: raw.to_owned(),
-            matcher,
-        })
+    const fn from_matcher(matcher: globset::GlobMatcher) -> Self {
+        Self { matcher }
     }
 
     #[must_use]
     fn matches(&self, candidate: &str) -> bool {
-        self.pattern == candidate || self.matcher.is_match(candidate)
+        self.matcher.is_match(candidate)
     }
 }
 
@@ -722,7 +707,7 @@ fn check_rust_invalid_component_markers(
         }
         first_top_level_component = Some(component_name.as_str());
 
-        if !spec.known_components.contains(component_name.as_str()) {
+        if !spec.component_by_name.contains_key(component_name.as_str()) {
             out.push(InvalidArchitectureComponentFinding {
                 span: *span,
                 component: component_name.clone(),
@@ -876,21 +861,20 @@ fn evaluate_python_file_architecture(
 
     let is_package_init = is_python_package_init(path);
     for import_ref in collect_python_import_references(file) {
-        if (import_ref.in_function && !spec.check_local_imports)
-            || (import_ref.in_type_checking && spec.ignore_type_checking_imports)
-        {
+        if import_ref.in_type_checking && spec.ignore_type_checking_imports {
             continue;
         }
-        for resolved in resolve_python_import_targets_with_layout(
+        let resolved_imports = resolve_python_import_targets_with_layout(
             &module_path,
             is_package_init,
             &import_ref,
             layout,
             source,
-        ) {
+        );
+        for resolved in resolved_imports.targets {
             if let Some(ref enclosing_match) = enclosing
-                && import_ref.level > 0
-                && !resolved.stays_within_root(enclosing_match.matched_root)
+                && let Some(ref ancestor) = resolved_imports.shallowest_relative_ancestor
+                && !resolved.stays_within_root(ancestor, enclosing_match.matched_root)
             {
                 let dependency = if resolved.module_path == ROOT_MODULE_TAG {
                     resolved.full_target_path.clone()
@@ -964,26 +948,25 @@ struct MatchedPythonComponent<'a> {
 }
 
 #[derive(Debug, Clone)]
+struct ResolvedPythonImports {
+    targets: Vec<ResolvedPythonImport>,
+    shallowest_relative_ancestor: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct ResolvedPythonImport {
     module_path: String,
     full_target_path: String,
     imported_member: Option<String>,
-    shallowest_relative_ancestor: Option<String>,
 }
 
 impl ResolvedPythonImport {
-    fn stays_within_root(&self, component_root: &str) -> bool {
+    fn stays_within_root(&self, ancestor: &str, component_root: &str) -> bool {
         if component_root == ROOT_MODULE_TAG || component_root == "*" {
-            return self.shallowest_relative_ancestor.is_some();
+            return true;
         }
-        let Some(ancestor) = self.shallowest_relative_ancestor.as_deref() else {
-            return false;
-        };
         let target_in_root = python_root_specificity(&self.module_path, component_root).is_some();
-        let floor_base = component_root
-            .strip_suffix(".**")
-            .or_else(|| component_root.strip_suffix(".*"))
-            .unwrap_or(component_root);
+        let floor_base = python_root_base(component_root);
         let floor_in_root = python_root_specificity(ancestor, component_root).is_some()
             || (!component_root.ends_with(".*")
                 && is_in_python_module_subtree(ancestor, floor_base));
@@ -1159,24 +1142,32 @@ fn resolve_python_import_targets_with_layout(
     import_ref: &PythonImportReference,
     layout: &ProjectLayout,
     source: &dyn FileSource,
-) -> Vec<ResolvedPythonImport> {
+) -> ResolvedPythonImports {
     if import_ref.level == 0 {
         let Some(base_module) = import_ref.module.as_deref() else {
-            return Vec::new();
+            return ResolvedPythonImports {
+                targets: Vec::new(),
+                shallowest_relative_ancestor: None,
+            };
         };
-        return resolve_imported_members_on_base(
-            base_module.to_owned(),
-            &import_ref.imported_names,
-            Some(base_module.to_owned()),
-            layout,
-            source,
-        );
+        return ResolvedPythonImports {
+            targets: resolve_imported_members_on_base(
+                base_module.to_owned(),
+                &import_ref.imported_names,
+                layout,
+                source,
+            ),
+            shallowest_relative_ancestor: None,
+        };
     }
 
     let Some(resolved_package) =
         resolve_relative_python_package(enclosing_module, is_package_init, import_ref.level)
     else {
-        return Vec::new();
+        return ResolvedPythonImports {
+            targets: Vec::new(),
+            shallowest_relative_ancestor: None,
+        };
     };
     let shallowest = Some(resolved_package.shallowest_ancestor);
     let Some(base_module) = (match (
@@ -1188,7 +1179,7 @@ fn resolve_python_import_targets_with_layout(
         (None, Some(suffix)) => Some(suffix.to_owned()),
         (None, None) => None,
     }) else {
-        return import_ref
+        let targets = import_ref
             .imported_names
             .iter()
             .map(|member| {
@@ -1199,33 +1190,36 @@ fn resolve_python_import_targets_with_layout(
                         module_path: member.clone(),
                         full_target_path: member.clone(),
                         imported_member: None,
-                        shallowest_relative_ancestor: shallowest.clone(),
                     }
                 } else {
                     ResolvedPythonImport {
                         module_path: ROOT_MODULE_TAG.to_owned(),
                         full_target_path: member.clone(),
                         imported_member: Some(member.clone()),
-                        shallowest_relative_ancestor: shallowest.clone(),
                     }
                 }
             })
             .collect();
+        return ResolvedPythonImports {
+            targets,
+            shallowest_relative_ancestor: shallowest,
+        };
     };
 
-    resolve_imported_members_on_base(
-        base_module,
-        &import_ref.imported_names,
-        shallowest,
-        layout,
-        source,
-    )
+    ResolvedPythonImports {
+        targets: resolve_imported_members_on_base(
+            base_module,
+            &import_ref.imported_names,
+            layout,
+            source,
+        ),
+        shallowest_relative_ancestor: shallowest,
+    }
 }
 
 fn resolve_imported_members_on_base(
     base_module: String,
     imported_names: &[String],
-    shallowest_relative_ancestor: Option<String>,
     layout: &ProjectLayout,
     source: &dyn FileSource,
 ) -> Vec<ResolvedPythonImport> {
@@ -1233,7 +1227,6 @@ fn resolve_imported_members_on_base(
         return vec![resolve_imported_member_on_base(
             base_module,
             None,
-            shallowest_relative_ancestor,
             layout,
             source,
         )];
@@ -1244,7 +1237,6 @@ fn resolve_imported_members_on_base(
             resolve_imported_member_on_base(
                 base_module.clone(),
                 Some(imported_name.as_str()),
-                shallowest_relative_ancestor.clone(),
                 layout,
                 source,
             )
@@ -1255,7 +1247,6 @@ fn resolve_imported_members_on_base(
 fn resolve_imported_member_on_base(
     base_module: String,
     imported_name: Option<&str>,
-    shallowest_relative_ancestor: Option<String>,
     layout: &ProjectLayout,
     source: &dyn FileSource,
 ) -> ResolvedPythonImport {
@@ -1264,7 +1255,6 @@ fn resolve_imported_member_on_base(
             module_path: base_module.clone(),
             full_target_path: base_module,
             imported_member: Some("*".to_owned()),
-            shallowest_relative_ancestor,
         };
     }
     if let Some(member) = imported_name {
@@ -1278,21 +1268,18 @@ fn resolve_imported_member_on_base(
                 module_path: candidate_submodule.clone(),
                 full_target_path: candidate_submodule,
                 imported_member: None,
-                shallowest_relative_ancestor,
             };
         }
         return ResolvedPythonImport {
             module_path: base_module,
             full_target_path: candidate_submodule,
             imported_member: Some(member.to_owned()),
-            shallowest_relative_ancestor,
         };
     }
     ResolvedPythonImport {
         module_path: base_module.clone(),
         full_target_path: base_module,
         imported_member: None,
-        shallowest_relative_ancestor,
     }
 }
 
@@ -1379,7 +1366,7 @@ fn collect_python_unmapped_findings(
 
 fn default_file_header_span(file: &ParsedFile) -> SourceSpan {
     let source = file.source_text();
-    let end = source.lines().next().map_or(0, str::len).min(source.len());
+    let end = source.lines().next().map_or(0, str::len);
     SourceSpan::new(0, end)
 }
 
@@ -1475,7 +1462,7 @@ fn build_architecture_spec(
     from_rust_macros: bool,
     rust_headers: &BTreeMap<String, Arc<RustFileSummary>>,
 ) -> Result<ArchitectureSpec, ArchitectureError> {
-    config.validate()?;
+    validate_component_dag(&config.components)?;
     let mut components = Vec::with_capacity(config.components.len());
     for entry in &config.components {
         let public_exports = match &entry.public_exports {
@@ -1483,15 +1470,7 @@ fn build_architecture_spec(
                 patterns
                     .iter()
                     .map(|pattern| {
-                        ExportPattern::new(pattern).map_err(|error| {
-                            ArchitectureError::InvalidConfig(
-                                ArchitectureConfigError::InvalidPublicExportGlob {
-                                    component: entry.name.clone(),
-                                    pattern: pattern.clone(),
-                                    message: error.to_string(),
-                                },
-                            )
-                        })
+                        compile_export_glob(&entry.name, pattern).map(ExportPattern::from_matcher)
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
@@ -1513,23 +1492,27 @@ fn build_architecture_spec(
 
     let require_component_coverage =
         (!components.is_empty() || from_rust_macros) && config.require_component_coverage;
-    Ok(finalize_architecture_spec(
-        ArchitectureSpec {
-            transitive_dependencies: config.transitive_dependencies,
-            require_component_coverage,
-            check_local_imports: true,
-            ignore_type_checking_imports: config.ignore_type_checking_imports,
-            from_rust_macros,
-            components,
-            external_package_owners: BTreeMap::new(),
-            component_roots: BTreeMap::new(),
-            allowed_dependencies: HashMap::new(),
-            component_by_name: HashMap::new(),
-            known_components: HashSet::new(),
-            rust_sibling_rules: Vec::new(),
-        },
-        rust_headers,
-    ))
+    let external_package_owners = build_external_package_owners(&components);
+    let component_roots = build_component_root_map(&components);
+    let allowed_dependencies =
+        build_allowed_dependency_map(&components, config.transitive_dependencies);
+    let component_by_name = components
+        .iter()
+        .enumerate()
+        .map(|(index, component)| (component.name.clone(), index))
+        .collect();
+    let rust_sibling_rules = build_rust_sibling_isolation_rules(rust_headers, &components);
+    Ok(ArchitectureSpec {
+        require_component_coverage,
+        ignore_type_checking_imports: config.ignore_type_checking_imports,
+        from_rust_macros,
+        components,
+        external_package_owners,
+        component_roots,
+        allowed_dependencies,
+        component_by_name,
+        rust_sibling_rules,
+    })
 }
 
 fn normalize_external_package_name(raw: &str) -> String {
@@ -1599,29 +1582,6 @@ fn architecture_config_from_rust_headers(
     }
 }
 
-fn finalize_architecture_spec(
-    mut spec: ArchitectureSpec,
-    rust_headers: &BTreeMap<String, Arc<RustFileSummary>>,
-) -> ArchitectureSpec {
-    spec.external_package_owners = build_external_package_owners(&spec.components);
-    spec.component_roots = build_component_root_map(&spec.components);
-    spec.allowed_dependencies =
-        build_allowed_dependency_map(&spec.components, spec.transitive_dependencies);
-    spec.component_by_name = spec
-        .components
-        .iter()
-        .enumerate()
-        .map(|(index, component)| (component.name.clone(), index))
-        .collect();
-    spec.known_components = spec
-        .components
-        .iter()
-        .map(|component| component.name.clone())
-        .collect();
-    spec.rust_sibling_rules = build_rust_sibling_isolation_rules(rust_headers, &spec.components);
-    spec
-}
-
 fn build_external_package_owners(
     components: &[ComponentSpec],
 ) -> BTreeMap<String, ExternalPackageOwner> {
@@ -1667,6 +1627,17 @@ fn build_allowed_dependency_map(
     components: &[ComponentSpec],
     transitive_dependencies: bool,
 ) -> HashMap<String, HashSet<String>> {
+    if !transitive_dependencies {
+        return components
+            .iter()
+            .map(|component| {
+                (
+                    component.name.clone(),
+                    component.depends_on.iter().cloned().collect(),
+                )
+            })
+            .collect();
+    }
     let direct: HashMap<&str, HashSet<&str>> = components
         .iter()
         .map(|component| {
@@ -1675,17 +1646,6 @@ fn build_allowed_dependency_map(
             (component.name.as_str(), dependencies)
         })
         .collect();
-    if !transitive_dependencies {
-        return direct
-            .into_iter()
-            .map(|(name, set)| {
-                (
-                    name.to_owned(),
-                    set.into_iter().map(str::to_owned).collect(),
-                )
-            })
-            .collect();
-    }
     let mut reachable_by_component = HashMap::with_capacity(components.len());
     for component in components {
         let mut reachable = HashSet::new();

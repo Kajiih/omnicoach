@@ -1,14 +1,12 @@
 //! Read-only cross-file query handle (`ProjectContext`) passed to project-aware rules.
 
-use super::architecture::{ArchitectureSpec, FileArchitectureFindings};
+use super::architecture::FileArchitectureFindings;
 use super::index::{
-    ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, PythonClassId,
-    ResolvedClassAncestors,
+    ImportedProtocolSummary, InheritedDocstringMatch, ProjectIndex, ResolvedClassAncestors,
 };
-use super::layout::ProjectLayout;
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::python::{
-    OwnedDocstring, PythonClassInfo, PythonDocstring, PythonFileSummary, extract_classes,
+    OwnedDocstring, PythonClassInfo, PythonDocstring, extract_classes,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -42,12 +40,6 @@ impl<'a> ProjectContext<'a> {
         Self { index }
     }
 
-    /// Project layout of the analyzed project.
-    #[must_use]
-    pub const fn layout(&self) -> &ProjectLayout {
-        self.index.layout()
-    }
-
     /// Maps `path` to its canonical dotted Python module path (`"pkg.service"`), or to its
     /// project-relative fallback module path when `path` is inside the project root outside
     /// configured Python source roots.
@@ -56,50 +48,14 @@ impl<'a> ProjectContext<'a> {
         self.index.layout().python_context_module_of_path(path)
     }
 
-    /// Maps `path` to its crate-relative Rust module path (`"code_lint::ast"`), if inside the
-    /// Rust source root.
+    /// Returns the memoized [`crate::code_lint::ast::python::PythonFileSummary`] of `module`.
+    #[cfg(test)]
     #[must_use]
-    pub fn rust_module_of_path(&self, path: &Path) -> Option<String> {
-        self.index.layout().rust_module_of_path(path)
-    }
-
-    /// Returns the memoized [`PythonFileSummary`] of `module`.
-    #[must_use]
-    pub fn python_summary(&self, module: &str) -> Option<Arc<PythonFileSummary>> {
+    pub fn python_summary(
+        &self,
+        module: &str,
+    ) -> Option<Arc<crate::code_lint::ast::python::PythonFileSummary>> {
         self.index.python_summary(module)
-    }
-
-    /// Resolves a base-class expression in `from_module` to a concrete [`PythonClassId`].
-    #[must_use]
-    pub fn resolve_python_class(
-        &self,
-        from_module: &str,
-        written_base: &str,
-        before_class_index: Option<usize>,
-    ) -> Option<PythonClassId> {
-        self.index
-            .resolve_python_class(from_module, written_base, before_class_index)
-    }
-
-    /// Computes the Python C3 MRO (`[self, ...ancestors]`) of `class_id` across modules.
-    #[must_use]
-    pub fn python_class_mro(&self, class_id: &PythonClassId) -> Vec<PythonClassId> {
-        self.index.python_class_mro(class_id)
-    }
-
-    /// Resolves the inherited docstring for `method_name` on `classes[index]` in C3 MRO order,
-    /// combining in-file classes (`classes[..index]`) with cross-module classes resolved from
-    /// `current_module`.
-    #[must_use]
-    pub fn resolve_inherited_method_docstring(
-        &self,
-        current_module: Option<&str>,
-        classes: &[PythonClassInfo<'_>],
-        index: usize,
-        method_name: &str,
-    ) -> Option<InheritedDocstringMatch> {
-        self.index
-            .resolve_inherited_method_docstring(current_module, classes, index, method_name)
     }
 
     /// Extracts every `@override` method in `file` (`path`) that has both its own docstring and an
@@ -127,7 +83,7 @@ impl<'a> ProjectContext<'a> {
                 let Some(InheritedDocstringMatch {
                     ancestor_name,
                     docstring: inherited_docstring,
-                }) = self.resolve_inherited_method_docstring(
+                }) = self.index.resolve_inherited_method_docstring(
                     current_module.as_deref(),
                     &classes,
                     index,
@@ -194,12 +150,6 @@ impl<'a> ProjectContext<'a> {
         self.index.imported_protocols_in_module(module)
     }
 
-    /// Returns the resolved [`ArchitectureSpec`] for this project, if declared.
-    #[must_use]
-    pub fn architecture_spec(&self) -> Option<&ArchitectureSpec> {
-        self.index.architecture_spec()
-    }
-
     /// Evaluates (or returns cached) architectural conformance findings for `file` at `path`.
     #[must_use]
     pub fn file_architecture_findings(
@@ -215,6 +165,8 @@ impl<'a> ProjectContext<'a> {
 mod tests {
     use super::*;
     use crate::code_lint::ast::python::extract_classes;
+    use crate::code_lint::project::index::PythonClassId;
+    use crate::code_lint::project::layout::ProjectLayout;
     use crate::code_lint::project::source::MemoryFileSource;
     use crate::diagnostic::Language;
 
@@ -252,10 +204,9 @@ mod tests {
         );
         let layout = ProjectLayout::discover(root, &source, &[]);
         let index = ProjectIndex::new(layout, &source);
-        let context = ProjectContext::new(&index);
         let parsed = ParsedFile::new(child_code, Language::Python);
         let classes = extract_classes(&parsed);
-        let inherited = context
+        let inherited = index
             .resolve_inherited_method_docstring(Some("pkg.child"), &classes, 0, "execute")
             .expect("should resolve diamond MRO docstring from Right before Root");
         assert_eq!(inherited.ancestor_name, "Right");
@@ -334,11 +285,10 @@ mod tests {
         );
         let layout = ProjectLayout::discover(root, &source, &[]);
         let index = ProjectIndex::new(layout, &source);
-        let context = ProjectContext::new(&index);
         let resolved_with_sub =
-            context.resolve_python_class("pkg.with_sub_import", "pkg.sub.Store", Some(0));
+            index.resolve_python_class("pkg.with_sub_import", "pkg.sub.Store", Some(0));
         let resolved_bare_pkg =
-            context.resolve_python_class("pkg.bare_pkg_import", "pkg.sub.Store", Some(0));
+            index.resolve_python_class("pkg.bare_pkg_import", "pkg.sub.Store", Some(0));
 
         assert_eq!(
             resolved_with_sub,
@@ -379,10 +329,9 @@ mod tests {
         );
         let layout = ProjectLayout::discover(root, &source, &[]);
         let index = ProjectIndex::new(layout, &source);
-        let context = ProjectContext::new(&index);
         let parsed = ParsedFile::new(second_code, Language::Python);
         let classes = extract_classes(&parsed);
-        let inherited = context
+        let inherited = index
             .resolve_inherited_method_docstring(Some("pkg.second"), &classes, 0, "run")
             .expect("cyclic cross-module bases must terminate and still resolve First.run");
         assert_eq!(inherited.ancestor_name, "First");
