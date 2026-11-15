@@ -10,24 +10,8 @@ use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode};
 /// Resolves the byte span of the header of the innermost Rust statement enclosing `span`.
 pub fn enclosing_statement_header_span(file: &ParsedFile, span: SourceSpan) -> Option<SourceSpan> {
     let start_node = syntax_node_at_span(file, span)?;
-    let statement = start_node.ancestors().find(|candidate| {
-        candidate
-            .parent()
-            .is_some_and(|parent| is_rust_statement_container(parent.kind()))
-    })?;
+    let statement = start_node.ancestors().find(is_rust_statement_node)?;
     Some(rust_header_span(&statement))
-}
-
-/// Returns true for Rust `SyntaxKind`s that hold statements or items as direct children.
-const fn is_rust_statement_container(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::SOURCE_FILE
-            | SyntaxKind::STMT_LIST
-            | SyntaxKind::ASSOC_ITEM_LIST
-            | SyntaxKind::ITEM_LIST
-            | SyntaxKind::EXTERN_ITEM_LIST
-    )
 }
 
 /// Computes the byte span of a Rust `statement` node's header.
@@ -59,16 +43,56 @@ fn rust_header_span(statement: &SyntaxNode) -> SourceSpan {
     SourceSpan::new(start_offset, header_end_offset)
 }
 
-/// Returns true for Rust `SyntaxKind`s that form the braced body of a compound statement or item.
-const fn is_rust_body_container(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::BLOCK_EXPR
-            | SyntaxKind::STMT_LIST
-            | SyntaxKind::ASSOC_ITEM_LIST
-            | SyntaxKind::ITEM_LIST
-            | SyntaxKind::EXTERN_ITEM_LIST
-    )
+/// Records the declaration header byte span (excluding leading comments and attributes) of every
+/// Rust statement and item in `file`.
+pub fn record_statement_header_spans(file: &ParsedFile, record: &mut impl FnMut(SourceSpan)) {
+    let Some(parsed) = file.rs_parsed() else {
+        return;
+    };
+    for node in parsed
+        .tree()
+        .syntax()
+        .descendants()
+        .filter(is_rust_statement_node)
+    {
+        if let Some(span) = rust_declaration_header_span(&node) {
+            record(span);
+        }
+    }
+}
+
+/// Computes the byte span of a Rust `statement` node's declaration header, excluding leading
+/// comments and outer `#[...]` attributes.
+fn rust_declaration_header_span(statement: &SyntaxNode) -> Option<SourceSpan> {
+    let mut start_offset = None;
+    let mut end_offset = None;
+
+    for child in statement.children_with_tokens() {
+        if is_rust_body_container(child.kind()) {
+            break;
+        }
+        match child {
+            SyntaxElement::Token(token) if !is_rust_trivia(token.kind()) => {
+                let range = token.text_range();
+                start_offset.get_or_insert_with(|| usize::from(range.start()));
+                end_offset = Some(usize::from(range.end()));
+            }
+            SyntaxElement::Node(node) if node.kind() != SyntaxKind::ATTR => {
+                let mut tokens = node
+                    .descendants_with_tokens()
+                    .filter_map(SyntaxElement::into_token)
+                    .filter(|token| !is_rust_trivia(token.kind()));
+                if let Some(first) = tokens.next() {
+                    start_offset.get_or_insert_with(|| usize::from(first.text_range().start()));
+                    let last = tokens.last().unwrap_or(first);
+                    end_offset = Some(usize::from(last.text_range().end()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some(SourceSpan::new(start_offset?, end_offset?))
 }
 
 /// Records the byte span of every Rust attribute in `file`.
@@ -87,4 +111,38 @@ pub fn record_decorator_and_attribute_spans(
     {
         record(span_from_rowan_range(attribute.syntax().text_range()));
     }
+}
+
+/// Returns true if `node` is a Rust statement or item directly inside a statement container.
+fn is_rust_statement_node(node: &SyntaxNode) -> bool {
+    node.parent()
+        .is_some_and(|parent| is_rust_statement_container(parent.kind()))
+}
+
+/// Returns true for Rust `SyntaxKind`s that hold statements, items, fields, or variants as direct children.
+const fn is_rust_statement_container(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::SOURCE_FILE
+            | SyntaxKind::STMT_LIST
+            | SyntaxKind::ASSOC_ITEM_LIST
+            | SyntaxKind::ITEM_LIST
+            | SyntaxKind::EXTERN_ITEM_LIST
+            | SyntaxKind::RECORD_FIELD_LIST
+            | SyntaxKind::VARIANT_LIST
+    )
+}
+
+/// Returns true for Rust `SyntaxKind`s that form the braced body of a compound statement or item.
+const fn is_rust_body_container(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::BLOCK_EXPR
+            | SyntaxKind::STMT_LIST
+            | SyntaxKind::ASSOC_ITEM_LIST
+            | SyntaxKind::ITEM_LIST
+            | SyntaxKind::EXTERN_ITEM_LIST
+            | SyntaxKind::RECORD_FIELD_LIST
+            | SyntaxKind::VARIANT_LIST
+    )
 }

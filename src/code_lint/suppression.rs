@@ -116,8 +116,9 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
             Remove the rule from the directive, or the whole directive when no rule is left."},
         known_problems: Some(indoc::indoc! {r"
             A directive on its own line covers contiguous decorators, attributes, and comments below
-            it and the first declaration line after them, nothing further. A finding further down a
-            multi-line statement is not suppressed, and the directive is reported as unused."}),
+            it and the declaration header after them, not the statement body. A finding inside a
+            function or block body is not suppressed by a directive above the outer header, and the
+            directive is reported as unused."}),
         references: &[Reference {
             title: "Ruff: unused-noqa (RUF100)",
             url: "https://docs.astral.sh/ruff/rules/unused-noqa/",
@@ -243,6 +244,10 @@ impl SuppressionTracker {
                     .or_insert(end_line);
             }
         }
+        let line_extents = DeclarationLineExtents {
+            skippable_end_lines,
+            header_end_lines: ast::statement_header_end_lines(file),
+        };
         let mut tracker = Self::default();
         for comment_node in comment_nodes {
             let text = comment_node.text();
@@ -256,7 +261,7 @@ impl SuppressionTracker {
                 &text,
                 site,
                 content,
-                &skippable_end_lines,
+                &line_extents,
                 &comment_index,
             );
         }
@@ -337,7 +342,7 @@ impl SuppressionTracker {
         text: &str,
         site: DirectiveSite,
         content: &str,
-        skippable_end_lines: &HashMap<usize, usize>,
+        line_extents: &DeclarationLineExtents,
         comment_index: &CommentIndex<'_>,
     ) {
         let Some(stripped) = strip_comment_delimiters(text) else {
@@ -364,8 +369,7 @@ impl SuppressionTracker {
                 } = parse_bracketed_rules(remainder.trim_start());
                 let is_blanket = target_rules.is_empty();
                 has_unexplained_segment |= !(has_dash_reason(after_rules) || tail_has_reason);
-                let placement =
-                    resolve_directive_placement(is_file, content, skippable_end_lines, site);
+                let placement = resolve_directive_placement(is_file, content, line_extents, site);
                 let matched_count = target_rules.iter().map(|rule| (rule.clone(), 0)).collect();
                 self.directives.push(ParsedDirective {
                     placement,
@@ -387,6 +391,15 @@ impl SuppressionTracker {
             self.unexplained_directives.push(site);
         }
     }
+}
+
+/// Line-extent lookup tables for resolving the declaration header targeted by a preceding-line
+/// suppression directive.
+struct DeclarationLineExtents {
+    /// Maps the first line of each decorator, attribute, or standalone comment to its last line.
+    skippable_end_lines: HashMap<usize, usize>,
+    /// Maps the first line of each statement's declaration header to the last line of that header.
+    header_end_lines: HashMap<usize, usize>,
 }
 
 /// Where a suppression directive comment sits in the source file.
@@ -489,7 +502,8 @@ enum DirectivePlacement {
     PrecedingLine {
         /// The 1-indexed line number immediately following the directive.
         target_line: usize,
-        /// The 1-indexed line number of the declaration after any contiguous attributes/decorators (`#[...]`, `@...`).
+        /// The 1-indexed last line of the targeted declaration header after any contiguous
+        /// attributes, decorators (`#[...]`, `@...`), or standalone comments.
         end_target_line: usize,
     },
     /// Directive applying to the entire file.
@@ -500,7 +514,7 @@ enum DirectivePlacement {
 fn resolve_directive_placement(
     is_file: bool,
     content: &str,
-    skippable_end_lines: &HashMap<usize, usize>,
+    line_extents: &DeclarationLineExtents,
     site: DirectiveSite,
 ) -> DirectivePlacement {
     if is_file {
@@ -518,24 +532,22 @@ fn resolve_directive_placement(
     }
     DirectivePlacement::PrecedingLine {
         target_line: site.end_line + 1,
-        end_target_line: compute_effective_target_line(skippable_end_lines, site.end_line),
+        end_target_line: compute_effective_target_line(line_extents, site.end_line),
     }
 }
 
-/// Computes the declaration line after skipping contiguous attributes, decorators, or standalone
-/// comments.
-///
-/// `skippable_end_lines` maps the first line of each decorator, attribute, or standalone comment
-/// to its last line, so continuation lines of multiline items and block comments are skipped too.
-fn compute_effective_target_line(
-    skippable_end_lines: &HashMap<usize, usize>,
-    raw_line: usize,
-) -> usize {
+/// Computes the ending line of the targeted declaration header after skipping contiguous
+/// attributes, decorators, or standalone comments.
+fn compute_effective_target_line(line_extents: &DeclarationLineExtents, raw_line: usize) -> usize {
     let mut current_line = raw_line + 1;
-    while let Some(&end_line) = skippable_end_lines.get(&current_line) {
+    while let Some(&end_line) = line_extents.skippable_end_lines.get(&current_line) {
         current_line = end_line + 1;
     }
-    current_line
+    line_extents
+        .header_end_lines
+        .get(&current_line)
+        .copied()
+        .unwrap_or(current_line)
 }
 
 /// Returns true if `placement` covers `diagnostic_line`.
@@ -731,6 +743,54 @@ mod tests {
         Language::Rust,
         3,
         4
+    )]
+    #[case::multiline_python_function_header(
+        indoc::indoc! {r"
+            # omni:ignore [type-suffixed-name] -- public API signature
+            def transform(
+                bad_list: list[int],
+            ) -> list[int]:
+                return bad_list"},
+        Language::Python,
+        2,
+        4
+    )]
+    #[case::multiline_decorated_python_function_header(
+        indoc::indoc! {r"
+            # omni:ignore [type-suffixed-name] -- public API signature
+            @decorator
+            def transform(
+                bad_list: list[int],
+            ) -> list[int]:
+                return bad_list"},
+        Language::Python,
+        2,
+        5
+    )]
+    #[case::multiline_attributed_rust_function_header(
+        indoc::indoc! {r"
+            // omni:ignore [single-letter-name] -- math
+            #[allow(dead_code)]
+            fn compute(
+                a: i32,
+            ) -> i32 {
+                a
+            }"},
+        Language::Rust,
+        2,
+        5
+    )]
+    #[case::parameter_level_directive_inside_multiline_header_targets_only_parameter_line(
+        indoc::indoc! {r"
+            def transform(
+                # omni:ignore [type-suffixed-name] -- legacy parameter name
+                bad_list: list[int],
+                other_list: list[int],
+            ):
+                pass"},
+        Language::Python,
+        3,
+        3
     )]
     fn test_parse_valid_inline_directive_preceding_line(
         #[case] content: &str,

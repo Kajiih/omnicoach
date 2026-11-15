@@ -40,6 +40,7 @@ pub(super) use self::returns::collect_function_returns;
 pub(in crate::code_lint) use self::returns::nullable_return_collection_type;
 pub(super) use self::statement_spans::{
     enclosing_statement_header_span, record_decorator_and_attribute_spans,
+    record_statement_header_spans,
 };
 pub use self::test_analysis::collect_inline_test_ranges;
 pub(super) use self::test_analysis::{

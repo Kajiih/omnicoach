@@ -842,6 +842,23 @@ mod tests {
             @decorator
             def func(a): pass"}
     )]
+    #[case::multiline_signature_parameter(
+        indoc::indoc! {r"
+            # omni:ignore [type-suffixed-name] -- public API signature
+            def transform(
+                bad_list: list[int],
+            ) -> None:
+                pass"}
+    )]
+    #[case::multiline_signature_return_on_require_explanation_rule(
+        indoc::indoc! {r"
+            from collections.abc import MutableSequence
+            # omni:ignore [mutable-collection-return] -- callers mutate returned list in place
+            def transform(
+                items: tuple[int, ...],
+            ) -> MutableSequence[int]:
+                return list(items)"}
+    )]
     #[case::preceding_omni_ignore_on_require_explanation_attribute(
         indoc::indoc! {r"
             from collections.abc import MutableSequence
@@ -862,9 +879,12 @@ mod tests {
             with suppress(FileNotFoundError):
                 pass"}
     )]
+    // TODO: Why are we testing these rules here? Is it any ricr?
     fn test_valid_preceding_line_suppression_silences_violation(#[case] content: &str) {
         let config = config_enabling(&[
             "single-letter-name",
+            "type-suffixed-name",
+            "mutable-collection-return",
             "mutable-collection-attribute",
             "suppressed-exception",
         ]);
@@ -885,6 +905,57 @@ mod tests {
 
         assert_eq!(diags.len(), 1, "Expected 1 diagnostic, got: {diags:?}");
         assert_eq!(diags[0].rule_name.0, "mutable-collection-attribute");
+    }
+
+    #[test]
+    fn test_multiline_header_suppression_does_not_leak_to_body_or_sibling_parameters() {
+        let content = indoc::indoc! {r"
+            # omni:ignore [type-suffixed-name] -- public API signature
+            def first_fn(
+                bad_list: list[int],
+            ) -> None:
+                body_list = [1]
+
+            def second_fn(
+                # omni:ignore [type-suffixed-name] -- first parameter only
+                allowed_list: list[int],
+                unexcused_list: list[int],
+            ) -> None:
+                pass
+        "};
+        let config = config_enabling(&["type-suffixed-name"]);
+        let diagnostics = lint_file(Path::new("service.py"), content, &config);
+        let lines: Vec<usize> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.location.line)
+            .collect();
+
+        assert_eq!(
+            lines,
+            vec![5, 10],
+            "Unexpected diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn test_rust_struct_header_suppression_does_not_leak_to_fields() {
+        let content = indoc::indoc! {r"
+            // omni:ignore [abbreviated-name] -- public wire struct name
+            pub struct
+            MyRes<
+                T,
+            > {
+                pub ctx: Vec<T>,
+            }
+        "};
+        let config = config_enabling(&["abbreviated-name"]);
+        let diagnostics = lint_file(Path::new("packet.rs"), content, &config);
+        let lines: Vec<usize> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.location.line)
+            .collect();
+
+        assert_eq!(lines, vec![6], "Unexpected diagnostics: {diagnostics:?}");
     }
 
     #[test]

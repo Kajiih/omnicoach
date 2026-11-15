@@ -22,19 +22,38 @@ pub fn enclosing_statement_header_range(
 #[must_use]
 pub fn decorator_and_attribute_end_lines(file: &ParsedFile) -> HashMap<usize, usize> {
     let mut end_lines = HashMap::new();
-    let mut record = |span: SourceSpan| {
-        let start_line = file.line_index.line(span.start);
-        let end_line = file.line_index.line(span.end);
-        end_lines
-            .entry(start_line)
-            .and_modify(|longest: &mut usize| *longest = (*longest).max(end_line))
-            .or_insert(end_line);
-    };
+    let mut record = |span: SourceSpan| record_span_end_line(&mut end_lines, file, span);
     dispatch_lang!(
         file.lang(),
         record_decorator_and_attribute_spans(file, &mut record)
     );
     end_lines
+}
+
+/// Maps each line where a statement's declaration header begins (after any leading decorators,
+/// attributes, or comments) to the last line of that header.
+#[must_use]
+pub fn statement_header_end_lines(file: &ParsedFile) -> HashMap<usize, usize> {
+    let mut end_lines = HashMap::new();
+    let mut record = |span: SourceSpan| record_span_end_line(&mut end_lines, file, span);
+    dispatch_lang!(
+        file.lang(),
+        record_statement_header_spans(file, &mut record)
+    );
+    end_lines
+}
+
+fn record_span_end_line(
+    end_lines: &mut HashMap<usize, usize>,
+    file: &ParsedFile,
+    span: SourceSpan,
+) {
+    let start_line = file.line_index.line(span.start);
+    let end_line = file.line_index.line(span.end);
+    end_lines
+        .entry(start_line)
+        .and_modify(|longest: &mut usize| *longest = (*longest).max(end_line))
+        .or_insert(end_line);
 }
 
 #[cfg(test)]
@@ -205,5 +224,121 @@ mod tests {
         let file = ParsedFile::new(source, Language::Python);
         let span = span_of(source, "suppress(Exception)");
         assert_eq!(enclosing_statement_header_range(&file, span), Some(1..=1));
+    }
+
+    #[rstest::rstest]
+    #[case::python_decorated_function(
+        indoc::indoc! {r"
+            @staticmethod
+            def build(
+                items,
+            ) -> list[str]:
+                return []
+        "},
+        Language::Python,
+        2,
+        Some(4)
+    )]
+    #[case::python_decorated_class(
+        indoc::indoc! {r"
+            @dataclass
+            class Adapter(
+                Base,
+            ):
+                pass
+        "},
+        Language::Python,
+        2,
+        Some(4)
+    )]
+    #[case::python_parameter_line_is_not_statement_start(
+        indoc::indoc! {r"
+            def build(
+                items,
+            ) -> list[str]:
+                return []
+        "},
+        Language::Python,
+        2,
+        None
+    )]
+    #[case::rust_attributed_function(
+        indoc::indoc! {r"
+            /// Doc comment
+            #[must_use]
+            pub fn compute_items(
+                input: &str,
+            ) -> usize {
+                input.len()
+            }
+        "},
+        Language::Rust,
+        3,
+        Some(5)
+    )]
+    #[case::rust_private_attributed_function(
+        indoc::indoc! {r"
+            // Leading comment
+            #[must_use]
+            fn
+            compute_items(
+                input: &str,
+            ) -> usize {
+                input.len()
+            }
+        "},
+        Language::Rust,
+        3,
+        Some(6)
+    )]
+    #[case::rust_parameter_line_is_not_statement_start(
+        indoc::indoc! {r"
+            pub fn compute_items(
+                input: &str,
+            ) -> usize {
+                input.len()
+            }
+        "},
+        Language::Rust,
+        2,
+        None
+    )]
+    #[case::rust_struct_header_stops_before_field_list(
+        indoc::indoc! {r"
+            pub struct Adapter<
+                T,
+            > {
+                pub items_list: Vec<T>,
+            }
+        "},
+        Language::Rust,
+        1,
+        Some(3)
+    )]
+    #[case::rust_enum_header_stops_before_variant_list(
+        indoc::indoc! {r"
+            pub enum Mode<
+                T,
+            > {
+                Ready(T),
+            }
+        "},
+        Language::Rust,
+        1,
+        Some(3)
+    )]
+    fn test_statement_header_end_lines(
+        #[case] source: &str,
+        #[case] lang: Language,
+        #[case] start_line: usize,
+        #[case] expected_end_line: Option<usize>,
+    ) {
+        let file = ParsedFile::new(source, lang);
+        let end_lines = statement_header_end_lines(&file);
+        assert_eq!(
+            end_lines.get(&start_line).copied(),
+            expected_end_line,
+            "{end_lines:?}"
+        );
     }
 }

@@ -32,45 +32,35 @@ pub fn enclosing_statement_header_span(file: &ParsedFile, span: SourceSpan) -> O
     finder.visit_body(&parsed.syntax().body);
     let statement = finder.found?;
 
-    let statement_range = statement.range();
-    let start_offset = statement_range.start().to_usize();
-    let end_offset = python_statement_body_start(statement).map_or_else(
-        || statement_range.end().to_usize(),
-        |body_start| {
-            parsed
-                .tokens()
-                .iter()
-                .rfind(|token| {
-                    token.range().start() >= statement_range.start()
-                        && token.range().end() <= body_start
-                        && !matches!(
-                            token.kind(),
-                            TokenKind::Comment
-                                | TokenKind::Newline
-                                | TokenKind::NonLogicalNewline
-                                | TokenKind::Indent
-                                | TokenKind::Dedent
-                        )
-                })
-                .map_or(start_offset, |token| token.range().end().to_usize())
-        },
-    );
-    Some(SourceSpan::new(start_offset, end_offset))
+    Some(python_statement_header_span(
+        parsed,
+        statement,
+        statement.range().start().to_usize(),
+    ))
 }
 
-/// Returns the byte offset where the body of a Python compound `statement` begins, or `None`
-/// for simple statements without a suite.
-fn python_statement_body_start(statement: &Stmt) -> Option<ruff_text_size::TextSize> {
-    match statement {
-        Stmt::FunctionDef(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::ClassDef(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::For(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::While(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::If(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::With(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::Try(node) => node.body.first().map(|first| first.range().start()),
-        Stmt::Match(node) => node.cases.first().map(|first| first.range().start()),
-        _ => None,
+/// Records the declaration header byte span (excluding leading decorators) of every Python
+/// statement in `file`.
+pub fn record_statement_header_spans(file: &ParsedFile, record: &mut impl FnMut(SourceSpan)) {
+    struct HeaderVisitor<'a, Record> {
+        parsed: &'a ruff_python_parser::Parsed<ruff_python_ast::ModModule>,
+        record: Record,
+    }
+
+    impl<'a, Record: FnMut(SourceSpan)> SourceOrderVisitor<'a> for HeaderVisitor<'a, Record> {
+        fn visit_stmt(&mut self, statement: &'a Stmt) {
+            let start_offset = python_declaration_start_offset(statement);
+            (self.record)(python_statement_header_span(
+                self.parsed,
+                statement,
+                start_offset,
+            ));
+            walk_stmt(self, statement);
+        }
+    }
+
+    if let Some(parsed) = file.py_module() {
+        HeaderVisitor { parsed, record }.visit_body(&parsed.syntax().body);
     }
 }
 
@@ -99,5 +89,61 @@ pub fn record_decorator_and_attribute_spans(
 
     if let Some(parsed) = file.py_module() {
         DecoratorVisitor { record }.visit_body(&parsed.syntax().body);
+    }
+}
+
+/// Returns the byte offset where a Python `statement`'s declaration begins after any decorators.
+fn python_declaration_start_offset(statement: &Stmt) -> usize {
+    match statement {
+        Stmt::FunctionDef(function) => function.name.range.start().to_usize(),
+        Stmt::ClassDef(class) => class.name.range.start().to_usize(),
+        _ => statement.range().start().to_usize(),
+    }
+}
+
+/// Computes the byte span of a Python `statement`'s header starting at `start_offset`.
+fn python_statement_header_span(
+    parsed: &ruff_python_parser::Parsed<ruff_python_ast::ModModule>,
+    statement: &Stmt,
+    start_offset: usize,
+) -> SourceSpan {
+    let statement_range = statement.range();
+    let end_offset = python_statement_body_start(statement).map_or_else(
+        || statement_range.end().to_usize(),
+        |body_start| {
+            parsed
+                .tokens()
+                .iter()
+                .rfind(|token| {
+                    token.range().start().to_usize() >= start_offset
+                        && token.range().end() <= body_start
+                        && !matches!(
+                            token.kind(),
+                            TokenKind::Comment
+                                | TokenKind::Newline
+                                | TokenKind::NonLogicalNewline
+                                | TokenKind::Indent
+                                | TokenKind::Dedent
+                        )
+                })
+                .map_or(start_offset, |token| token.range().end().to_usize())
+        },
+    );
+    SourceSpan::new(start_offset, end_offset)
+}
+
+/// Returns the byte offset where the body of a Python compound `statement` begins, or `None`
+/// for simple statements without a suite.
+fn python_statement_body_start(statement: &Stmt) -> Option<ruff_text_size::TextSize> {
+    match statement {
+        Stmt::FunctionDef(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::ClassDef(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::For(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::While(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::If(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::With(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::Try(node) => node.body.first().map(|first| first.range().start()),
+        Stmt::Match(node) => node.cases.first().map(|first| first.range().start()),
+        _ => None,
     }
 }

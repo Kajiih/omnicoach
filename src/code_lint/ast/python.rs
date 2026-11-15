@@ -84,6 +84,7 @@ pub(super) use self::returns::collect_function_returns;
 pub use self::returns::collect_locally_mutated_return_functions;
 pub(super) use self::statement_spans::{
     enclosing_statement_header_span, record_decorator_and_attribute_spans,
+    record_statement_header_spans,
 };
 pub(super) use self::test_analysis::{
     collect_assertion_checks, collect_multi_phase_test_functions,

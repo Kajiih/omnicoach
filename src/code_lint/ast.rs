@@ -61,7 +61,7 @@ pub(in crate::code_lint) use self::scope_facts::{
     collect_scope_facts, collect_scope_symbol_names, enclosing_scope_symbol,
 };
 pub(in crate::code_lint) use self::statement_spans::{
-    decorator_and_attribute_end_lines, enclosing_statement_header_range,
+    decorator_and_attribute_end_lines, enclosing_statement_header_range, statement_header_end_lines,
 };
 pub(in crate::code_lint) use self::test_analysis::{
     AssertionCheck, TestFunctionSetup, collect_assertion_checks,
