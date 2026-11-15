@@ -67,10 +67,24 @@ impl<'a> CommentIndex<'a> {
             return false;
         };
 
-        self.has_adjacent_explanation(*header_lines.start())
-            || header_lines.into_iter().any(|header_line| {
-                self.has_inline_explanation(header_line) || self.has_explanation_above(header_line)
-            })
+        header_lines
+            .into_iter()
+            .any(|header_line| self.has_adjacent_explanation(header_line))
+    }
+
+    /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
+    /// holds a substantive explanation (including reasons attached to third-party tool directives).
+    #[must_use]
+    pub fn has_explanation_above(&self, line: usize) -> bool {
+        self.collect_explanation_above(line, true)
+    }
+
+    /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
+    /// holds a substantive prose explanation, ignoring standalone suppression directives so a
+    /// directive's own `-- <reason>` never excuses a stacked reasonless directive below it.
+    #[must_use]
+    pub(in crate::code_lint) fn has_prose_explanation_above(&self, line: usize) -> bool {
+        self.collect_explanation_above(line, false)
     }
 
     /// Verifies if a given line has an adjacent, substantive explanation comment.
@@ -98,21 +112,6 @@ impl<'a> CommentIndex<'a> {
         self.comments_by_line
             .get(&line)
             .map(|entry| entry.node.text())
-    }
-
-    /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
-    /// holds a substantive explanation (including reasons attached to directive comments).
-    #[must_use]
-    pub fn has_explanation_above(&self, line: usize) -> bool {
-        self.collect_explanation_above(line, true)
-    }
-
-    /// Verifies if the contiguous standalone comment block directly above 1-indexed `line`
-    /// holds a substantive prose explanation, ignoring standalone suppression directives so a
-    /// directive's own `-- <reason>` never excuses a stacked reasonless directive below it.
-    #[must_use]
-    pub(in crate::code_lint) fn has_prose_explanation_above(&self, line: usize) -> bool {
-        self.collect_explanation_above(line, false)
     }
 
     fn collect_explanation_above(&self, line: usize, allow_directive_reasons: bool) -> bool {
@@ -167,7 +166,7 @@ const DIRECTIVE_NAMESPACES: &[&str] = &["omnicoach:", "omni:"];
 const TOOL_DIRECTIVE_MARKERS: &[&str] = &["ignore", "disable", "skip-file"];
 
 /// The bare `# noqa` directive, honored by Ruff and flake8 in any case.
-pub(in crate::code_lint) const NOQA: &str = "noqa";
+const NOQA: &str = "noqa";
 
 /// Fast pre-filter returning `true` if `content` may contain an `omni:`/`omnicoach:` suppression
 /// directive in `lang`, or a third-party suppression directive in Python.
@@ -316,11 +315,13 @@ fn contains_any_directive(text: &str, lang: Language) -> bool {
     }
 }
 
-/// Strips standard linter/tooling directives (`noqa`, `type: ignore`, `pyright`, `pylint`, `omni:ignore`).
+/// Strips standard third-party linter/tooling directives (`noqa`, `type: ignore`, `pyright`,
+/// `pylint`) and rejects `omni:`/`omnicoach:` suppression directives.
 ///
-/// If the comment contains an explanatory reason after a separator (e.g. `-- reason`),
+/// If a third-party directive contains an explanatory reason after a separator (e.g. `-- reason`),
 /// the directive prefix is stripped and the remaining reason text is returned.
-/// If the comment consists solely of directives and rule codes, `""` is returned.
+/// `omni:`/`omnicoach:` directives always return `""` because they are rule-scoped suppressions
+/// audited by `SuppressionTracker` rather than general `Or:` explanation comments.
 #[cfg(test)]
 #[must_use]
 fn clean_explanation(text: &str) -> &str {
@@ -351,7 +352,13 @@ fn clean_explanation_for_lang(text: &str, lang: Language) -> &str {
 
 #[must_use]
 fn clean_single_segment(stripped: &str, lang: Language) -> &str {
-    let Some(prefix_len) = find_directive_prefix(stripped, lang) else {
+    if parse_omni_directive_prefix(stripped).is_some() {
+        return "";
+    }
+    let Some(prefix_len) = (lang == Language::Python)
+        .then(|| match_tool_directive_prefix_len(stripped))
+        .flatten()
+    else {
         return stripped.trim();
     };
 
@@ -400,15 +407,6 @@ fn is_substantive_explanation(text: &str) -> bool {
         .get(..5)
         .is_some_and(|sub| sub.eq_ignore_ascii_case("fixme"));
     !((starts_with_todo || starts_with_fixme) && words <= MIN_EXPLANATION_WORDS)
-}
-
-fn find_directive_prefix(text: &str, lang: Language) -> Option<usize> {
-    if lang == Language::Python
-        && let Some(len) = match_tool_directive_prefix_len(text)
-    {
-        return Some(len);
-    }
-    parse_omni_directive_prefix(text).map(|prefix| text.len() - prefix.remainder.len())
 }
 
 fn strip_rule_codes(mut text: &str) -> &str {
@@ -575,7 +573,9 @@ mod tests {
         "# type: ignore[import] third party library untyped",
         "third party library untyped"
     )]
-    #[case::omni_ignore("# omni:ignore[rule-name] -- explanation", "explanation")]
+    #[case::omni_ignore("# omni:ignore[rule-name] -- explanation", "")]
+    #[case::omnicoach_ignore_rust("// omnicoach:ignore [rule-name] -- explanation", "")]
+    #[case::omni_disable_file("# omni:disable-file [rule-name] -- explanation", "")]
     #[case::pylint_disable("# pylint: disable=broad-except", "")]
     #[case::pylint_disable_next("# pylint: disable-next=broad-except", "")]
     #[case::pylint_skip_file("# pylint: skip-file", "")]
@@ -688,14 +688,24 @@ mod tests {
         false,
         false
     )]
-    #[case::directive_reason_counts_for_code_but_not_stacked_directive(
+    #[case::tool_directive_reason_counts_for_code_but_not_stacked_directive(
+        indoc! {r"
+            # noqa: SIM105 -- closure required for test fixture
+            with suppress(FileNotFoundError):
+                pass"},
+        Language::Python,
+        2,
+        true,
+        false
+    )]
+    #[case::omni_directive_reason_counts_for_neither_code_nor_stacked_directive(
         indoc! {r"
             # omni:ignore [nested-function] -- closure required for test fixture
             with suppress(FileNotFoundError):
                 pass"},
         Language::Python,
         2,
-        true,
+        false,
         false
     )]
     #[case::prose_above_stacked_directives_counts_for_both(

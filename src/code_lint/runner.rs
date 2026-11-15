@@ -842,10 +842,49 @@ mod tests {
             @decorator
             def func(a): pass"}
     )]
+    #[case::preceding_omni_ignore_on_require_explanation_attribute(
+        indoc::indoc! {r"
+            from collections.abc import MutableSequence
+            class Registry:
+                # omni:ignore [mutable-collection-attribute] -- public plugin registry mutated in place
+                plugins: MutableSequence[str] = []"}
+    )]
+    #[case::inline_omni_ignore_on_require_explanation_attribute(
+        indoc::indoc! {r"
+            from collections.abc import MutableSequence
+            class Registry:
+                plugins: MutableSequence[str] = []  # omni:ignore [mutable-collection-attribute] -- public plugin registry mutated in place"}
+    )]
+    #[case::preceding_omni_ignore_on_suppressed_exception(
+        indoc::indoc! {r"
+            from contextlib import suppress
+            # omni:ignore [suppressed-exception] -- lock file may be removed concurrently
+            with suppress(FileNotFoundError):
+                pass"}
+    )]
     fn test_valid_preceding_line_suppression_silences_violation(#[case] content: &str) {
-        let config = config_enabling(&["single-letter-name"]);
+        let config = config_enabling(&[
+            "single-letter-name",
+            "mutable-collection-attribute",
+            "suppressed-exception",
+        ]);
         let diags = lint_file(Path::new("math.py"), content, &config);
         assert!(diags.is_empty(), "Expected 0 diagnostics, got: {diags:?}");
+    }
+
+    #[test]
+    fn test_omni_ignore_for_other_rule_does_not_excuse_require_explanation_rule() {
+        let content = indoc::indoc! {r"
+            from collections.abc import MutableSequence
+            class Registry:
+                # omni:ignore [single-letter-name] -- short coordinate name in registry
+                a: MutableSequence[str] = []
+        "};
+        let config = config_enabling(&["single-letter-name", "mutable-collection-attribute"]);
+        let diags = lint_file(Path::new("registry.py"), content, &config);
+
+        assert_eq!(diags.len(), 1, "Expected 1 diagnostic, got: {diags:?}");
+        assert_eq!(diags[0].rule_name.0, "mutable-collection-attribute");
     }
 
     #[test]
