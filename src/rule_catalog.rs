@@ -67,20 +67,18 @@ impl DiscoveryArgs {
 }
 
 /// The footer note on how to fix findings, printed after every plain `code` report.
-const FIX_NOTE: &str = "Note: Fix the underlying design issue rather than reshaping code just to \
-                        fall under a threshold or outside a pattern, and never degrade behavior, \
-                        encapsulation, or external contracts to silence a finding.";
+const FIX_NOTE: &str = "Note: Fix the underlying design issue rather than reshaping syntax just \
+                        to dodge a threshold, dropping assertions, or copying suppressions onto \
+                        internal helpers.";
 
 /// The footer note on suppressing findings, printed when a reported rule is `heuristic` or
 /// `opinionated`.
-const SUPPRESSION_NOTE: &str = "Note: Some rules use heuristics or enforce opinionated \
-                                defaults. When the flagged code is intentional and already the \
-                                clearest, most robust design, configure project conventions in \
-                                `.omnicoach.toml`, satisfy the rule's `Or:` comment hint if \
-                                shown, or suppress the site with `omni:ignore [<rule>] -- \
-                                <reason>`. If a finding is a false positive or its \
-                                suggestion/documentation is misleading, consider reporting the \
-                                issue to `omnicoach`.";
+// TODO: I think we should not configure per file ignores in the global config but colocated witht the file/module.
+const SUPPRESSION_NOTE: &str = indoc::indoc! {"
+    Note: When a heuristic or opinionated rule flags intentional code, match the resolution to its scope:
+      - Internal defect (default): Refactor the code to fix the root cause described in `Rationale:`.
+      - Single-site boundary exception (locked public/wire signature or stateful test): Satisfy `Or:` if shown, or suppress that site only with `omni:ignore [<rule>] -- <reason>` (do not weaken `.omnicoach.toml` repo-wide for a single site).
+      - Multi-site module or domain convention (5+ sites across a domain module): Configure `per-file-ignores = { \"path.py\" = [\"<rule>\"] }` or `[rules.<rule>]` in `.omnicoach.toml` (see `omnicoach --explain <rule>...`) rather than repeating inline suppressions across a file. Report false positives or misleading guidance to `omnicoach`."};
 
 /// The footer printed after plain `code` diagnostics: `FIX_NOTE`, `SUPPRESSION_NOTE` when
 /// any reported rule is `heuristic` or `opinionated`, and the `--explain` pointer.
@@ -118,7 +116,9 @@ pub fn code_report_footer_for_rules<'a>(
 /// The line printed after plain diagnostics, pointing at `--explain`.
 #[must_use]
 pub fn explain_footer(binary: &str) -> String {
-    format!("For details on a rule (including known limitations), run: {binary} --explain <rule>")
+    format!(
+        "For details on a rule (including known limitations), run: {binary} --explain <rule>..."
+    )
 }
 
 /// One Markdown bullet per rule, sorted by name: name, languages (or input) and summary.
@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(footer.contains(SUPPRESSION_NOTE), expects_note, "{footer}");
         assert!(
             footer.ends_with(
-                "For details on a rule (including known limitations), run: omnicoach --explain <rule>"
+                "For details on a rule (including known limitations), run: omnicoach --explain <rule>..."
             ),
             "{footer}"
         );
