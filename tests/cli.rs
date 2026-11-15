@@ -29,17 +29,20 @@ fn setup_temp_jj_repo() -> tempfile::TempDir {
 
     let temp = tempfile::tempdir().unwrap();
 
+    let xdg_config_home = isolated_xdg_config_home();
+
     // Initialize temporary repository with test user identity so the initial working-copy
     // commit is authored by the test user before repo config is written.
     let init_output = std::process::Command::new("jj")
         .args([
+            "git",
+            "init",
             "--config",
             "user.name=\"Test User\"",
             "--config",
             "user.email=\"test@example.com\"",
-            "git",
-            "init",
         ])
+        .env("XDG_CONFIG_HOME", xdg_config_home)
         .current_dir(temp.path())
         .output()
         .expect("failed to run jj git init");
@@ -51,6 +54,7 @@ fn setup_temp_jj_repo() -> tempfile::TempDir {
     ] {
         let output = std::process::Command::new("jj")
             .args(["config", "set", "--repo", key, value])
+            .env("XDG_CONFIG_HOME", xdg_config_home)
             .current_dir(temp.path())
             .output()
             .expect("failed to set jj repo config");
@@ -225,12 +229,16 @@ fn test_discovery_is_identical_across_subcommands(#[case] args: &[&str]) {
     assert_eq!(top_level, command_lint);
 }
 
+// TODO: We are repeating setup, like
+// .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
+// a lot, is it normal and ricr?
 #[test]
 fn test_command_lint_described_commit_blocked() {
     let temp_repo = setup_temp_jj_repo();
 
     let describe_output = std::process::Command::new("jj")
         .args(["describe", "-m", "wip commit"])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .current_dir(temp_repo.path())
         .output()
         .expect("failed to describe commit");
@@ -264,6 +272,7 @@ fn test_code_lint_diff_flag_jj() {
     // 2. Commit it to draft state by creating a new change on top of it
     let new_output = std::process::Command::new("jj")
         .arg("new")
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .current_dir(repo_path)
         .output()
         .expect("failed to run jj new");
@@ -626,6 +635,7 @@ fn test_hook_pre_tool_use_allows_safe_command_and_denies_described_commit_edit()
     let repo_dir = temp_repo.path();
     let describe_output = std::process::Command::new("jj")
         .args(["describe", "-m", "feat: described working copy"])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .current_dir(repo_dir)
         .output()
         .unwrap();
@@ -714,6 +724,7 @@ fn test_hook_resolves_workspace_paths_when_current_dir_differs() {
 
     let describe_output = std::process::Command::new("jj")
         .args(["describe", "-m", "feat: described working copy"])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .current_dir(repo_dir)
         .output()
         .unwrap();
@@ -790,6 +801,7 @@ fn test_global_config_precedence_for_command() {
     let repo_dir = temp_repo.path();
     let describe_output = std::process::Command::new("jj")
         .args(["describe", "-m", "feat: described commit"])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .current_dir(repo_dir)
         .output()
         .expect("failed to run jj describe");
@@ -823,6 +835,7 @@ fn test_hook_global_config_precedence_for_command() {
     let repo_dir = temp_repo.path();
     let describe_output = std::process::Command::new("jj")
         .args(["describe", "-m", "feat: described commit"])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
         .current_dir(repo_dir)
         .output()
         .expect("failed to run jj describe");
