@@ -1,4 +1,4 @@
-//! Rule catalog: renders the rule list and one rule's documentation as plain Markdown.
+//! Rule catalog: renders the rule list and rule documentation as plain Markdown.
 
 architecture_component!(RuleCatalog);
 
@@ -41,17 +41,23 @@ pub struct DiscoveryArgs {
     #[arg(long, global = true, conflicts_with_all = ["list_rules", "explain"])]
     pub list_tags: bool,
 
-    /// Print one rule's documentation as Markdown
-    #[arg(long, global = true, value_name = "RULE", conflicts_with_all = ["list_rules", "list_tags"])]
-    pub explain: Option<String>,
+    /// Print one or more rules' documentation as Markdown
+    #[arg(long, global = true, value_name = "RULE", num_args = 1.., conflicts_with_all = ["list_rules", "list_tags"])]
+    pub explain: Vec<String>,
 }
 
 impl DiscoveryArgs {
     /// Renders the requested discovery output, or `None` when no discovery flag is given.
     #[must_use]
     pub fn render(&self, overrides: &ConfigOverrides) -> Option<Result<String, CatalogError>> {
-        if let Some(name) = &self.explain {
-            return Some(explain_with_overrides(name, overrides));
+        if !self.explain.is_empty() {
+            return Some(
+                self.explain
+                    .iter()
+                    .map(|name| explain_with_overrides(name, overrides))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|sections| sections.join("\n---\n")),
+            );
         }
         if self.list_tags {
             return Some(Ok(list_tags()));
@@ -569,6 +575,45 @@ mod tests {
             explain("testing").unwrap_err().to_string(),
             "unknown rule `testing`"
         );
+    }
+
+    #[test]
+    fn discovery_args_render_explains_single_and_multiple_rules() {
+        let overrides = ConfigOverrides::default();
+        let single_args = DiscoveryArgs {
+            list_rules: false,
+            tag: None,
+            list_tags: false,
+            explain: vec!["sleep-in-tests".into()],
+        };
+        let multi_args = DiscoveryArgs {
+            list_rules: false,
+            tag: None,
+            list_tags: false,
+            explain: vec!["sleep-in-tests".into(), "single-letter-name".into()],
+        };
+        let unknown_second_args = DiscoveryArgs {
+            list_rules: false,
+            tag: None,
+            list_tags: false,
+            explain: vec!["sleep-in-tests".into(), "no-such-rule".into()],
+        };
+
+        let single_rendered = single_args.render(&overrides).unwrap().unwrap();
+        let multi_rendered = multi_args.render(&overrides).unwrap().unwrap();
+        let unknown_error = unknown_second_args.render(&overrides).unwrap().unwrap_err();
+        let sleep_doc = explain_with_overrides("sleep-in-tests", &overrides).unwrap();
+        let single_letter_doc = explain_with_overrides("single-letter-name", &overrides).unwrap();
+
+        assert_eq!(single_rendered, sleep_doc);
+        assert_eq!(
+            multi_rendered,
+            indoc::formatdoc! {"
+                {sleep_doc}
+                ---
+                {single_letter_doc}"}
+        );
+        assert_eq!(unknown_error.to_string(), "unknown rule `no-such-rule`");
     }
 
     fn configuration_toml_block(rendered: &str) -> Option<&str> {

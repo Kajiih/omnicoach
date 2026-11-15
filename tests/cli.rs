@@ -979,6 +979,15 @@ fn test_closed_stdout_pipe_on_discovery_exits_zero(#[case] args: &[&str]) {
     assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
 }
 
+#[test]
+fn test_explain_multiple_rules_renders_separator() {
+    let output = run_cli(&["--explain", "sleep-in-tests", "single-letter-name"], None);
+
+    assert!(output.contains("--- exit code ---\n0\n"), "{output}");
+    assert!(output.contains("# sleep-in-tests\n"), "{output}");
+    assert!(output.contains("\n---\n# single-letter-name\n"), "{output}");
+}
+
 #[rstest::rstest]
 #[case::clean_plain(&["code", "--select", "single-letter-name"], "def compute_total() -> int:\n    return 0\n", 0)]
 #[case::violation_plain(&["code", "--select", "single-letter-name"], "k = 1\n", 1)]

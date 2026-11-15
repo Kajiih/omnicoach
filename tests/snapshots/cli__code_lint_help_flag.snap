@@ -53,8 +53,8 @@ Options:
       --list-tags
           List the topic tree with each topic's parent, synonyms, description and scope note
 
-      --explain <RULE>
-          Print one rule's documentation as Markdown
+      --explain <RULE>...
+          Print one or more rules' documentation as Markdown
 
   -h, --help
           Print help (see a summary with '-h')
