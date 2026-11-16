@@ -63,11 +63,13 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
 
                 A `NamedTuple` or frozen dataclass (Python) or a struct (Rust) puts the field names
                 in the signature, where callers, readers and type checkers see them."},
+            when_to_allow: Some(indoc::indoc! {r"
+                A symmetric pair whose order is its meaning, such as `(min, max)` bounds, or raise
+                `min-elements` under `[rules.positional-tuple-parameter]` to allow 2-element pairs
+                project-wide."}),
             known_problems: Some(indoc::indoc! {r"
-                - Type aliases (`Pair = tuple[int, int]`, `type Pair = (u32, u32);`) are not
-                  expanded.
-                - A symmetric pair whose order is its meaning, such as `(min, max)` bounds, is
-                  flagged too."}),
+                Type aliases (`Pair = tuple[int, int]`, `type Pair = (u32, u32);`) are not
+                expanded."}),
             references: &[
                 Reference {
                     title: "Python documentation: `typing.NamedTuple`",

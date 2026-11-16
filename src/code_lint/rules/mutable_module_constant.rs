@@ -57,6 +57,7 @@ pub const RULE: CodeRule = CodeRule {
                 the collection is intentionally mutated at runtime, name it in `_`-prefixed
                 `lower_snake_case` without `Final` to show that it is module state rather than a
                 constant."#},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Only literals, comprehensions and collection constructor calls are recognized as
                   values, so `ROLES: Final = load_roles()` is not flagged.

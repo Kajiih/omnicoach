@@ -92,6 +92,7 @@ Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-q
 
 ### 2.4 What goes in the rule's docs instead
 
+- **Legitimate domain or boundary exceptions**: write them in `RuleDoc::when_to_allow` (`## When to allow`).
 - **Static-analysis limitations**: write them in `RuleDoc::known_problems` (`## Known problems`). Because every rule whose syntactic proxy can flag valid code in an ordinary situation is already `opinionated`, static-analysis limitations belong in the rule's documentation rather than a separate precision tag.
 - **External backing** (a PEP, the Rust API Guidelines, a Clippy lint that is not on by default): write it in the rule's *References* section. It is not a facet. Almost every Omni rule would say "none".
 - **The failure mode**: write it in the *rationale*. It justifies the rule; it does not decide consensus.

@@ -44,6 +44,7 @@ pub const RULE: CodeRule = CodeRule {
                 Rendered documentation reads `Returns: Returns True if …`. Google style asks the
                 section to describe the semantics of the returned value; a leading verb turns it
                 into a second summary of the call."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Restatements that do not start with the verb (`This function returns …`, `The
                 return value is …`) are not flagged. A noun reading outside the fixed list is

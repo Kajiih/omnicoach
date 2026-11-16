@@ -42,6 +42,7 @@ pub const RULE: CodeRule = CodeRule {
                 Write `@dataclass(frozen=True)` and derive modified copies with
                 `dataclasses.replace`. When in-place mutation is really needed, say so with
                 `frozen=False`."},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

@@ -56,6 +56,9 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 An explicit `except` handler keeps the ignored case visible and can record it, for
                 example with a debug log."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Best-effort cleanup or idempotent teardown where a specific exception is genuinely
+                harmless (such as `with suppress(FileNotFoundError): path.unlink()`)."}),
             known_problems: None,
             references: &[
                 Reference {

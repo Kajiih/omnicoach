@@ -64,6 +64,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Start concurrent work inside `async with asyncio.TaskGroup() as tg:` or
                 `anyio.create_task_group()`: the block waits for every task on exit, cancels sibling
                 tasks immediately when one fails, and propagates their errors."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 An event loop held under another name, such as `self._loop.create_task(...)`, is not
                 flagged."}),

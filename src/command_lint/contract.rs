@@ -86,6 +86,7 @@ const PURE_SHELL_RULE: CommandRule = CommandRule {
             summary: "Flags redundant `sh -c` or `bash -c` command wrappers.",
             what_it_does: "Checks shell commands for `sh -c` or `bash -c` wrappers.",
             why_is_this_bad: "An extra shell wrapper obscures the executed command.",
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[CommandExample {

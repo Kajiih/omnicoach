@@ -47,6 +47,7 @@ pub const RULE: CommandRule = CommandRule {
 
                 Intersect open revsets with `& mutable()`, use a two-sided range between non-root
                 commits (`main..@`), or cap output with `-n` / `--limit`."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Boundedness is checked syntactically without querying the repository graph: open
                 descendant ranges on mutable commits (such as `jj log -r @::`) are flagged unless

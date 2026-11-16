@@ -49,6 +49,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Extract shared setup or actions into a plain helper function (or a
                 `@pytest.fixture` in Python) and have each test call that helper."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Calls to test functions imported from another file and, in Rust, calls inside macro
                 arguments (`assert!(test_seed())`) are not flagged."}),

@@ -63,6 +63,12 @@ pub const RULE: CodeRule = CodeRule {
                 their `Mutable` counterparts for in-place mutation. The message names the read-only
                 counterpart of the flagged type as a starting point; it does not inspect how the
                 parameter is used."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Functions that mutate a concrete container in place using methods not on
+                `MutableSequence`, `MutableMapping`, or `MutableSet` (such as `list.sort`), or public
+                APIs whose callers or runtime type-hint inspections require an exact concrete type
+                (`list[str]`); suppress that parameter with
+                `# omni:ignore[concrete-collection-parameter]` and a reason."}),
             known_problems: Some(indoc::indoc! {r"
                 Type aliases such as `Names: TypeAlias = list[str]` are not expanded, so annotations
                 that use them are not checked."}),

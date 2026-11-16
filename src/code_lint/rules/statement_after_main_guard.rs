@@ -45,6 +45,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Keep the `if __name__ == "__main__":` block at the very bottom of the module and
                 place all definitions above it."#},
+            when_to_allow: None,
             known_problems: None,
             references: &[Reference {
                 title: "Python Documentation: __main__ — Top-level code environment",

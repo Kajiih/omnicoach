@@ -46,6 +46,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Move all constructors to the top of the `class` or inherent `impl` block, before
                 any non-constructor methods."},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

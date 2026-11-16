@@ -140,9 +140,9 @@ impl From<&'static [CommandExample]> for DeclaredExamples {
 /// Wording rules for `summary` are in `docs/dev/naming_and_message_style_guide.md` §2.5,
 /// checked by `tests/registry.rs`.
 ///
-/// Write `what_it_does`, `why_is_this_bad` and `known_problems` as `indoc::indoc!` raw strings
-/// wrapped at the source line width, closed on their last line. They are Markdown: a single
-/// line break is a space, and a blank line separates paragraphs.
+/// Write `what_it_does`, `why_is_this_bad`, `when_to_allow`, and `known_problems` as
+/// `indoc::indoc!` raw strings wrapped at the source line width, closed on their last line. They
+/// are Markdown: a single line break is a space, and a blank line separates paragraphs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleDoc<Examples = &'static [Example]> {
     /// One sentence for rule lists, opening with `Flags` (pattern rules) or `Requires`
@@ -154,6 +154,10 @@ pub struct RuleDoc<Examples = &'static [Example]> {
     pub what_it_does: &'static str,
     /// Why the flagged code is a problem: the authoritative, longer rationale.
     pub why_is_this_bad: &'static str,
+    /// Legitimate domain, boundary, or architectural exceptions where the flagged construct is
+    /// intentional, rendered under `## When to allow` when `Some`. `None` when the flagged
+    /// pattern is never intentional or `what_it_does` already states the opt-out.
+    pub when_to_allow: Option<&'static str>,
     /// Limitations a user may hit: false positives or false negatives the rule accepts by
     /// design or has not solved yet. `None` when there are none worth telling.
     pub known_problems: Option<&'static str>,
@@ -170,6 +174,7 @@ impl RuleDoc {
         summary: "Documentation pending.",
         what_it_does: "Documentation pending.",
         why_is_this_bad: "Documentation pending.",
+        when_to_allow: None,
         known_problems: None,
         references: &[],
         examples: &[],
@@ -183,6 +188,7 @@ impl<Examples> RuleDoc<Examples> {
         self.summary == RuleDoc::TODO.summary
             && self.what_it_does == RuleDoc::TODO.what_it_does
             && self.why_is_this_bad == RuleDoc::TODO.why_is_this_bad
+            && self.when_to_allow.is_none()
             && self.known_problems.is_none()
             && self.references.is_empty()
     }
@@ -197,6 +203,7 @@ impl<Examples> RuleDoc<Examples> {
             summary: self.summary,
             what_it_does: self.what_it_does,
             why_is_this_bad: self.why_is_this_bad,
+            when_to_allow: self.when_to_allow,
             known_problems: self.known_problems,
             references: self.references,
             examples: self.examples.into(),
@@ -206,7 +213,27 @@ impl<Examples> RuleDoc<Examples> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case::todo(RuleDoc::TODO, true)]
+    #[case::custom_summary(RuleDoc { summary: "Custom.", ..RuleDoc::TODO }, false)]
+    #[case::custom_what(RuleDoc { what_it_does: "Custom.", ..RuleDoc::TODO }, false)]
+    #[case::custom_why(RuleDoc { why_is_this_bad: "Custom.", ..RuleDoc::TODO }, false)]
+    #[case::with_when_to_allow(RuleDoc { when_to_allow: Some("Allow."), ..RuleDoc::TODO }, false)]
+    #[case::with_known_problems(
+        RuleDoc { known_problems: Some("Problem."), ..RuleDoc::TODO },
+        false
+    )]
+    #[case::with_references(
+        RuleDoc { references: &[Reference::NAME_RESOLUTION], ..RuleDoc::TODO },
+        false
+    )]
+    fn is_placeholder_matches_only_the_todo_constant(#[case] doc: RuleDoc, #[case] expected: bool) {
+        assert_eq!(doc.is_placeholder(), expected);
+    }
 
     #[test]
     fn name_resolution_reference_points_at_a_repository_file() {

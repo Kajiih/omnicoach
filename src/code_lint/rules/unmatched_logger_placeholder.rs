@@ -48,6 +48,7 @@ pub const RULE: CodeRule = CodeRule {
                 Either pass `order_id=order_id` as a keyword argument (which `loguru` formats and
                 captures into `record["extra"]`), or replace `{order_id}` with positional `{}` (for
                 `loguru`) or `%s` (for standard library `logging`)."#},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - A logger under another name, such as `audit.info(...)`, is not checked.
                 - A call that unpacks `**kwargs` is not flagged: the keyword may come from it."}),

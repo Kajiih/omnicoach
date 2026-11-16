@@ -75,6 +75,7 @@ pub const RULE: ProjectCodeRule<(), &'static [Example]> = ProjectCodeRule {
                 inline type annotation inside methods. Internal state that does not belong to the
                 class's public contract can be prefixed with `_` and annotated either in the class
                 body or inline."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Base classes in third-party libraries outside project source roots (other than
                 `pydantic.BaseModel`) are not inspected."}),

@@ -58,7 +58,7 @@ Static rules should establish sane defaults while respecting domain vocabulary.
   * a legitimate case is common and documented in the rule (`nullable-collection-return`: `None` meaning something other than empty); or
   * the rule's false positives are common and structural, such as single-file analysis missing mutations in other modules (`mutable-collection-return`, `mutable-collection-attribute`).
 
-  An `Exact` rule whose exception is deliberate and rare (`concrete-collection-return`: callers that `sort()` the result) defaults to `ban`.
+  A rule whose exception is deliberate and rare (`concrete-collection-return`: callers that `sort()` the result) defaults to `ban`.
 
 ---
 
@@ -68,7 +68,7 @@ A rule's documentation exists so that a reader can **predict whether the rule fl
 
 * **The Prediction Test**: Read the `--explain` output as a user would and ask, for common code: *would I guess right whether this is flagged?* Every sentence must help answer that question; one that does not is noise and hides the behavior that matters.
 * **State what changes the answer**: An exemption, a cross-rule hand-off (`zero-sleep-in-tests` takes zero-duration sleeps from `sleep-in-tests`), or an exception to an exemption (a `Mapping` annotation exempts a `dict`, but not a `defaultdict(...)`) belongs in the doc as soon as a reader would otherwise mispredict common code.
-* **State the limits**: False positives and false negatives a user may hit go in `known_problems`, not in a code comment or the roadmap alone.
+* **Separate legitimate exceptions from static-analysis limits**: Legitimate domain, boundary, or architectural cases where the flagged construct is intentional go in `when_to_allow` (`## When to allow`); static-analysis false positives and false negatives go in `known_problems` (`## Known problems`).
 * **Say it once, where the reader looks**: The doc never restates what `--explain` renders from the declaration or documents elsewhere: list defaults and thresholds (`## Configuration`), file scope (`## Tags`), import-aware name matching (`docs/name_resolution.md`). A behavior that overrides an option belongs in that option's `doc`, which is rendered next to it (`os.environ[...]` is flagged whatever the `environment-variable-in-function` deny list holds).
 * **Leave edge cases to the tests**: Rare constructs that no reader would guess about are `rule_test!` cases, not prose. An exhaustive list of covered and exempt constructs fails the Prediction Test by burying the cases that matter.
 

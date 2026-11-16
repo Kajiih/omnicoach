@@ -55,6 +55,10 @@ pub const RULE: CodeRule = CodeRule {
                 deliberate choice. Otherwise, `Sequence`, `Mapping`, or `Set` (imported as
                 `AbstractSet`) state a read-only field, and internal mutable state belongs in a
                 `_`-prefixed attribute."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Public class or dataclass attributes that outside callers or subclasses intentionally
+                mutate in place (such as appending to a registry's
+                `active_plugins: MutableSequence[str]`)."}),
             known_problems: Some(indoc::indoc! {r"
                 - Only the class's own methods count as mutations, so an attribute mutated only by a
                   subclass or by outside code is flagged.

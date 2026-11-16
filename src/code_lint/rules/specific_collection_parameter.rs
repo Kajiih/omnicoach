@@ -64,6 +64,7 @@ pub const RULE: CodeRule = CodeRule {
                 truthiness, or multi-pass iteration. Keep `Sequence[T]` only as a deliberate
                 contract, for example to reserve indexing for a later version. The suggested
                 interface comes from a syntactic analysis of the function body."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Type aliases such as `Names: TypeAlias = Sequence[str]` are not expanded, so
                 annotations that use them are not checked."}),

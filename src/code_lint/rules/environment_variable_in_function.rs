@@ -97,6 +97,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Read the environment once, at startup or in a `from_env` constructor, into a typed
                 configuration object, and pass that object, or the values it holds, to the code that
                 needs them."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 A class or `impl` block defined inside a boundary function inherits its exemption,
                 even when its methods are later called from outside the boundary."}),

@@ -63,6 +63,7 @@ pub const RULE: CodeRule = CodeRule {
                 when the check can fail. Otherwise name the function after what it returns:
                 `report_id`, `find_report`, `activation_age`, an enum such as `override_kind()` for
                 three states, or `validate_*` for a check that fails loudly."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Type aliases of `bool` and other boolean-like types (`numpy.bool_`) are flagged.
                 - Any Rust type whose last segment ends in `Result` is treated as a `Result`."}),

@@ -47,6 +47,7 @@ pub const RULE: CodeRule = CodeRule {
                 of raising or returning an empty value: on cache miss, when a record is absent, or
                 when a timeout elapses. Repeating `or None.` at the end of `Returns:` restates the
                 type without answering the question callers read the docstring to resolve."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Removing `or None` silences the rule without adding the missing condition. A
                 follow-up sentence that explains the `None` case without repeating the word `None`

@@ -53,9 +53,13 @@ pub const RULE: ProjectCodeRule<(), &'static [Example]> = ProjectCodeRule {
 
                 Choose the annotation as a contract: `Sequence`, `Mapping`, or `Set` (imported as
                 `AbstractSet`) for read-only fields, and their `Mutable` counterparts for fields
-                mutated in place. Internal state belongs in a `_`-prefixed attribute. A public
-                concrete collection is a deliberate exception. The message names the read-only
-                counterpart of the flagged type; it does not check how the attribute is used."},
+                mutated in place. Internal state belongs in a `_`-prefixed attribute. The message
+                names the read-only counterpart of the flagged type; it does not check how the
+                attribute is used."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Public dataclass or class attributes whose external callers or serialization schemas
+                require a concrete `list`, `dict`, or `set`; suppress that attribute with
+                `# omni:ignore[concrete-collection-attribute]` and a reason."}),
             known_problems: Some(indoc::indoc! {r"
                 Type aliases such as `Names: TypeAlias = list[str]` are not expanded, so annotations
                 that use them are not checked."}),

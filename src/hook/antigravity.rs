@@ -829,7 +829,7 @@ mod tests {
             "Note: When an opinionated rule flags intentional code, match the resolution to its scope:"
         ));
         assert!(serialized.contains(
-            "For details on a rule (including known limitations), run: omnicoach --explain <rule>..."
+            "For details on a rule (including when to allow and known problems), run: omnicoach --explain <rule>..."
         ));
     }
 

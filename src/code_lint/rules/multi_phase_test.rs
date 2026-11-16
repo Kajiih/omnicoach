@@ -52,12 +52,14 @@ pub const RULE: CodeRule = CodeRule {
 
                 Give each behavior its own arrange-act-assert test function, or compute the
                 values under test before running the assertions."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Stateful lifecycle or protocol handshake tests that intentionally step a single
+                object through sequential transitions (`act -> assert -> act -> assert`) in one test;
+                suppress that test with `# omni:ignore[multi-phase-test]` and a reason rather than
+                dropping intermediate assertions."}),
             known_problems: Some(indoc::indoc! {r"
-                - Stateful lifecycle or protocol handshake tests that intentionally step through a
-                  sequence of transitions in one test need an `# omni:ignore[multi-phase-test]`
-                  suppression with a reason.
-                - Imported helper calls that perform assertions without an `assert_` or `_assert_`
-                  prefix are classified as non-assertion statements."}),
+                Imported helper calls that perform assertions without an `assert_` or `_assert_`
+                prefix are classified as non-assertion statements."}),
             references: &[Reference {
                 title: "Software Engineering at Google, ch. 12: Structure Tests to Emphasize Behaviors",
                 url: "https://abseil.io/resources/swe-book/html/ch12.html",

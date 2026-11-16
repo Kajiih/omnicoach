@@ -57,6 +57,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 one-line override docstring over a base that documents its parameters, result and
                 errors hides that contract from every reader of the override, even when the
                 override changes none of it."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Base classes in third-party libraries outside project source roots are not seen.
                 Entries are not compared: an override `Args:` section that omits one of the base's

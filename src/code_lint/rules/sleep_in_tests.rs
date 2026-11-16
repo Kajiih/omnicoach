@@ -86,6 +86,7 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
 
                 Wait on the event itself (an event, a channel, a condition variable), or inject a
                 clock that the test advances."},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {
@@ -171,6 +172,7 @@ pub const ZERO_SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
                 Wait on an explicit signal (`asyncio.Event`, `asyncio.Queue`) or use the runtime's
                 dedicated yield primitive (`tokio::task::yield_now().await` in Rust,
                 `await anyio.lowlevel.checkpoint()` in AnyIO)."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Only literal zeros are recognized: a constant holding zero, or
                 `Duration::from_nanos(0)`, is reported by `sleep-in-tests` instead."}),

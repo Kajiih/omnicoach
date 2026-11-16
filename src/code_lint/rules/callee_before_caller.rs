@@ -44,6 +44,7 @@ pub const RULE: CodeRule = CodeRule {
                 higher-level helper logic that gives them context.
 
                 Order private helpers from higher-level callers down to lower-level callees."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Constants (`const`, `static`, `UPPER_CASE = ...`) and type aliases are not ordered.
                 - In Rust macro arguments, a pattern binding or named argument that shares a sibling

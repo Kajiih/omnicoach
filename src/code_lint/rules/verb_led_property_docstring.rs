@@ -44,6 +44,7 @@ pub const RULE: CodeRule = CodeRule {
                 same noun-phrase style as attribute docstrings (`"""The project-qualified dataset
                 name."""`) rather than verb-led function summaries (`"""Returns the
                 project-qualified dataset name."""`)."#},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Only the fixed verb list is checked, so less common opening verbs (`Builds …`,
                 `Reads …`) are not flagged. A `Return …` or `Get …` noun phrase whose second word

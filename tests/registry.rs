@@ -699,6 +699,7 @@ fn test_rules_with_a_mode_leave_comment_explanations_to_the_framework() {
         let fields = template_fields.iter().flat_map(texts).chain(
             [doc.summary, doc.what_it_does, doc.why_is_this_bad]
                 .into_iter()
+                .chain(doc.when_to_allow)
                 .chain(doc.known_problems),
         );
         for text in fields {

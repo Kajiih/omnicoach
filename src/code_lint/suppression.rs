@@ -58,6 +58,7 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
             reviewer cannot tell a deliberate exception from a shortcut, and a later reader cannot
             tell whether the suppression is still needed. The reason keeps the decision reviewable,
             and makes stale suppressions easy to spot and remove."},
+        when_to_allow: None,
         known_problems: Some(indoc::indoc! {r"
             Any substantive comment block directly above the directive's line counts as its
             reason, including an unrelated one such as a license header above a file-level
@@ -111,6 +112,7 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
             reported.
 
             Remove the rule from the directive, or the whole directive when no rule is left."},
+        when_to_allow: None,
         known_problems: Some(indoc::indoc! {r"
             A directive on its own line covers contiguous decorators, attributes, and comments below
             it and the declaration header after them, not the statement body. A finding inside a
@@ -154,6 +156,7 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
             off. Names of renamed or removed rules pile up as noise.
 
             Fix the name (`--list-rules` prints every rule name), or remove it from the directive."},
+        when_to_allow: None,
         known_problems: None,
         references: &[],
         examples: &[],
@@ -189,6 +192,7 @@ const BLANKET_SUPPRESSION: Declaration = Declaration {
             line or in the file, which misleads the reader.
 
             Name the rules to suppress in brackets, followed by a reason: `[rule-name] -- reason`."},
+        when_to_allow: None,
         known_problems: None,
         references: &[Reference {
             title: "Ruff: blanket-noqa (PGH004)",

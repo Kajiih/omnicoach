@@ -56,6 +56,16 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Name the value by its role, using a plural for collections (`users`, `name`,
                 `scores_by_player`), and leave the type to the annotation."},
+            when_to_allow: Some(indoc::indoc! {r"
+                - External wire-protocol, database, or configuration schemas that systematically
+                  suffix field or keyword-parameter names across a module (such as `_list` and
+                  `_dict` in a payload schema): add only those suffixes to `remove-banned` under
+                  `[rules.type-suffixed-name]` in `.omnicoach.toml` rather than ignoring the file
+                  with `per-file-ignores`, so other type-suffixed local variables in the module
+                  (such as `_str` or `_set`) are still checked.
+                - A single parameter or attribute name fixed by an external caller contract (such as
+                  `hook_arr`): suppress that site with `# omni:ignore[type-suffixed-name]` and a
+                  reason rather than weakening `remove-banned` across the project."}),
             known_problems: None,
             references: &[Reference {
                 title: "Making Wrong Code Look Wrong (Joel Spolsky)",

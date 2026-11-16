@@ -46,6 +46,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 `ast::rust`, or peer domain handlers) stay maintainable when each slice depends only
                 on the component root or lower layers. Lateral imports between siblings create
                 hidden coupling and circular dependencies within the component."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[

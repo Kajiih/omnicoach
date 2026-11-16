@@ -75,6 +75,11 @@ pub const RULE: CodeRule<SetupThresholds<CountOption>> = CodeRule {
                 Extract shared immutable values into module constants, or extract a creation helper
                 or fixture with sensible defaults so each test passes only the values relevant to
                 the behavior it verifies."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Tests whose leading statements are the explicit syntax or construction pattern under
+                test and would lose readability if hidden behind a helper; suppress with
+                `# omni:ignore[duplicated-test-setup]` and a reason, or adjust `min-tests` /
+                `min-statements` under `[rules.duplicated-test-setup]`."}),
             known_problems: Some(indoc::indoc! {r"
                 - Only identical leading statements are matched; setup statements that appear in a
                   different order or use different local variable names are not grouped together.

@@ -49,6 +49,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 docstring on a method that has none. A copy adds nothing, and a copy of the summary
                 alone hides the inherited sections. When the base contract changes, the copy keeps
                 the old text."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Base classes in third-party libraries outside project source roots are not seen.
                 Methods without `@override` are not inspected: enable mypy's `explicit-override`

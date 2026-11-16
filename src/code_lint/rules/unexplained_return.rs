@@ -69,6 +69,7 @@ pub const RULE: CodeRule<ComplexityGate<CountOption>> = CodeRule {
                 union does not: the caller cannot tell when `None` comes back (not found? not
                 ready? invalid input?), whether `True` from an action means success or a change,
                 or which branch of `Path | str` produces which type, without reading the body."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Type aliases hiding `Optional` or a union are not expanded.
                 - A summary that explains the result in prose without opening with `Return(s)`

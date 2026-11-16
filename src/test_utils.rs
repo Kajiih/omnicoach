@@ -1620,6 +1620,7 @@ mod tests {
                 summary: "Flags classes shadowing an imported name.",
                 what_it_does: "Flags classes shadowing an imported name.",
                 why_is_this_bad: "Shadowing is confusing.",
+                when_to_allow: None,
                 known_problems: None,
                 references: &[],
                 examples: &[ProjectExample {

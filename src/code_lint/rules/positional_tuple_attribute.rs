@@ -64,11 +64,13 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
 
                 A `NamedTuple` or frozen dataclass (Python) or a struct (Rust) gives each element a
                 field name on the attribute itself."},
+            when_to_allow: Some(indoc::indoc! {r"
+                A symmetric pair whose order is its meaning, such as `(min, max)` bounds, or raise
+                `min-elements` under `[rules.positional-tuple-attribute]` to allow 2-element pairs
+                project-wide."}),
             known_problems: Some(indoc::indoc! {r"
-                - Type aliases (`Pair = tuple[int, int]`, `type Pair = (u32, u32);`) are not
-                  expanded.
-                - A symmetric pair whose order is its meaning, such as `(min, max)` bounds, is
-                  flagged too."}),
+                Type aliases (`Pair = tuple[int, int]`, `type Pair = (u32, u32);`) are not
+                expanded."}),
             references: &[
                 Reference {
                     title: "Python documentation: `dataclasses`",

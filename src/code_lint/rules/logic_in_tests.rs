@@ -50,6 +50,10 @@ pub const RULE: CodeRule = CodeRule {
 
                 Write out the expected value directly, split branches into dedicated tests, or
                 parameterize input variations with `@pytest.mark.parametrize` or `#[rstest]`."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Stateful lifecycle or protocol state-machine tests that intentionally step a single
+                instance through sequential transitions in a loop; suppress that test with
+                `# omni:ignore[logic-in-tests]` and a reason."}),
             known_problems: None,
             references: &[
                 Reference {

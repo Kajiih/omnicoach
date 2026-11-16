@@ -44,6 +44,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 An `architecture_component!` marker that has no effect silently leaves the module
                 unmapped (or governed by an ancestor component) while looking to readers like an
                 enforced architectural boundary."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[ProjectExample {

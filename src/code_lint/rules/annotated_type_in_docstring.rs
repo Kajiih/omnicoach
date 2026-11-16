@@ -55,12 +55,14 @@ pub const RULE: CodeRule = CodeRule {
                 only where the code has no annotation, and for `Returns:` only for type
                 information that the annotation does not provide. Use the entry for what the
                 annotation cannot say: units, valid ranges, what `None` means."},
-            known_problems: Some(indoc::indoc! {r#"
+            when_to_allow: Some(indoc::indoc! {r#"
+                Projects whose rendered Sphinx docs rely on explicit docstring types because Sphinx
+                is not configured to render type annotations
+                (`autodoc_typehints = "description"`)."#}),
+            known_problems: Some(indoc::indoc! {r"
                 A `Returns:` or `Yields:` prefix is flagged only when it is textually the
                 annotation, so a stale prefix (`int:` under `-> float`) or a spelled-out one
-                (`list of str:` under `-> list[str]`) is missed. Projects whose rendered Sphinx
-                docs rely on docstring types lose them unless Sphinx renders annotations
-                (`autodoc_typehints = "description"`)."#}),
+                (`list of str:` under `-> list[str]`) is missed."}),
             references: &[
                 Reference {
                     title: "Google Python Style Guide §3.8.3: Functions and Methods",

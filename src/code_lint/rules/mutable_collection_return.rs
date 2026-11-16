@@ -56,6 +56,10 @@ pub const RULE: CodeRule = CodeRule {
                 A mutable return type is a contract that callers may mutate the result, so it is a
                 deliberate choice; otherwise use `Sequence`, `Mapping`, or `Set` (imported as
                 `AbstractSet`)."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Factory or builder functions whose contract is to return a fresh `MutableSequence`,
+                `MutableMapping`, or `MutableSet` that callers in other modules enrich or mutate in
+                place."}),
             known_problems: Some(indoc::indoc! {r"
                 - Callers are matched by function name only, so mutating the result of
                   `config.get(...)` also exempts an unrelated function named `get`.

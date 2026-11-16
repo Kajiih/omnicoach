@@ -39,6 +39,7 @@ pub const RULE: CommandRule = CommandRule {
 
                 Create a child change with `jj new <revision>`, then move only the intended fixes
                 into the commit with `jj squash`."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 When `jj` cannot read the target's description, such as for a mistyped revision,
                 the command is not flagged."}),

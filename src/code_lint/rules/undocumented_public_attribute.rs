@@ -63,6 +63,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 only find by reading every assignment in the class. Google style lists public
                 attributes, excluding properties, under `Attributes:` in the class docstring,
                 including those initialized from constructor arguments."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Re-assigning an inherited attribute in a subclass initializer is flagged even
                 when the base class documents it. Subclasses of a project Enum are not

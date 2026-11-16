@@ -61,14 +61,19 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 any value instead of comparing. For repeated dictionary keys in Python, declare a
                 `TypedDict` class for the payload schema or extract a `Final` key constant
                 (`PRICE_KEY: Final = "price"`)."#},
-            known_problems: Some(indoc::indoc! {r"
+            when_to_allow: Some(indoc::indoc! {r"
+                Coincidentally equal literals that represent independent domain concepts; define a
+                separate named constant for each concept (`DEFAULT_PORT` and `BACKUP_PORT`) rather
+                than sharing one constant or suppressing the rule."}),
+            known_problems: Some(indoc::indoc! {r#"
                 - A negative number written as a bare `-` token inside a Rust macro, such as
                   `vec![-42]`, is skipped.
                 - Python constants defined by unpacking or chaining (`A, B = 3, 4`, `A = B = 3`)
                   are not recognized, so their values count as inline uses.
                 - Keys of a Python `TypedDict` imported from another module or defined with the
                   functional `TypedDict('Name', {...})` call syntax are not resolved, so repeating
-                  them as inline string keys is still flagged."}),
+                  them as inline string literal subscript keys (`frame["key"]`, which PEP 589
+                  requires to remain string literals rather than variables) is still flagged."#}),
             references: &[
                 Reference {
                     title: "SonarSource RSPEC-1192: String literals should not be duplicated",

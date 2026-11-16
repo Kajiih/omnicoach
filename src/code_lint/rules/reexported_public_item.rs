@@ -46,6 +46,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 re-exporting at the parent keeps a single canonical import path while `modules: { ... }`
                 in `define_architecture!` still enforces internal dependency boundaries between those
                 private submodules."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[ProjectExample {

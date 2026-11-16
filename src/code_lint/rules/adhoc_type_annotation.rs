@@ -62,6 +62,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 raw structural pieces across signatures. Naming the domain record (`Dimensions`) or
                 narrower protocol (`Iterator[T]`) in one place makes signatures self-documenting
                 and lets the representation evolve without updating every annotation."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Type aliases are not expanded before matching, so an alias hiding a banned shape is
                 only checked at its own definition if it appears in an inspected annotation."}),

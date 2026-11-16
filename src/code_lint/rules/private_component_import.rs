@@ -39,6 +39,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 Even when component `A` is allowed to depend on component `B`, reaching directly
                 into `B`'s private submodules couples `A` to `B`'s internal decomposition and
                 prevents refactoring `B` behind a stable facade."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[

@@ -110,6 +110,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Pass dependencies in explicitly and use a fake in tests: a small working in-memory
                 implementation of the same interface (for example a `FakeRepository` backed by a
                 dict), then assert on its state."},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

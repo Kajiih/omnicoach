@@ -48,6 +48,7 @@ pub const RULE: CodeRule = CodeRule {
                 Place each single-use helper either immediately after its consumer or in the
                 trailing helper section at the end of the scope, and always place multi-use helpers
                 at the end of the scope."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Module-level constants (`const`, `static`, `UPPER_CASE = ...`) and type aliases
                   are not ordered.

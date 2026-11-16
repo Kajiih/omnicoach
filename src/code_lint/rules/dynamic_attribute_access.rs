@@ -69,6 +69,10 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Access attributes directly on a typed object. For data keyed by runtime strings, use
                 a `dict` or `Mapping`; to accept several types that share attributes, declare a
                 `Protocol`."#},
+            when_to_allow: Some(indoc::indoc! {r"
+                Dynamic plugin, RPC, or command dispatch where the attribute or method name comes
+                from a runtime string and the target object cannot be represented by a static
+                `Protocol` or `Mapping`."}),
             known_problems: None,
             references: &[
                 Reference {

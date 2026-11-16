@@ -78,6 +78,7 @@ pub const RULE: CodeRule<ComplexityGate<CountOption>> = CodeRule {
                 or `*args` / `**kwargs` and omits `Args:` altogether, callers have to read the
                 body to learn what `None` falls back to, what each branch of the flag does, when
                 the callback runs, or where variadic arguments are forwarded."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r#"
                 - Parameters whose non-obvious contract comes from a string or integer sentinel
                   default (`mode: str = "auto"`, `limit: int = -1`) or from a type alias hiding

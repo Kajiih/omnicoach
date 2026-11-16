@@ -40,6 +40,7 @@ pub const RULE: CodeRule = CodeRule {
                 Move the function to module level, conventionally with a leading underscore, and
                 pass what it needs as parameters. A `lambda` remains fine for a trivial callback
                 such as a sort key."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[Example {

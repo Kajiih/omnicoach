@@ -43,6 +43,7 @@ pub const RULE: CommandRule = CommandRule {
 
                 Place the subcommand immediately after the binary (or after a leading `cargo`
                 `+toolchain` selector) and pass global flags after the subcommand."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Only `clap`-based subcommand CLIs registered in the rule's schema table (`jj`,
                 `cargo`, and `uv`) are checked; non-`clap` CLIs such as `git` reject top-level

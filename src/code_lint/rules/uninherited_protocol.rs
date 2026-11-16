@@ -70,6 +70,7 @@ pub const RULE: ProjectCodeRule<CountOption> = ProjectCodeRule {
                 - `@typing.override` on its methods is rejected, since no base method exists;
                 - `inspect.getdoc()` and docstring inheritance cannot reach the `Protocol`'s
                   method docstrings."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Matching uses method names only: a class that shares `min-methods` method
                   names with an unrelated in-scope `Protocol` is flagged.

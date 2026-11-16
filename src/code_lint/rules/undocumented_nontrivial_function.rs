@@ -68,6 +68,7 @@ pub const RULE: CodeRule<ComplexityGate<CountOption>> = CodeRule {
                 non-obvious logic, whether public or private. Without one, a caller has to read
                 the body to learn what the function does, what each argument means and what comes
                 back, and a maintainer cannot tell intended behavior from accident."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Both measures stand in for what makes a docstring necessary, such as an
                   unusual return value, mutated arguments or side effects. Flat `elif` dispatch

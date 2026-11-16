@@ -51,6 +51,7 @@ pub const RULE: CodeRule = CodeRule {
                 (`class FakeUserRepository(UserRepository):`) so the type checker verifies every
                 method signature at the class definition and rejects instantiating a fake with
                 missing methods."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Any other base counts as a collaborator, even an unrelated one such as
                 `class FakeClient(Exception):`."}),

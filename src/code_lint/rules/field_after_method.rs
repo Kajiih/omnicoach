@@ -42,6 +42,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Declare all type-annotated class and instance attributes at the top of the class
                 body, before any method definitions."},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

@@ -43,6 +43,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 or language parser crates) are easier to test, mock, and upgrade when encapsulated
                 behind an internal adapter component. Direct imports scattered across domain logic
                 couple the entire codebase to third-party APIs."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[

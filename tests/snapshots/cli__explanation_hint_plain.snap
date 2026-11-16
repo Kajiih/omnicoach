@@ -19,6 +19,6 @@ Note: When an opinionated rule flags intentional code, match the resolution to i
   - Internal defect (default): Refactor the code to fix the root cause described in `Rationale:`.
   - Single-site boundary exception (locked public/wire signature or stateful test): Satisfy `Or:` if shown, or suppress that site only with `omni:ignore [<rule>] -- <reason>` (do not weaken `.omnicoach.toml` repo-wide for a single site).
   - Multi-site module or domain convention (5+ sites across a domain module): Configure `[rules.<rule>]` or `per-file-ignores = { "path.py" = ["<rule>"] }` in `.omnicoach.toml` (see `omnicoach --explain <rule>...`) rather than repeating inline suppressions across a file. Report false positives or misleading guidance to `omnicoach`.
-For details on a rule (including known limitations), run: omnicoach --explain <rule>...
+For details on a rule (including when to allow and known problems), run: omnicoach --explain <rule>...
 
 --- stderr ---

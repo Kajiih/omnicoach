@@ -76,6 +76,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 indentation: `inspect.cleandoc("""...""")` in Python, `indoc::indoc!` (or
                 `formatdoc!` to interpolate) in Rust. Write a single-line literal when the value has
                 one line."#},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

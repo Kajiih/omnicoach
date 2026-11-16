@@ -54,6 +54,11 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 `def transfer(*, source_id: str, target_id: str, amount: int)`, so every call names
                 its arguments. Distinct types (such as `NewType` wrappers) also let the type checker
                 catch the swap."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Public or wire-compatible functions whose external callers already pass arguments
+                positionally and cannot be changed to keyword-only (`*`); suppress that function with
+                `# omni:ignore[identical-positional-types]` and a reason, while still adding `*,` to
+                internal helpers whose callers can pass keyword arguments."}),
             known_problems: Some(indoc::indoc! {r"
                 - Annotations are compared as written, so `dict[str, int]` and `dict[str, float]`
                   count as different types, and so do `Optional[str]` and `str | None`.

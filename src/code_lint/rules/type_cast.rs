@@ -50,6 +50,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Narrow the type with a check the type checker understands: `isinstance()`, a
                 `TypeGuard` or `TypeIs` function, or a `Protocol` that describes the contract."},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

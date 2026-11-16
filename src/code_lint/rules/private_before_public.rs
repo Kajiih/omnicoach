@@ -51,6 +51,7 @@ pub const RULE: CodeRule = CodeRule {
                 Place single-use helpers either immediately below their owning public entrypoint or
                 in the trailing private helper section, and place shared helpers in the trailing
                 private helper section below all public declarations."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Module-level constants (`const`, `static`, `UPPER_CASE = ...`) and type aliases
                   are not ordered.

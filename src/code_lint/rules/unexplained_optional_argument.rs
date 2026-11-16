@@ -60,13 +60,14 @@ pub const RULE: CodeRule = CodeRule {
                 use a library timeout, the root node or a detached one. Google's guide asks a
                 docstring to give "enough information to write a call to the function without
                 reading the function's code"."#},
+            when_to_allow: Some(indoc::indoc! {r"
+                A parameter whose absence is self-explanatory (such as an event hook that simply does
+                not run when omitted); write `optional` after the first word (`An optional callback
+                run on completion.`) or state the no-op (`If None, no callback is run.`)."}),
             known_problems: Some(indoc::indoc! {r"
-                Removing the marker silences the rule without adding the missing meaning. A
-                marker on a value whose absence is self-explanatory (`Optional callback run on
-                completion.`) is flagged; `optional` after the first word (`An optional
-                callback`) is not. `Attributes:` entries and `**kwargs` keys are never matched
-                with a signature, so their `Optional` markers are flagged even when the value
-                has a default."}),
+                Removing the marker silences the rule without adding the missing meaning.
+                `Attributes:` entries and `**kwargs` keys are never matched with a signature, so
+                their `Optional` markers are flagged even when the value has a default."}),
             references: &[Reference {
                 title: "Google Python Style Guide §3.8.3: Functions and Methods",
                 url: "https://google.github.io/styleguide/pyguide.html#383-functions-and-methods",

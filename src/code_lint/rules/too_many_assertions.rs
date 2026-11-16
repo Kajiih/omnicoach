@@ -54,6 +54,10 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 Split independent scenarios into separate tests, parameterize variations
                 (`@pytest.mark.parametrize`, `#[rstest]`), or compare the result against one
                 expected value."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Contract tests for a type that intentionally disables `==` (or opaque objects without
+                value equality) where each field must be asserted individually; suppress that test
+                with `# omni:ignore[too-many-assertions]` and a reason."}),
             known_problems: Some(indoc::indoc! {r"
                 - Assertions in an imported helper function without an `assert_` or `_assert_`
                   prefix are not counted, and a call to a same-file assertion helper counts as one

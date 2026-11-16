@@ -54,6 +54,7 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 Write multi-line text across real source lines inside a dedent helper:
                 `inspect.cleandoc("""...""")` in Python, `indoc::indoc!` (or `indoc::formatdoc!` /
                 `indoc::writedoc!` when formatting) in Rust."#},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

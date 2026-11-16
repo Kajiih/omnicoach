@@ -51,6 +51,7 @@ pub const RULE: CodeRule = CodeRule {
 
                 Write one assertion per check, so each failure names its condition and shows its
                 values, or compare the result against one expected object or struct."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 In Python, only `assert` statements are checked, not `unittest` methods such as
                 `self.assertTrue(a and b)`."}),

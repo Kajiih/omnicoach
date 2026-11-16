@@ -39,6 +39,7 @@ pub const RULE: CodeRule = CodeRule {
                 annotations.
 
                 Move the class to module level and pass the values it needs to `__init__`."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[Example {

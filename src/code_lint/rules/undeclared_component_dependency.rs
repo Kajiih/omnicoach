@@ -45,6 +45,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 component dependencies so lower-level domains can be understood, tested, and changed
                 without pulling in higher-level adapters or entrypoints. An undeclared cross-component
                 reference silently erodes those boundaries."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Dynamic string-based imports (`importlib.import_module`) and reflection are not
                 resolved statically."}),

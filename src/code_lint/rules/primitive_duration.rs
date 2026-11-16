@@ -58,6 +58,11 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 Use a duration type, `datetime.timedelta` in Python or `std::time::Duration` in
                 Rust, and drop the suffix (`timeout: timedelta`). The unit is then chosen once,
                 where the value is created (`timedelta(seconds=10)`, `Duration::from_millis(250)`)."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Wire-protocol, database, or configuration schema fields whose serialized key is
+                fixed with a time-unit suffix (such as `timeout_secs` in a JSON payload); convert to
+                `timedelta` or `Duration` at the parsing boundary and suppress the schema field with
+                `# omni:ignore[primitive-duration]` and a reason."}),
             known_problems: Some(indoc::indoc! {r"
                 Only the name is read, not the type, so a suffixed name is flagged even when it
                 already holds a `timedelta` or `Duration`."}),

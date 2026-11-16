@@ -62,11 +62,13 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 A `NamedTuple` or frozen dataclass (Python) or a struct (Rust) puts the field names
                 in the signature, where callers, readers and type checkers see them. A Python
                 `NamedTuple` still unpacks like a tuple, so existing callers keep working."},
+            when_to_allow: Some(indoc::indoc! {r"
+                A symmetric pair whose order is its meaning, such as the two halves returned by
+                `split_once`, or raise `min-elements` under `[rules.positional-tuple-return]` to
+                allow 2-element pairs project-wide."}),
             known_problems: Some(indoc::indoc! {r"
-                - Type aliases (`Pair = tuple[int, int]`, `type Pair = (u32, u32);`) are not
-                  expanded, and Rust `impl Iterator<Item = (A, B)>` is not read.
-                - A symmetric pair whose order is its meaning, such as the two halves returned by
-                  `split_once`, is flagged too."}),
+                Type aliases (`Pair = tuple[int, int]`, `type Pair = (u32, u32);`) are not
+                expanded, and Rust `impl Iterator<Item = (A, B)>` is not read."}),
             references: &[
                 Reference {
                     title: "Effective Python, Item 19: Never unpack more than three variables when functions return multiple values",

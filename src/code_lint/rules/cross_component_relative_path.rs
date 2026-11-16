@@ -45,6 +45,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 Across component boundaries, however, relative parent hops (`from ...core` or
                 `super::super::core`) obscure which external component is being coupled to and make
                 cross-component dependencies invisible to text search."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[

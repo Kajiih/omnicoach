@@ -78,9 +78,13 @@ pub const RULE: CodeRule<IndexAccessThresholds<CountOption>> = CodeRule {
                 Unpack once into named variables: `start, end = span` (or `first, *_, last = xs`) in
                 Python, `let (start, end) = span;` in Rust. When the tuple crosses a function
                 boundary, return a `NamedTuple`, a dataclass or a struct with named fields instead."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Random access into a homogeneous lookup table or buffer where indices represent
+                independent keys or offsets rather than a fixed positional record."}),
             known_problems: Some(indoc::indoc! {r"
                 - Python reads are matched without knowing the type, so a list, or a dict with
-                  integer keys, read at fixed positions is flagged too.
+                  integer keys (where sequence unpacking would iterate keys instead of values), read
+                  at fixed positions is flagged too.
                 - Reads are grouped by the receiver's source text, so a name rebound or shadowed
                   between two reads still counts as one value.
                 - Rust macro arguments, such as `assert_eq!(t.0, t.1)`, are not inspected."}),

@@ -50,6 +50,7 @@ pub const RULE: CodeRule = CodeRule {
                 printf and logger format strings) so strings are quoted and escaped automatically
                 via `repr()` while preserving the representation of non-string types, or wrap the
                 placeholder in backticks (`` `{x}` ``) when formatting a code identifier."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Prose is told apart from structured text by the characters around the quotes, so a
                 quoted placeholder in a SQL query, such as `LIKE '{pattern}'`, is flagged too."}),

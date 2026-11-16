@@ -47,6 +47,7 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
                 Architectural dependency rules only govern modules mapped to a component. New files
                 or helper functions added outside every component root silently escape boundary
                 checks and become unowned architectural drift."},
+            when_to_allow: None,
             known_problems: None,
             references: &[],
             examples: &[

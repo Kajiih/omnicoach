@@ -42,6 +42,7 @@ pub const RULE: CodeRule = CodeRule {
                 Write `@dataclass(slots=True)` (`slots` needs Python 3.10 or later). When dynamic
                 attributes or multiple inheritance with other slotted bases are really needed, say
                 so with `slots=False`."},
+            when_to_allow: None,
             known_problems: None,
             references: &[
                 Reference {

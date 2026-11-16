@@ -51,6 +51,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Use `logging.exception(...)`, which logs at error level and attaches the active
                 traceback by default."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - Calls on a logger object, such as `logger.error(...)`, are not flagged unless
                   the deny list includes them.

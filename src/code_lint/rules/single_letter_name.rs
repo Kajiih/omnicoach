@@ -53,6 +53,16 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Use a noun that says what the value is (`index`, `user`, `error`). Keep the allowed
                 letters for conventional cases such as loop counters or coordinates."},
+            when_to_allow: Some(indoc::indoc! {r"
+                - Domain-specific mathematical, physical, or geometric coordinates used across a
+                  module or project (such as quaternion components `w`, `y`, `z` or matrix indices
+                  `m`, `n`): add the letters to `extend-allowed` under `[rules.single-letter-name]`
+                  in `.omnicoach.toml` rather than ignoring the file with `per-file-ignores`, so
+                  unrelated single-letter local variables in the same module are still checked.
+                - A single parameter name fixed by an external API, CLI flag, or wire protocol (such
+                  as `q` for a search query): suppress that parameter with
+                  `# omni:ignore[single-letter-name]` and a reason rather than adding the letter to
+                  `extend-allowed` across the project."}),
             known_problems: None,
             references: &[Reference {
                 title: "Google Python Style Guide: Naming",

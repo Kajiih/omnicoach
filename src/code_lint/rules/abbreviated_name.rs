@@ -58,7 +58,16 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
                 others.
 
                 Spell the word out (`context`, `message`, `result`, `config`)."},
-            known_problems: None,
+            when_to_allow: Some(indoc::indoc! {r"
+                - Domain terms or complete words that collide with a default abbreviation stem across
+                  a module or project (such as `cat` in a veterinary domain or `arch` in a compiler):
+                  add the word to `remove-banned` under `[rules.abbreviated-name]` in
+                  `.omnicoach.toml`.
+                - A single parameter or attribute name fixed by an external API or wire schema:
+                  suppress that definition with `# omni:ignore[abbreviated-name]` and a reason."}),
+            known_problems: Some(indoc::indoc! {r"
+                Short complete English words in the default deny list (such as `cat` or `arch`) are
+                matched by token spelling without semantic disambiguation."}),
             references: &[Reference {
                 title: "Google Python Style Guide: Naming",
                 url: "https://google.github.io/styleguide/pyguide.html#316-naming",

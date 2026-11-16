@@ -113,7 +113,7 @@ pub fn code_report_footer_for_rules<'a>(
 #[must_use]
 pub fn explain_footer(binary: &str) -> String {
     format!(
-        "For details on a rule (including known limitations), run: {binary} --explain <rule>..."
+        "For details on a rule (including when to allow and known problems), run: {binary} --explain <rule>..."
     )
 }
 
@@ -220,6 +220,14 @@ fn render_rule(rule: &RegisteredRule, status_result: &Result<RuleStatus, ConfigE
         doc.why_is_this_bad.trim_end().to_owned(),
         String::new(),
     ];
+    if let Some(when_to_allow) = doc.when_to_allow {
+        lines.extend([
+            "## When to allow".to_owned(),
+            String::new(),
+            when_to_allow.to_owned(),
+            String::new(),
+        ]);
+    }
     if let Some(known_problems) = doc.known_problems {
         lines.extend([
             "## Known problems".to_owned(),
@@ -481,6 +489,7 @@ mod tests {
             ("why_is_this_bad", doc.why_is_this_bad),
         ]
         .into_iter()
+        .chain(doc.when_to_allow.map(|text| ("when_to_allow", text)))
         .chain(doc.known_problems.map(|text| ("known_problems", text)))
         .chain(doc.references.iter().flat_map(|reference| {
             [
@@ -524,6 +533,7 @@ mod tests {
         summary: "Flags things.",
         what_it_does: "Flags things when they happen.",
         why_is_this_bad: "Things are bad.",
+        when_to_allow: None,
         known_problems: None,
         references: &[Reference {
             title: "Title",
@@ -552,6 +562,10 @@ mod tests {
 
             ## Example"}, ..GOOD },
         &["`why_is_this_bad` has a `#` heading; the renderer owns headings"]
+    )]
+    #[case::empty_when_to_allow(
+        RuleDoc { when_to_allow: Some(" "), ..GOOD },
+        &["`when_to_allow` is empty"]
     )]
     #[case::empty_known_problems(
         RuleDoc { known_problems: Some(" "), ..GOOD },
@@ -610,6 +624,27 @@ mod tests {
                 {single_letter_doc}"}
         );
         assert_eq!(unknown_error.to_string(), "unknown rule `no-such-rule`");
+    }
+
+    #[test]
+    fn explain_renders_when_to_allow_before_known_problems() {
+        let single_letter_doc = explain("single-letter-name").unwrap();
+        let multi_phase_doc = explain("multi-phase-test").unwrap();
+        let sections: Vec<_> = [
+            "\n## Why is this bad?\n",
+            "\n## When to allow\n",
+            "\n## Known problems\n",
+            "\n## References\n",
+            "\n- Topic: test-assertions, testing [via test-assertions]\n",
+        ]
+        .into_iter()
+        .map(|marker| multi_phase_doc.find(marker))
+        .collect();
+
+        assert!(single_letter_doc.contains("\n## When to allow\n"));
+        assert!(!single_letter_doc.contains("\n## Known problems\n"));
+        assert!(sections.iter().all(Option::is_some));
+        assert!(sections.is_sorted());
     }
 
     fn configuration_toml_block(rendered: &str) -> Option<&str> {
@@ -723,7 +758,7 @@ mod tests {
         assert_eq!(footer.contains(SUPPRESSION_NOTE), expects_note, "{footer}");
         assert!(
             footer.ends_with(
-                "For details on a rule (including known limitations), run: omnicoach --explain <rule>..."
+                "For details on a rule (including when to allow and known problems), run: omnicoach --explain <rule>..."
             ),
             "{footer}"
         );

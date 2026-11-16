@@ -66,9 +66,10 @@ pub const RULE: CodeRule = CodeRule {
                 `if let Some(items) = get_items()`) before iterating, indexing, or querying length.
 
                 Return an empty collection when no items are found so callers can iterate and query
-                length unconditionally. A nullable collection return is only needed for a
-                three-state contract where `None` means something distinct from zero elements, such
-                as a cache miss, an unparsed field, or an omitted filter."},
+                length unconditionally."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Three-state contracts where `None` means something distinct from zero elements, such
+                as a cache miss, an unparsed field, or an omitted filter."}),
             known_problems: Some(indoc::indoc! {r"
                 Type aliases such as `Names: TypeAlias = list[str]` or `type Names = Vec<String>;`
                 are not expanded, so return types that use them are not checked."}),

@@ -84,6 +84,7 @@ pub const RULE: ProjectCodeRule<ListOption> = ProjectCodeRule {
                 `See base class.` therefore replaces the documentation it points to: readers see
                 the pointer instead of the contract. Without the docstring, the tools show the base
                 docstring directly."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 Wordings outside the list, and phrases in other languages, are not flagged; extend
                 the list. A reference to a class that is not a base (`See Pytester.spawn.`), or to a

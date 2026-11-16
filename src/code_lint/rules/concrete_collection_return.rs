@@ -52,10 +52,14 @@ pub const RULE: CodeRule = CodeRule {
 
                 Choose the return type as a contract: `Sequence`, `Mapping`, or `Set` (imported as
                 `AbstractSet`) for read-only results, and their `Mutable` counterparts for results
-                callers are meant to mutate. A concrete collection is a deliberate exception, for
-                example when callers rely on `list.sort()` or `tuple` / `frozenset` hashability. The
-                message names the read-only counterpart of the flagged type; it does not know how
-                callers use the result."},
+                callers are meant to mutate. The message names the read-only counterpart of the
+                flagged type; it does not know how callers use the result."},
+            when_to_allow: Some(indoc::indoc! {r"
+                Functions that return a newly allocated mutable container for callers to mutate in
+                place (such as sorting a returned `list[str]`), return a `tuple` or `frozenset`
+                for hashability, or expose a public API whose runtime type-hint contract requires
+                `list`, `dict`, or `set`; suppress that return annotation with
+                `# omni:ignore[concrete-collection-return]` and a reason."}),
             known_problems: Some(indoc::indoc! {r"
                 Type aliases such as `Names: TypeAlias = list[str]` are not expanded, so annotations
                 that use them are not checked."}),

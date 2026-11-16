@@ -91,6 +91,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Have the background work signal readiness through an event, a channel or a notification
                 primitive and wait on that signal once."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 A yield inside a helper function that is itself called in a loop is only flagged when
                 the loop lives inside the helper."}),

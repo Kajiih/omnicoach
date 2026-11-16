@@ -66,6 +66,7 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
 
                 Assert on what callers can observe: the returned value, or the resulting state of an
                 in-memory fake standing in for the dependency."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 A method with one of these names is flagged on any object, whether or not it is a
                 mock."}),

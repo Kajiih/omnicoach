@@ -57,6 +57,7 @@ pub const RULE: CodeRule = CodeRule {
                 `Mapping`, or `Set` (imported as `AbstractSet`) unless mutating the argument is the
                 point of the function. The mutation check is syntactic, so confirm that intent
                 before applying the suggested read-only type."},
+            when_to_allow: None,
             known_problems: Some(indoc::indoc! {r"
                 - A mutable type nested in another, such as `Sequence[MutableMapping[K, V]]`, is not
                   checked, because mutation of the elements is not tracked.
