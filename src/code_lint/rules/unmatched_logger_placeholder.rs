@@ -6,8 +6,8 @@ use crate::code_lint::ast::python::{collect_logger_calls, named_format_field_roo
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
-    RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Reference, RuleDoc,
+    RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -26,7 +26,6 @@ pub const RULE: CodeRule = CodeRule {
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::LOGGING],
-            precision: Precision::Exact,
             consensus: Consensus::Unopinionated,
             impacted_quality: ImpactedQuality::Reliability,
         },

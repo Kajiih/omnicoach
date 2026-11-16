@@ -10,7 +10,7 @@ use crate::code_lint::project::{ProjectContext, PythonModuleContext};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, FilterListDefaults, ImpactedQuality, ListKind,
-    ListOption, Precision, ProjectExample, Reference, RuleDoc, RuleOptions, Topic,
+    ListOption, ProjectExample, Reference, RuleDoc, RuleOptions, Topic,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -62,7 +62,6 @@ pub const RULE: ProjectCodeRule<ListOption> = ProjectCodeRule {
         options: RuleOptions::code_rule(BANNED),
         classification: Classification {
             topics: &[Topic::DOCSTRINGS],
-            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

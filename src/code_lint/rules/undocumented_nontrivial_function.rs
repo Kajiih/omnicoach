@@ -10,8 +10,8 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::ComplexityGate;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality, Precision,
-    Reference, RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality, Reference,
+    RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -41,7 +41,6 @@ pub const RULE: CodeRule<ComplexityGate<CountOption>> = CodeRule {
         options: RuleOptions::code_rule(OPTIONS),
         classification: Classification {
             topics: &[Topic::DOCSTRINGS],
-            precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

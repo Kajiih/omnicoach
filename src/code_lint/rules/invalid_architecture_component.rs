@@ -5,8 +5,8 @@ use crate::code_lint::contract::{ProjectCodeRule, RuleTarget};
 use crate::code_lint::project::{InvalidArchitectureComponentKind, ProjectContext};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, ImpactedQuality, Precision, ProjectExample, RuleDoc,
-    RuleOptions, Topic,
+    Classification, Consensus, Declaration, ImpactedQuality, ProjectExample, RuleDoc, RuleOptions,
+    Topic,
 };
 use std::path::Path;
 
@@ -27,7 +27,6 @@ pub const RULE: ProjectCodeRule = ProjectCodeRule {
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::ARCHITECTURE],
-            precision: Precision::Exact,
             consensus: Consensus::Unopinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

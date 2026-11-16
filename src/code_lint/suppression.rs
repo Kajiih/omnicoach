@@ -14,8 +14,7 @@ use crate::diagnostic::{
     violation_template,
 };
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, ImpactedQuality, Precision, Reference, RuleDoc,
-    RuleOptions, Topic,
+    Classification, Consensus, Declaration, ImpactedQuality, Reference, RuleDoc, RuleOptions, Topic,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -34,7 +33,6 @@ const MISSING_SUPPRESSION_REASON: Declaration = Declaration {
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
-        precision: Precision::Exact,
         consensus: Consensus::Opinionated,
         impacted_quality: ImpactedQuality::Maintainability,
     },
@@ -95,7 +93,6 @@ const UNUSED_SUPPRESSION: Declaration = Declaration {
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
-        precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
     },
@@ -141,7 +138,6 @@ const UNKNOWN_SUPPRESSION_RULE: Declaration = Declaration {
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
-        precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
     },
@@ -178,7 +174,6 @@ const BLANKET_SUPPRESSION: Declaration = Declaration {
     options: RuleOptions::none(),
     classification: Classification {
         topics: &[Topic::SUPPRESSION_DIRECTIVES],
-        precision: Precision::Exact,
         consensus: Consensus::Unopinionated,
         impacted_quality: ImpactedQuality::Reliability,
     },

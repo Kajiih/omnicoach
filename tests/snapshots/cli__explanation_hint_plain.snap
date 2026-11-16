@@ -15,10 +15,10 @@ test.py:6:10: [suppressed-exception] An exception is silenced with `contextlib.s
   Or: Explain why in a comment at the end of the flagged line or directly above it.
 
 Note: Fix the underlying design issue rather than reshaping syntax just to dodge a threshold, dropping assertions, or copying suppressions onto internal helpers.
-Note: When a heuristic or opinionated rule flags intentional code, match the resolution to its scope:
+Note: When an opinionated rule flags intentional code, match the resolution to its scope:
   - Internal defect (default): Refactor the code to fix the root cause described in `Rationale:`.
   - Single-site boundary exception (locked public/wire signature or stateful test): Satisfy `Or:` if shown, or suppress that site only with `omni:ignore [<rule>] -- <reason>` (do not weaken `.omnicoach.toml` repo-wide for a single site).
-  - Multi-site module or domain convention (5+ sites across a domain module): Configure `per-file-ignores = { "path.py" = ["<rule>"] }` or `[rules.<rule>]` in `.omnicoach.toml` (see `omnicoach --explain <rule>...`) rather than repeating inline suppressions across a file. Report false positives or misleading guidance to `omnicoach`.
+  - Multi-site module or domain convention (5+ sites across a domain module): Configure `[rules.<rule>]` or `per-file-ignores = { "path.py" = ["<rule>"] }` in `.omnicoach.toml` (see `omnicoach --explain <rule>...`) rather than repeating inline suppressions across a file. Report false positives or misleading guidance to `omnicoach`.
 For details on a rule (including known limitations), run: omnicoach --explain <rule>...
 
 --- stderr ---

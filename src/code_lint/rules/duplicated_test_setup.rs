@@ -5,7 +5,7 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic, rule_options,
+    LanguageDefaults, Reference, RuleDoc, RuleOptions, Topic, rule_options,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -53,7 +53,6 @@ pub const RULE: CodeRule<SetupThresholds<CountOption>> = CodeRule {
         }),
         classification: Classification {
             topics: &[Topic::TESTING],
-            precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

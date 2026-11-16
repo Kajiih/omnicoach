@@ -1554,7 +1554,7 @@ mod tests {
     use crate::code_lint::contract::RuleTarget;
     use crate::diagnostic::{RuleName, ViolationTemplate, violation_template};
     use crate::rule_declaration::{
-        Classification, Consensus, ImpactedQuality, Precision, ProjectExample, RuleDoc, Topic,
+        Classification, Consensus, ImpactedQuality, ProjectExample, RuleDoc, Topic,
     };
 
     const PROJECT_TEST_TEMPLATE: ViolationTemplate = violation_template! {
@@ -1613,7 +1613,6 @@ mod tests {
             options: RuleOptions::code_rule(()),
             classification: Classification {
                 topics: &[Topic::STATIC_TYPING],
-                precision: Precision::Exact,
                 consensus: Consensus::Opinionated,
                 impacted_quality: ImpactedQuality::Maintainability,
             },

@@ -809,14 +809,11 @@ mod tests {
         assert!(serialized.contains(
             "Note: Fix the underlying design issue rather than reshaping syntax just to dodge a threshold"
         ));
-        assert!(
-            !serialized
-                .contains("Note: When a heuristic or opinionated rule flags intentional code")
-        );
+        assert!(!serialized.contains("Note: When an opinionated rule flags intentional code"));
     }
 
     #[test]
-    fn serialize_pre_invocation_includes_suppression_note_for_heuristic_rule() {
+    fn serialize_pre_invocation_includes_suppression_note_for_opinionated_rule() {
         let warning = QueuedWarning {
             rule_name: "abbreviated-name".to_owned(),
             message: indoc::indoc! {"
@@ -829,7 +826,7 @@ mod tests {
         let serialized = serialize_pre_invocation(&[warning]).expect("serialization succeeds");
         assert!(serialized.contains("abbreviated-name"));
         assert!(serialized.contains(
-            "Note: When a heuristic or opinionated rule flags intentional code, match the resolution to its scope:"
+            "Note: When an opinionated rule flags intentional code, match the resolution to its scope:"
         ));
         assert!(serialized.contains(
             "For details on a rule (including known limitations), run: omnicoach --explain <rule>..."

@@ -13,7 +13,7 @@ use crate::command_lint::rules::COMMAND_RULES;
 use crate::diagnostic::{Language, RuleName, ViolationTemplate};
 use crate::rule_declaration::{
     Classification, Consensus, DeclaredExamples, DeclaredOptions, DeclaredRule, ImpactedQuality,
-    Precision, RuleDoc, Topic, closest_match,
+    RuleDoc, Topic, closest_match,
 };
 
 /// A value of a derived facet, computed from the rule and never declared.
@@ -40,8 +40,6 @@ pub enum Facet {
     /// Declared, multi-valued, hierarchical.
     Topic,
     /// Declared, single-valued.
-    Precision,
-    /// Declared, single-valued.
     Consensus,
     /// Declared, single-valued.
     ImpactedQuality,
@@ -59,7 +57,6 @@ impl Facet {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Topic => "Topic",
-            Self::Precision => "Precision",
             Self::Consensus => "Consensus",
             Self::ImpactedQuality => "Impacted quality",
             Self::Languages => "Languages",
@@ -91,8 +88,6 @@ impl Facet {
 pub enum Tag {
     /// A topic.
     Topic(Topic),
-    /// A precision value.
-    Precision(Precision),
     /// A consensus value.
     Consensus(Consensus),
     /// An impacted-quality value.
@@ -102,12 +97,11 @@ pub enum Tag {
 }
 
 impl Tag {
-    /// The tag's canonical label, e.g. `heuristic`.
+    /// The tag's canonical label, e.g. `opinionated`.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Topic(value) => value.label(),
-            Self::Precision(value) => value.into(),
             Self::Consensus(value) => value.into(),
             Self::ImpactedQuality(value) => value.into(),
             Self::Derived(value) => value.into(),
@@ -119,7 +113,6 @@ impl Tag {
     pub const fn facet(self) -> Facet {
         match self {
             Self::Topic(_) => Facet::Topic,
-            Self::Precision(_) => Facet::Precision,
             Self::Consensus(_) => Facet::Consensus,
             Self::ImpactedQuality(_) => Facet::ImpactedQuality,
             Self::Derived(Derived::Python | Derived::Rust) => Facet::Languages,
@@ -241,7 +234,6 @@ impl Topic {
 pub fn all_tags() -> impl Iterator<Item = Tag> {
     all_topics()
         .map(Tag::Topic)
-        .chain(Precision::iter().map(Tag::Precision))
         .chain(Consensus::iter().map(Tag::Consensus))
         .chain(ImpactedQuality::iter().map(Tag::ImpactedQuality))
         .chain(Derived::iter().map(Tag::Derived))
@@ -253,7 +245,6 @@ impl RegisteredRule {
     pub fn branches(&self) -> Vec<Vec<Tag>> {
         let Classification {
             topics,
-            precision,
             consensus,
             impacted_quality,
         } = self.classification;
@@ -261,7 +252,6 @@ impl RegisteredRule {
             .iter()
             .map(|topic| topic.path().into_iter().map(Tag::Topic).collect());
         let values = [
-            Tag::Precision(precision),
             Tag::Consensus(consensus),
             Tag::ImpactedQuality(impacted_quality),
         ]
@@ -480,7 +470,6 @@ mod tests {
             "rule",
             Classification {
                 topics: &[CHILD],
-                precision: Precision::Exact,
                 consensus: Consensus::Unopinionated,
                 impacted_quality: ImpactedQuality::Reliability,
             },
@@ -489,7 +478,6 @@ mod tests {
             rule.branches(),
             [
                 vec![Tag::Topic(PARENT), Tag::Topic(CHILD)],
-                vec![Tag::Precision(Precision::Exact)],
                 vec![Tag::Consensus(Consensus::Unopinionated)],
                 vec![Tag::ImpactedQuality(ImpactedQuality::Reliability)],
             ]

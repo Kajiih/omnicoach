@@ -361,8 +361,7 @@ mod tests {
     use super::*;
     use crate::diagnostic::{ViolationTemplate, violation_template};
     use crate::rule_declaration::{
-        Classification, Consensus, ImpactedQuality, LanguageDefaults, Precision, RuleDoc,
-        RuleOptions, Topic,
+        Classification, Consensus, ImpactedQuality, LanguageDefaults, RuleDoc, RuleOptions, Topic,
     };
     use rstest::rstest;
 
@@ -395,7 +394,6 @@ mod tests {
                 },
                 classification: Classification {
                     topics: &[Topic::STATIC_TYPING],
-                    precision: Precision::Exact,
                     consensus: Consensus::Opinionated,
                     impacted_quality: ImpactedQuality::Maintainability,
                 },

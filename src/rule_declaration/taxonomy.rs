@@ -348,28 +348,10 @@ impl Topic {
     .aliases(&["cli"]);
 }
 
-/// Precision facet: can the rule flag correct code?
-///
-/// Precision concerns false positives only: an `exact` rule may still miss violations.
-///
-/// **Test:** does the rule's *design* use a syntactic proxy for the target construct or its
-/// exemption boundary, so that it can flag code that is correct? If yes → [`Self::Heuristic`].
-/// Worked examples and edge cases: `docs/dev/tag_guide.md` §2.2.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, EnumMessage, IntoStaticStr,
-)]
-#[strum(serialize_all = "kebab-case")]
-pub enum Precision {
-    /// Flags only code that breaks the rule; may still miss violations.
-    Exact,
-    /// Uses a proxy that can flag correct code.
-    Heuristic,
-}
-
 /// Consensus facet: do reasonable people disagree with the rule?
 ///
 /// **Test:** name one ordinary situation where the flagged code is correct and appropriate.
-/// If you can → [`Self::Opinionated`]. Worked examples: `docs/dev/tag_guide.md` §2.3.
+/// If you can → [`Self::Opinionated`]. Worked examples: `docs/dev/tag_guide.md` §2.2.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, EnumMessage, IntoStaticStr,
 )]
@@ -387,7 +369,7 @@ pub enum Consensus {
 /// behaviour* (a bug, a flaky or false-green test, a wrong suppression, a command that
 /// corrupts state or history or walks unbounded repository history)? If yes →
 /// [`Self::Reliability`]. Worked examples and when to add another ISO/IEC 25010 value:
-/// `docs/dev/tag_guide.md` §2.4.
+/// `docs/dev/tag_guide.md` §2.3.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, EnumIter, EnumMessage, IntoStaticStr,
 )]
@@ -409,7 +391,7 @@ pub enum ImpactedQuality {
 /// A valid classification:
 /// ```
 /// use omnicoach::rule_declaration::{
-///     Classification, Consensus, ImpactedQuality, Precision, Topic, TopicDoc,
+///     Classification, Consensus, ImpactedQuality, Topic, TopicDoc,
 /// };
 /// const TIMING: Topic = Topic::root(
 ///     "timing",
@@ -417,7 +399,6 @@ pub enum ImpactedQuality {
 /// );
 /// const OK: Classification = Classification {
 ///     topics: &[TIMING],
-///     precision: Precision::Exact,
 ///     consensus: Consensus::Unopinionated,
 ///     impacted_quality: ImpactedQuality::Reliability,
 /// };
@@ -430,32 +411,29 @@ pub enum ImpactedQuality {
 ///
 /// A single-valued facet is missing:
 /// ```compile_fail,E0063
-/// # use omnicoach::rule_declaration::{Classification, Consensus, Precision};
+/// # use omnicoach::rule_declaration::{Classification, Consensus};
 /// const MISSING: Classification = Classification {
 ///     topics: &[],
-///     precision: Precision::Exact,
 ///     consensus: Consensus::Unopinionated,
 /// };
 /// ```
 ///
 /// A single-valued facet gets two values:
 /// ```compile_fail,E0062
-/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision};
+/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality};
 /// const TWICE: Classification = Classification {
 ///     topics: &[],
-///     precision: Precision::Exact,
-///     precision: Precision::Heuristic,
 ///     consensus: Consensus::Unopinionated,
+///     consensus: Consensus::Opinionated,
 ///     impacted_quality: ImpactedQuality::Reliability,
 /// };
 /// ```
 ///
 /// A facet value where a topic belongs:
 /// ```compile_fail,E0308
-/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision};
+/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality};
 /// const MISPLACED: Classification = Classification {
-///     topics: &[Precision::Heuristic],
-///     precision: Precision::Exact,
+///     topics: &[Consensus::Opinionated],
 ///     consensus: Consensus::Unopinionated,
 ///     impacted_quality: ImpactedQuality::Reliability,
 /// };
@@ -463,10 +441,9 @@ pub enum ImpactedQuality {
 ///
 /// A derived facet declared by hand:
 /// ```compile_fail,E0560
-/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision};
+/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality};
 /// const DERIVED: Classification = Classification {
 ///     topics: &[],
-///     precision: Precision::Exact,
 ///     consensus: Consensus::Unopinionated,
 ///     impacted_quality: ImpactedQuality::Reliability,
 ///     languages: &["python"],
@@ -475,10 +452,9 @@ pub enum ImpactedQuality {
 ///
 /// A topic that does not exist:
 /// ```compile_fail,E0599
-/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality, Precision, Topic};
+/// # use omnicoach::rule_declaration::{Classification, Consensus, ImpactedQuality, Topic};
 /// const TYPO: Classification = Classification {
 ///     topics: &[Topic::TESING],
-///     precision: Precision::Exact,
 ///     consensus: Consensus::Unopinionated,
 ///     impacted_quality: ImpactedQuality::Reliability,
 /// };
@@ -495,10 +471,10 @@ pub enum ImpactedQuality {
 ///
 /// A topic's parent in another facet:
 /// ```compile_fail,E0308
-/// # use omnicoach::rule_declaration::{Precision, Topic, TopicDoc};
+/// # use omnicoach::rule_declaration::{Consensus, Topic, TopicDoc};
 /// const BAD: Topic = Topic::sub(
 ///     "bad",
-///     &Precision::Exact,
+///     &Consensus::Unopinionated,
 ///     TopicDoc { description: "Bad.", scope_note: "Bad." },
 /// );
 /// # let _ = BAD;
@@ -514,8 +490,6 @@ pub enum ImpactedQuality {
 pub struct Classification {
     /// The most specific topics; never a topic together with its ancestor.
     pub topics: &'static [Topic],
-    /// Precision value.
-    pub precision: Precision,
     /// Consensus value.
     pub consensus: Consensus,
     /// Impacted quality value.

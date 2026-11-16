@@ -14,17 +14,16 @@ A rule is described by **facets**. Each facet answers one question. Its **values
 | Facet (display label) | Question | Values | How it is set |
 |---|---|---|---|
 | **Topic** | What construct, API or domain does the rule inspect? | the topic tree (`omnicoach --list-tags`) | Declared, **one or more**, most specific only |
-| **Precision** | Can it flag correct code? (False positives only; an `exact` rule may still miss violations.) | `exact`, `heuristic` | Declared, **exactly one** |
 | **Consensus** | Would reasonable people disagree with it? | `opinionated`, `unopinionated` | Declared, **exactly one** |
-| **Impacted quality** | What software quality suffers when it is violated? | `reliability`, `maintainability` (from ISO/IEC 25010; §2.4) | Declared, **exactly one** |
+| **Impacted quality** | What software quality suffers when it is violated? | `reliability`, `maintainability` (from ISO/IEC 25010; §2.3) | Declared, **exactly one** |
 | **Languages** | Which languages does it check? | `python`, `rust` | Derived from `Declaration::languages` (**1+ for code rules, 0 for command rules**) |
 | **Analyzed input** | Code or shell commands? | `code`, `command` | Derived from the rule registry (**exactly one**; suppression audits derive `code`) |
 | **File scope** | Tests only, sources only? | `tests-only`, `source-only` | Derived from `RuleTarget` (**0 or 1**; none when the rule runs on all files) |
 
 Rules of the namespace:
 
-- **Facet labels are never selectors**. `select = ["precision"]` or `select = ["impacted-quality"]` is an error that lists the values.
-- **Every label is globally unique**: rule names, topic labels, facet values and synonyms share one namespace. That is why values are bare (`heuristic`, not `precision:heuristic`).
+- **Facet labels are never selectors**. `select = ["consensus"]` or `select = ["impacted-quality"]` is an error that lists the values.
+- **Every label is globally unique**: rule names, topic labels, facet values and synonyms share one namespace. That is why values are bare (`opinionated`, not `consensus:opinionated`).
 - **Derived facets cannot be declared.** The rule has no field for them.
 - **Behaviour never depends on a tag**. The classification is constant data with no queries; the queries (`ancestors`, `path`, `matches`) live in `rule_selection`, and the architecture graph (`src/architecture.rs`) keeps rules and runners from depending on it.
 
@@ -40,7 +39,6 @@ pub const SLEEP_IN_TESTS: CodeRule<ListOption> = CodeRule {
         // name, template, languages, options...
         classification: Classification {
             topics: &[Topic::TEST_TIMING],
-            precision: Precision::Exact,
             consensus: Consensus::Unopinionated,
             impacted_quality: ImpactedQuality::Reliability,
         },
@@ -59,21 +57,11 @@ Every registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) holds rul
   - Consequence: with `ignore = ["error-handling"]` the rule is off even if `logging` is selected. Ignore wins when branches disagree.
 - **Topic = what is inspected; Impacted quality = what breaks**.
   - A topic names a **code construct, API or domain** (`durations`, `concurrency`, `jj`, or future `sql`, `subprocess`, `crypto`).
-  - A software quality (`reliability`, `maintainability`, `security`, `performance-efficiency`, `safety`) names the **consequence of a violation** and belongs in *Impacted quality* (§2.4), **never in Topic**.
+  - A software quality (`reliability`, `maintainability`, `security`, `performance-efficiency`, `safety`) names the **consequence of a violation** and belongs in *Impacted quality* (§2.3), **never in Topic**.
   - For example, a SQL-injection rule has topic `sql` and impacted quality `security`; an N+1 query rule has topic `sql` and impacted quality `performance-efficiency`.
 - **Tests-only is not a topic.** "Runs only on test files" is the derived *File scope*. `testing` means "about test-code practice".
 
-### 2.2 Precision: `exact` or `heuristic`
-
-> **Test:** does the rule's *design* use a syntactic proxy for the target construct or its exemption boundary, so that it can flag code that is correct? If yes → `heuristic`.
-
-- A threshold that can only cause **missed** findings does not make a rule heuristic. Only a proxy that **adds** findings does.
-- **Design proxy vs. rule bug:** an incidental implementation defect or single-file AST lack of import resolution (tracked under *Rule Defects* in `ROADMAP.md`) is a bug to fix, not a reason to classify the rule as `heuristic`.
-- **Precision assumes valid code:** judge it on code that compiles (Rust) or type-checks (Python). A rule that resolves names syntactically is `exact` if, in such code, it resolves each name as the compiler would. Watch both directions: a spurious match and a missed match can each add findings (for example, the call-graph rules `private-before-public`, `uncolocated-helper` and `callee-before-caller` flag a helper whose only use they miss as unreachable). Where the parser cannot resolve names, as with identifiers inside Rust macros, the gap is a rule defect tracked in `ROADMAP.md`.
-- `exact`: `type-cast` (it flags `cast` calls, which is what it claims), `single-letter-name` (the claim *is* "the name is one character").
-- `heuristic`: `abbreviated-name` (segment matching flags real words like `cat`), `too-many-assertions` (a count stands in for "several behaviours"), `unstructured-task` (it also flags tasks that are stored and awaited), `environment-variable-in-function` (guesses entrypoint boundaries from a function-name allowlist), `repeated-index-access` (integer subscripting `x[0]` is a proxy for indexing a tuple).
-
-### 2.3 Consensus: `opinionated` or `unopinionated`
+### 2.2 Consensus: `opinionated` or `unopinionated`
 
 > **Test:** name one ordinary situation where the flagged code is correct and appropriate. If you can → `opinionated`.
 
@@ -82,9 +70,9 @@ Every registry (`CODE_RULES`, `SUPPRESSION_AUDITS` or `COMMAND_RULES`) holds rul
 - `unopinionated`: `sleep-in-tests`, `unknown-suppression-rule`.
 - `opinionated`: `mock-in-tests`, `primitive-duration` (`timeout_ms` is standard at config boundaries), `mutable-dataclass` (mutable dataclasses are ordinary Python).
 - Expect most Omni rules to be opinionated. Omni exists to go beyond the default Ruff and Clippy sets.
-- **Combined operational test (`Precision` × `Consensus`)**: a rule is `heuristic` or `opinionated` iff a finding can occur on code that is already the clearest, most robust design (either because the rule uses a syntactic proxy or because the flagged construct is the right tradeoff in that context), which is also when plain `code` reports include the `omni:ignore` footer note; a rule is `exact` and `unopinionated` iff the flagged code is never the right design in any ordinary situation.
+- Plain `code` reports include the `omni:ignore` and `.omnicoach.toml` suppression note when any reported rule is `opinionated`.
 
-### 2.4 Impacted quality
+### 2.3 Impacted quality
 
 Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-quality model. The code enum (`ImpactedQuality`) contains **only values used by at least one rule**, so no selector can match zero rules; adding another ISO value when the first rule needs it is a one-line enum change.
 
@@ -102,8 +90,9 @@ Each rule declares **one** primary quality from the ISO/IEC 25010:2023 product-q
 - `reliability`: `type-cast` (hides a type error until runtime), `unused-suppression` (will hide a future real violation), `mock-in-tests` (false-green tests when real collaborator diverges), `zero-sleep-in-tests` (relies on timer-subsystem side effects for scheduler yielding), `edit-of-described-commit` (silently rewrites a described commit), `unbounded-jj-log` (walks immutable repository history without a bound).
 - `maintainability`: `single-letter-name`, `too-many-assertions` (a worse failure report, but recoverable by re-running), `mock-call-assertion` (asserting on call wiring couples the test to implementation details, making refactors brittle rather than false-green).
 
-### 2.5 What goes in the rule's docs instead
+### 2.4 What goes in the rule's docs instead
 
+- **Static-analysis limitations**: write them in `RuleDoc::known_problems` (`## Known problems`). Because every rule whose syntactic proxy can flag valid code in an ordinary situation is already `opinionated`, static-analysis limitations belong in the rule's documentation rather than a separate precision tag.
 - **External backing** (a PEP, the Rust API Guidelines, a Clippy lint that is not on by default): write it in the rule's *References* section. It is not a facet. Almost every Omni rule would say "none".
 - **The failure mode**: write it in the *rationale*. It justifies the rule; it does not decide consensus.
 
@@ -172,8 +161,8 @@ Compiler checks are pinned by `compile_fail` doctests on `Classification` in `sr
 | §2: topics exist | Compiler (`E0599` no such associated `const`) |
 | §4.2: a tree without cycles | Compiler (`E0391` `const` evaluation cycle on `parent: Option<&'static Topic>`) |
 | §1, §4.1.4: labels are globally unique, `kebab-case`, and not facet labels | Test `labels_are_globally_unique_and_not_facet_labels` |
-| §2.4, §4.1.5: every topic and facet value has at least one rule | Test `every_tag_has_a_rule` + `dead_code` lint on unused `pub(crate) const` topics |
+| §2.3, §4.1.5: every topic and facet value has at least one rule | Test `every_tag_has_a_rule` + `dead_code` lint on unused `pub(crate) const` topics |
 | §4.2: a topic's parent is a topic | Compiler (`E0308` type mismatch on `Topic::sub`) |
 | §1: behaviour never depends on a tag | Architecture graph (`src/architecture.rs`: rules and runners cannot depend on `RuleSelection`) checked by `test_architecture_conformance` in `tests/architecture_conformance.rs` |
 | §4.1.3: every tag has a description and every topic has a scope note | `missing_docs` lint (`strum::EnumMessage` derives facet value descriptions from their doc comments) + compiler (`E0063` if a `TopicDoc` field is missing) + test `every_topic_is_documented` (non-empty); **Review** (meaning) |
-| §2.2–§2.4, §4.1.1–4.1.2: the yes/no questions | **Review.** A test cannot judge meaning; the worked examples are the reference. |
+| §2.2–§2.3, §4.1.1–4.1.2: the yes/no questions | **Review.** A test cannot judge meaning; the worked examples are the reference. |

@@ -10,7 +10,7 @@ use crate::code_lint::policy::read_only_collection_replacements;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    LanguageDefaults, Reference, RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -35,7 +35,6 @@ pub const RULE: CodeRule = CodeRule {
         },
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

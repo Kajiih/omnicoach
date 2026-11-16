@@ -79,7 +79,6 @@ const PURE_SHELL_RULE: CommandRule = CommandRule {
         options: crate::rule_declaration::RuleOptions::none(),
         classification: crate::rule_declaration::Classification {
             topics: &[crate::rule_declaration::Topic::JJ],
-            precision: crate::rule_declaration::Precision::Exact,
             consensus: crate::rule_declaration::Consensus::Opinionated,
             impacted_quality: crate::rule_declaration::ImpactedQuality::Maintainability,
         },

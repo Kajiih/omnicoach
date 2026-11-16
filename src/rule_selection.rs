@@ -814,9 +814,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::rule_declaration::{
-        Classification, Consensus, ImpactedQuality, Precision, Topic, TopicDoc,
-    };
+    use crate::rule_declaration::{Classification, Consensus, ImpactedQuality, Topic, TopicDoc};
 
     const DOC: TopicDoc = TopicDoc {
         description: "Doc.",
@@ -830,7 +828,7 @@ mod tests {
     const PARENT_TAG: Selector = Selector::Tag(Tag::Topic(PARENT));
     const CHILD_TAG: Selector = Selector::Tag(Tag::Topic(CHILD));
     const OTHER_TAG: Selector = Selector::Tag(Tag::Topic(OTHER));
-    const HEURISTIC: Selector = Selector::Tag(Tag::Precision(Precision::Heuristic));
+    const OPINIONATED: Selector = Selector::Tag(Tag::Consensus(Consensus::Opinionated));
 
     fn enabled(config: &Config, path: &str) -> BTreeSet<&'static str> {
         REGISTERED_RULES
@@ -849,7 +847,7 @@ mod tests {
             .collect()
     }
 
-    /// The status of `rule`, on the branches `parent > child`, `other` and `heuristic`.
+    /// The status of `rule`, on the branches `parent > child`, `other` and `opinionated`.
     #[rstest]
     #[case::default_on_without_select(None, &[], "enabled (default)")]
     #[case::default_off_with_select(Some(vec![]), &[], "disabled (not in `select`)")]
@@ -875,17 +873,17 @@ mod tests {
         "disabled by `ignore = [\"other\"]`"
     )]
     #[case::ignore_wins_across_facets(
-        Some(vec![HEURISTIC]),
+        Some(vec![OPINIONATED]),
         &[PARENT_TAG],
         "disabled by `ignore = [\"parent\"]` (via parent > child)"
     )]
     #[case::selected_rule_name_beats_tags(
         Some(vec![RULE]),
-        &[PARENT_TAG, OTHER_TAG, HEURISTIC],
+        &[PARENT_TAG, OTHER_TAG, OPINIONATED],
         "enabled by `select = [\"rule\"]`"
     )]
     #[case::ignored_rule_name_beats_tags(
-        Some(vec![PARENT_TAG, OTHER_TAG, HEURISTIC]),
+        Some(vec![PARENT_TAG, OTHER_TAG, OPINIONATED]),
         &[RULE],
         "disabled by `ignore = [\"rule\"]`"
     )]
@@ -898,7 +896,6 @@ mod tests {
             "rule",
             Classification {
                 topics: &[CHILD, OTHER],
-                precision: Precision::Heuristic,
                 consensus: Consensus::Opinionated,
                 impacted_quality: ImpactedQuality::Maintainability,
             },
@@ -968,26 +965,26 @@ mod tests {
 
     #[test]
     fn per_file_ignores_remove_only_on_matching_paths() {
-        let heuristic: Vec<_> = rules_tagged("heuristic")
+        let opinionated: Vec<_> = rules_tagged("opinionated")
             .unwrap()
             .iter()
             .map(|rule| rule.name.0)
             .collect();
-        let config = parse_config("[per-file-ignores]\n\"tests/**\" = [\"heuristic\"]").unwrap();
+        let config = parse_config("[per-file-ignores]\n\"tests/**\" = [\"opinionated\"]").unwrap();
         assert_eq!(
             enabled(&config, "tests/test_module.py"),
-            all_except(&heuristic)
+            all_except(&opinionated)
         );
         assert_eq!(enabled(&config, "src/module.py"), all_except(&[]));
     }
 
     #[test]
     fn per_file_ignores_apply_after_selection_by_rule_name() {
-        let rule = rules_tagged("heuristic").unwrap()[0].name.0;
+        let rule = rules_tagged("opinionated").unwrap()[0].name.0;
         let config = parse_config(&indoc::formatdoc! {r#"
             select = ["{rule}"]
             [per-file-ignores]
-            "tests/**" = ["heuristic"]"#})
+            "tests/**" = ["opinionated"]"#})
         .unwrap();
         assert!(enabled(&config, "tests/test_module.py").is_empty());
         assert_eq!(enabled(&config, "src/module.py"), BTreeSet::from([rule]));
@@ -1017,9 +1014,9 @@ mod tests {
          from one list"
     )]
     #[case::facet_label(
-        r#"select = ["precision"]"#,
-        "`precision` in `select` is a facet label, not a selector; use one of its values: \
-         exact, heuristic"
+        r#"select = ["consensus"]"#,
+        "`consensus` in `select` is a facet label, not a selector; use one of its values: \
+         opinionated, unopinionated"
     )]
     #[case::multi_word_facet_label(
         r#"select = ["Impacted quality"]"#,
@@ -1027,9 +1024,9 @@ mod tests {
          values: reliability, maintainability"
     )]
     #[case::typo_in_per_file(
-        "[per-file-ignores]\n\"tests/**\" = [\"heurstic\"]",
-        "unknown selector `heurstic` in `per-file-ignores.\"tests/**\"`; did you mean \
-         `heuristic`?"
+        "[per-file-ignores]\n\"tests/**\" = [\"opinonated\"]",
+        "unknown selector `opinonated` in `per-file-ignores.\"tests/**\"`; did you mean \
+         `opinionated`?"
     )]
     #[case::invalid_glob(
         "[per-file-ignores]\n\"src/[\" = [\"testing\"]",

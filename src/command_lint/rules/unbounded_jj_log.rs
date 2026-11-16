@@ -7,8 +7,8 @@ use crate::command_lint::command::{
 use crate::command_lint::contract::{CommandEnv, CommandRule};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Precision, Reference,
-    RuleDoc, RuleOptions, Topic,
+    Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Reference, RuleDoc,
+    RuleOptions, Topic,
 };
 
 const TEMPLATE: ViolationTemplate = violation_template! {
@@ -27,7 +27,6 @@ pub const RULE: CommandRule = CommandRule {
         options: RuleOptions::none(),
         classification: Classification {
             topics: &[Topic::JJ],
-            precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Reliability,
         },

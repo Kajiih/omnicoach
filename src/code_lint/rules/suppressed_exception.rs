@@ -5,8 +5,8 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, Declaration, EnforcementMode, Example, FilterListDefaults,
-    ImpactedQuality, LanguageDefaults, ListKind, ListOption, Precision, Reference, RuleDoc,
-    RuleOptions, Topic,
+    ImpactedQuality, LanguageDefaults, ListKind, ListOption, Reference, RuleDoc, RuleOptions,
+    Topic,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -42,7 +42,6 @@ pub const RULE: CodeRule<ListOption> = CodeRule {
         },
         classification: Classification {
             topics: &[Topic::ERROR_HANDLING],
-            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

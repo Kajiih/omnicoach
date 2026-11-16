@@ -18,12 +18,11 @@ Contributor guidelines and yes/no classification tests live in [tag_guide.md](..
 
 ### 2.1. Faceted Classification Model (`D17`, `D19`–`D21`, `D23`, `D28`, `D38`)
 
-Every rule is classified across seven orthogonal **facets**—four declared in the rule's own file and three derived automatically:
+Every rule is classified across six orthogonal **facets**—three declared in the rule's own file and three derived automatically:
 
 | Facet (display label) | Cardinality | Values | Source |
 |---|---|---|---|
 | **Topic** | `>= 1` (most specific only) | 22-topic tree (§2.2) | Declared on `Classification::topics` |
-| **Precision** | Exactly `1` | `exact`, `heuristic` | Declared on `Classification::precision` |
 | **Consensus** | Exactly `1` | `opinionated`, `unopinionated` | Declared on `Classification::consensus` |
 | **Impacted quality** | Exactly `1` | `reliability`, `maintainability` (from ISO/IEC 25010) | Declared on `Classification::impacted_quality` |
 | **Languages** | `>= 1` (code) / `0` (command) | `python`, `rust` | Derived from `supported_languages()` |
@@ -33,14 +32,13 @@ Every rule is classified across seven orthogonal **facets**—four declared in t
 ```rust
 pub struct Classification {
     pub topics: &'static [Topic],
-    pub precision: Precision,
     pub consensus: Consensus,
     pub impacted_quality: ImpactedQuality,
 }
 ```
 
 - **Compile-Time Completeness**: Because each single-valued declared facet is a mandatory struct field typed by its own enum, omitting a facet (`E0063`), supplying two values (`E0062`), placing a facet value in `topics` (`E0308`), or attempting to declare a derived facet (`E0560`) is a compile error.
-- **Single Global Namespace (`DI5`)**: Rule names, canonical topic labels, facet value labels, and topic synonyms share one flat selector namespace (`heuristic`, not `precision:heuristic`). Facet display labels (`Topic`, `Precision`, `Consensus`, `Impacted quality`, `Languages`, `Analyzed input`, `File scope`) are never valid selectors (`D19`).
+- **Single Global Namespace (`DI5`)**: Rule names, canonical topic labels, facet value labels, and topic synonyms share one flat selector namespace (`opinionated`, not `consensus:opinionated`). Facet display labels (`Topic`, `Consensus`, `Impacted quality`, `Languages`, `Analyzed input`, `File scope`) are never valid selectors (`D19`).
 - **Orthogonal Boundary Between Topic and Impacted Quality (`D38`)**: Topics name the *code construct, API, or domain inspected* (`testing`, `static-typing`, `async`), whereas `ImpactedQuality` names the *ISO/IEC 25010 software quality that suffers when violated* (`reliability`, `maintainability`, and future ISO values when first needed by a rule). Quality words (`security`, `performance`, `reliability`, `maintainability`, `safety`) are never topics.
 
 ### 2.2. Topic Tree as Plain `const` Declarations (`D16`, `D24`, `D25`, `D32`–`D34`)
@@ -59,7 +57,7 @@ pub(crate) const JJ: Self = Self::sub(
 .aliases(&["jujutsu"]);
 ```
 
-1. **Single-Spot Declaration & Mandatory Documentation (`C2`, `D32`)**: Every topic's `label`, parent (`Topic::root` vs. `Topic::sub`), `description`, `scope_note`, and synonyms (`.aliases(&[...])`: `version-control` → `vcs`, `jujutsu` → `jj`) live in a single `const` expression. `TopicDoc` is a struct literal, so omitting `description` or `scope_note` is a compile error (`E0063`); an empty description or scope note fails `every_topic_is_documented`. Single-valued facet enums (`Precision`, `Consensus`, `ImpactedQuality`) derive `strum::IntoStaticStr` and `strum::EnumMessage`, so their tag label and description come directly from the variant and its doc comment (enforced by `missing_docs`).
+1. **Single-Spot Declaration & Mandatory Documentation (`C2`, `D32`)**: Every topic's `label`, parent (`Topic::root` vs. `Topic::sub`), `description`, `scope_note`, and synonyms (`.aliases(&[...])`: `version-control` → `vcs`, `jujutsu` → `jj`) live in a single `const` expression. `TopicDoc` is a struct literal, so omitting `description` or `scope_note` is a compile error (`E0063`); an empty description or scope note fails `every_topic_is_documented`. Single-valued facet enums (`Consensus`, `ImpactedQuality`) derive `strum::IntoStaticStr` and `strum::EnumMessage`, so their tag label and description come directly from the variant and its doc comment (enforced by `missing_docs`).
 2. **Native Compile-Time Cycle Prevention (`D34`, `E0391`)**: Because each topic is a `const` and `Topic::sub` stores `parent: Some(parent)` (`Option<&'static Topic>`), any cycle in `parent` links fails to compile with `rustc`'s native `E0391` (`cycle detected when const-evaluating`), regardless of declaration order. There is no arbitrary maximum depth limit.
 3. **A Tree Checked at Compile Time**: `Topic`'s fields are private, and `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent) enforce at compile time that a topic has at most one parent, itself a topic (`E0308` otherwise).
 4. **Active Topics Derived from Rules & Unused-Topic Detection (`M10`)**: `RuleSelection` collects `all_topics()` by walking registered rules' `classification.topics` and their `.ancestors()` (no second `ALL` list or macro). In production, `pub(crate) const` topic declarations that are not referenced by any rule or child topic are caught at compile time by `rustc`'s `dead_code` lint.
@@ -68,7 +66,7 @@ pub(crate) const JJ: Self = Self::sub(
 
 ### 2.3. Selection Precedence Model B and Config Validation (`D15`, `D18`, `D35`)
 
-Every rule has a set of **branches**: one root-to-leaf path per declared topic (`[testing, test-timing]`), plus one single-element path per declared or derived facet value (`[exact]`, `[unopinionated]`, `[reliability]`, `[python]`, `[code]`, `[tests-only]`). The rule's own name (`no-sleep-in-tests`) is the implicit leaf at the end of every branch (`D15`).
+Every rule has a set of **branches**: one root-to-leaf path per declared topic (`[testing, test-timing]`), plus one single-element path per declared or derived facet value (`[unopinionated]`, `[reliability]`, `[python]`, `[code]`, `[tests-only]`). The rule's own name (`no-sleep-in-tests`) is the implicit leaf at the end of every branch (`D15`).
 
 1. **Along One Branch — Nearest Wins**: The selector closest to the rule leaf on a branch determines that branch's verdict. This supports both narrowing an ignore (`ignore = ["vcs"], select = ["jj"]` or `ignore = ["testing"], select = ["no-sleep-in-tests"]`) and carving an exception out of a select (`select = ["testing"], ignore = ["test-doubles"]`).
 2. **Across Branches — Ignore Wins**: If any branch resolves to `Ignore`, the rule is disabled; otherwise, if any branch resolves to `Select`, the rule is enabled.

@@ -102,7 +102,6 @@ extend-banned = ["thread::sleep", "std::thread::sleep", "time::sleep", "tokio::t
 ## Tags
 
 - Topic: test-timing, testing [via test-timing]
-- Precision: exact
 - Consensus: unopinionated
 - Impacted quality: reliability
 - Languages: python, rust

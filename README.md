@@ -133,7 +133,7 @@ enforcement-mode = "require-explanation"
 ### Global Selection & File Scoping
 
 ```toml
-# Select tags (topics, facet values such as `heuristic`, or languages) and rule names.
+# Select tags (topics, facet values such as `opinionated`, or languages) and rule names.
 # A topic includes its subtopics: `testing` covers `test-timing`, `test-doubles`, ...
 select = ["testing", "type-cast"]
 
@@ -143,10 +143,10 @@ ignore = ["test-doubles"]
 
 # Per-file rule ignores using glob patterns, applied after `select` / `ignore`
 [per-file-ignores]
-"tests/**" = ["single-letter-name", "heuristic"]
+"tests/**" = ["single-letter-name", "opinionated"]
 ```
 
-Unknown labels, facet names (`precision`) and a selector in both `select` and `ignore` fail at config load. Run `omnicoach --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](https://github.com/Kajiih/omnicoach/blob/main/docs/dev/tag_guide.md).
+Unknown labels, facet names (`consensus`) and a selector in both `select` and `ignore` fail at config load. Run `omnicoach --list-tags` for the topic tree; facet definitions and selection rules are in [docs/dev/tag_guide.md](https://github.com/Kajiih/omnicoach/blob/main/docs/dev/tag_guide.md).
 
 ### Project Context & Architectural Conformance
 

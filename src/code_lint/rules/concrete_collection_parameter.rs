@@ -14,8 +14,8 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::code_lint::policy::{is_exempt_from_signature_rules, read_only_collection_replacements};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
-    RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Reference, RuleDoc,
+    RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -34,7 +34,6 @@ pub const RULE: CodeRule = CodeRule {
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

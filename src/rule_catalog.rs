@@ -7,7 +7,7 @@ use strum::IntoEnumIterator as _;
 use crate::diagnostic::{Diagnostic, Language};
 use crate::rule_declaration::{
     Consensus, DeclaredExamples, DeclaredOptions, EnforcementMode, FilterListDefaults,
-    LanguageDefaults, OptionSpec, Precision,
+    LanguageDefaults, OptionSpec,
 };
 use crate::rule_selection::{
     ConfigError, ConfigOverrides, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
@@ -71,17 +71,16 @@ const FIX_NOTE: &str = "Note: Fix the underlying design issue rather than reshap
                         to dodge a threshold, dropping assertions, or copying suppressions onto \
                         internal helpers.";
 
-/// The footer note on suppressing findings, printed when a reported rule is `heuristic` or
-/// `opinionated`.
+/// The footer note on suppressing findings, printed when a reported rule is `opinionated`.
 // TODO: I think we should not configure per file ignores in the global config but colocated witht the file/module.
 const SUPPRESSION_NOTE: &str = indoc::indoc! {"
-    Note: When a heuristic or opinionated rule flags intentional code, match the resolution to its scope:
+    Note: When an opinionated rule flags intentional code, match the resolution to its scope:
       - Internal defect (default): Refactor the code to fix the root cause described in `Rationale:`.
       - Single-site boundary exception (locked public/wire signature or stateful test): Satisfy `Or:` if shown, or suppress that site only with `omni:ignore [<rule>] -- <reason>` (do not weaken `.omnicoach.toml` repo-wide for a single site).
-      - Multi-site module or domain convention (5+ sites across a domain module): Configure `per-file-ignores = { \"path.py\" = [\"<rule>\"] }` or `[rules.<rule>]` in `.omnicoach.toml` (see `omnicoach --explain <rule>...`) rather than repeating inline suppressions across a file. Report false positives or misleading guidance to `omnicoach`."};
+      - Multi-site module or domain convention (5+ sites across a domain module): Configure `[rules.<rule>]` or `per-file-ignores = { \"path.py\" = [\"<rule>\"] }` in `.omnicoach.toml` (see `omnicoach --explain <rule>...`) rather than repeating inline suppressions across a file. Report false positives or misleading guidance to `omnicoach`."};
 
 /// The footer printed after plain `code` diagnostics: `FIX_NOTE`, `SUPPRESSION_NOTE` when
-/// any reported rule is `heuristic` or `opinionated`, and the `--explain` pointer.
+/// any reported rule is `opinionated`, and the `--explain` pointer.
 #[must_use]
 pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
     code_report_footer_for_rules(
@@ -91,22 +90,19 @@ pub fn code_report_footer(binary: &str, diagnostics: &[Diagnostic]) -> String {
 }
 
 /// The footer printed after diagnostics for a collection of rule names: `FIX_NOTE`,
-/// `SUPPRESSION_NOTE` when any named rule is `heuristic` or `opinionated`, and the
-/// `--explain` pointer.
+/// `SUPPRESSION_NOTE` when any named rule is `opinionated`, and the `--explain` pointer.
 #[must_use]
 pub fn code_report_footer_for_rules<'a>(
     binary: &str,
     rule_names: impl IntoIterator<Item = &'a str>,
 ) -> String {
-    let has_heuristic_or_opinionated = rule_names.into_iter().any(|rule_name| {
-        find_rule(rule_name).is_ok_and(|rule| {
-            rule.classification.precision == Precision::Heuristic
-                || rule.classification.consensus == Consensus::Opinionated
-        })
+    let has_opinionated = rule_names.into_iter().any(|rule_name| {
+        find_rule(rule_name)
+            .is_ok_and(|rule| rule.classification.consensus == Consensus::Opinionated)
     });
     let explain = explain_footer(binary);
     let mut lines = vec![FIX_NOTE];
-    if has_heuristic_or_opinionated {
+    if has_opinionated {
         lines.push(SUPPRESSION_NOTE);
     }
     lines.push(&explain);
@@ -702,10 +698,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::exact_unopinionated("sleep-in-tests", false)]
-    #[case::exact_opinionated("logic-in-tests", true)]
-    #[case::heuristic_opinionated("multi-phase-test", true)]
-    fn code_report_footer_includes_note_only_for_heuristic_or_opinionated_rules(
+    #[case::unopinionated("sleep-in-tests", false)]
+    #[case::opinionated("logic-in-tests", true)]
+    #[case::opinionated_multi_phase("multi-phase-test", true)]
+    fn code_report_footer_includes_note_only_for_opinionated_rules(
         #[case] rule_name: &'static str,
         #[case] expects_note: bool,
     ) {

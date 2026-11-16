@@ -7,7 +7,7 @@ use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, Example, ImpactedQuality,
-    LanguageDefaults, Precision, Reference, RuleDoc, RuleOptions, Topic,
+    LanguageDefaults, Reference, RuleDoc, RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -35,7 +35,6 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
         options: RuleOptions::code_rule(MIN_ELEMENTS),
         classification: Classification {
             topics: &[Topic::POSITIONAL_MEANING],
-            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

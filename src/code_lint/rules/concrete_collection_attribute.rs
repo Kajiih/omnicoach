@@ -10,8 +10,8 @@ use crate::code_lint::policy::{is_pydantic_model, read_only_collection_replaceme
 use crate::code_lint::project::ProjectContext;
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
-    RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Reference, RuleDoc,
+    RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -30,7 +30,6 @@ pub const RULE: ProjectCodeRule<(), &'static [Example]> = ProjectCodeRule {
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Exact,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },

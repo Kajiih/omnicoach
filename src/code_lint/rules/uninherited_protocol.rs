@@ -15,7 +15,7 @@ use crate::code_lint::project::{
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, Consensus, CountOption, Declaration, ImpactedQuality, LanguageDefaults,
-    Precision, ProjectExample, Reference, RuleDoc, RuleOptions, Topic,
+    ProjectExample, Reference, RuleDoc, RuleOptions, Topic,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -41,7 +41,6 @@ pub const RULE: ProjectCodeRule<CountOption> = ProjectCodeRule {
         options: RuleOptions::code_rule(MIN_METHODS),
         classification: Classification {
             topics: &[Topic::STATIC_TYPING],
-            precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Reliability,
         },

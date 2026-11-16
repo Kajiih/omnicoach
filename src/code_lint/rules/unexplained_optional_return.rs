@@ -8,8 +8,8 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{CodeRule, RuleTarget};
 use crate::diagnostic::{Diagnostic, Language, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
-    Classification, Consensus, Declaration, Example, ImpactedQuality, Precision, Reference,
-    RuleDoc, RuleOptions, Topic,
+    Classification, Consensus, Declaration, Example, ImpactedQuality, Reference, RuleDoc,
+    RuleOptions, Topic,
 };
 use std::path::Path;
 
@@ -28,7 +28,6 @@ pub const RULE: CodeRule = CodeRule {
         options: RuleOptions::code_rule(()),
         classification: Classification {
             topics: &[Topic::DOCSTRINGS],
-            precision: Precision::Heuristic,
             consensus: Consensus::Opinionated,
             impacted_quality: ImpactedQuality::Maintainability,
         },
