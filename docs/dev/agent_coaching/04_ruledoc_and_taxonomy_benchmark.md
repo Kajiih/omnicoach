@@ -9,7 +9,7 @@
 
 ## 1. First-Principles Audit of `Precision` vs. `Consensus` & `RuleDoc`
 
-Auditing the full 83-rule catalog (`76` code rules, `4` suppression rules, `3` command rules) exposed three structural problems with the `Precision` (`exact` / `heuristic`) facet ([02_references_and_corpus_split.md](02_references_and_corpus_split.md) §6):
+Auditing the full 83-rule catalog (`76` code rules, `4` suppression rules, `3` command rules) exposed three structural problems with the `Precision` (`exact` / `heuristic`) facet ([02_references_and_corpus_split.md](02_references_and_corpus_split.md) §2.3–§3):
 
 | `Precision` \ `Consensus` | `Opinionated` (`67`) | `Unopinionated` (`16`) | Total (`83`) | Has `known_problems: Some(...)` |
 | :--- | :---: | :---: | :---: | :---: |
@@ -33,15 +33,35 @@ Four compiled binary cohorts were evaluated double-blind (`2` replicates per coh
 | **Separate When to Allow & Known Problems** | `when_to_allow: Option<&'static str>` + `known_problems: Option<&'static str>` | `## When to allow` (domain/boundary/config exceptions) + `## Known problems` (static-analysis blind spots) | `For details on a rule (including when to allow and known problems), run: omnicoach --explain <rule>...` |
 | **Separate Exceptions & Known Problems** | `exceptions: Option<&'static str>` + `known_problems: Option<&'static str>` | `## Exceptions` + `## Known problems` | `For details on a rule (including exceptions and known problems), run: omnicoach --explain <rule>...` |
 
-In all three treatment cohorts, `Precision` (`exact` / `heuristic`) was removed from `## Tags`, and `SUPPRESSION_NOTE` ordered `[rules.<rule>]` before `per-file-ignores`.
+In all three treatment cohorts, `Precision` (`exact` / `heuristic`) was removed from `## Tags`, and `SUPPRESSION_NOTE` ordered `[rules.<rule>]` before `per-file-ignores`. All four cohorts shared the identical `Scope-Calibrated 3-Branch + Schema Hint` diagnostic footer from [03_double_blind_prototype_benchmark.md](03_double_blind_prototype_benchmark.md) §5, isolating the effect of `RuleDoc` structure, `--explain` headings, and `Precision` removal.
 
 ---
 
-## 3. Double-Blind Benchmark Scenarios (`20` Graded Items per Replicate Pair)
+## 3. Double-Blind Experimental Protocol & Oracle Design
+
+Building on the isolation and anti-gaming methodology established in [02_references_and_corpus_split.md](02_references_and_corpus_split.md) §2.3 and [03_double_blind_prototype_benchmark.md](03_double_blind_prototype_benchmark.md) §2.1 & §4, the benchmark enforced four experimental controls:
+
+1. **Disjoint Rule Splits & Zero Calibration Contamination**:
+   - None of the `12` Calibration rules from [02_references_and_corpus_split.md](02_references_and_corpus_split.md) §3 appeared in either suite.
+   - The **Development Split** (`9` rules across `4` Python modules, `10` graded items per trial) and the **Holdout Split** (`10` disjoint rules across `4` Python modules, `10` graded items per trial) shared zero rules, and source files contained zero comments or docstrings hinting at which symbols were internal defects vs. external contracts.
+2. **Subject (Subagent) Blinding & Environment Hermeticity**:
+   - Each of the `16` trials (`4` cohorts $\times$ `2` splits $\times$ `2` independent replicates) spawned a fresh subagent conversation pointed at a dedicated `/tmp` copy of the fixture repository.
+   - Each trial invoked an anonymized pre-compiled `omnicoach` binary path (never naming the cohort or hypothesis) with `XDG_CONFIG_HOME` pointed to an empty per-trial directory so host-level `~/.config/omnicoach/config.toml` settings could not leak into runs.
+   - Every trial received the exact same neutral prompt (*run `pytest` and `omnicoach code`, resolve all findings cleanly while preserving intended behavior and public contracts, and do not inspect files outside the trial directory*), preventing access to `custom_lints` source code, `AGENTS.md`, VCS history, or sibling trials.
+3. **Adversarial Fixture Design (Same-File Defect + Convention & Semantic Traps)**:
+   - *Co-located multi-site convention + internal defect*: In `geometry.py` (`[single-letter-name]`) and `wire_v1_schema.py` (`[type-suffixed-name]`), a 6-site legitimate domain or wire convention was placed in the **same file** as an unrelated internal naming defect (`_pad_label(s, n)` and `normalize_tags(raw_str)`). Using file-wide `per-file-ignores` silenced the entire file and left the internal defect unfixed (`score = 0`), whereas configuring `[rules.<rule>]` (`extend-allowed` / `remove-banned`) allowed the domain terms while keeping the internal defect flagged (`score = 1`).
+   - *Static-analysis and runtime semantic traps*: `telemetry.py` tested PEP 589 `TypedDict` string-literal subscript keys under `[repeated-literal]` (where extracting a string constant breaks `mypy`/`pyright` `TypedDict` indexing), and `wire_v1_schema.py` tested `Mapping[int, str]` integer-key lookups under `[repeated-index-access]` (where naive sequence unpacking `t1, t2, t3 = tier_labels` unpacks integer keys `1, 2, 3` instead of string values).
+4. **Evaluator Blinding via Deterministic Behavioral + AST Oracles**:
+   - Completed trial directories were graded post-run by a single deterministic Python oracle script stored outside the trial workspaces, combining `omnicoach code` exit status (`0`), an external `pytest` behavioral/caller contract suite, and Python `ast` + `tomllib` assertions on `.omnicoach.toml` keys, inline `# omni:ignore` sites and rationales, `Or:` explanation comments, parameter/return annotations, keyword-only separators, extracted constants, and docstrings—with zero post-hoc human or LLM-as-judge re-scoring.
+   - Token and step telemetry was extracted directly from each subagent's `transcript.jsonl` log.
+
+---
+
+## 4. Double-Blind Benchmark Scenarios (`20` Graded Items per Replicate Pair)
 
 Each trial ran an isolated subagent on a four-module Python repository (`10` graded items on the Development split; `10` graded items on the Holdout split) where every module paired an internal defect with a boundary, domain, or static-analysis false-positive trap:
 
-### Development Split (`8` rules, `10` graded items per trial)
+### Development Split (`9` rules, `10` graded items per trial)
 
 1. **Domain Naming vs. Positional Boundary (`geometry.py` — `[single-letter-name]` + `[identical-positional-types]`)**:
    - `Quaternion` uses domain-standard `w, x, y, z` across `6` sites (`x` is allowed by default; `w, y, z` are flagged) $\to$ configure `[rules.single-letter-name]` `extend-allowed = ["w", "y", "z"]` (not `per-file-ignores`, which would hide `_pad_label(s, n)`).
@@ -60,7 +80,7 @@ Each trial ran an isolated subagent on a four-module Python repository (`10` gra
 4. **Optional Sentinel Contracts (`docstrings.py` — `[unexplained-optional-argument]` + `[unexplained-optional-return]`)**:
    - Document what `timeout=None` and `headers=None` do and when `find_route` returns `None` (without gaming the rule by deleting `Optional` or `or None`).
 
-### Holdout Split (`8` rules, `10` graded items per trial)
+### Holdout Split (`10` rules, `10` graded items per trial)
 
 1. **Wire-Locked Suffixes vs. Integer-Keyed Mapping Lookups (`wire_v1_schema.py` — `[type-suffixed-name]` + `[repeated-index-access]`)**:
    - `WireV1Envelope` has `6` wire-locked `_list` / `_dict` fields (`tags_list`, `headers_dict`, ...) $\to$ configure `[rules.type-suffixed-name]` `remove-banned = ["_list", "_dict"]` (not `per-file-ignores`, which would hide `normalize_tags(raw_str)`).
@@ -81,7 +101,7 @@ Each trial ran an isolated subagent on a four-module Python repository (`10` gra
 
 ---
 
-## 4. Empirical Results (`16` Subagent Trials, `160` Graded Items)
+## 5. Empirical Results (`16` Subagent Trials, `160` Graded Items)
 
 | Cohort | Dev RICR (`Replicate 1` / `2`) | Holdout RICR (`Replicate 1` / `2`) | Combined RICR (`40` items) | Multi-Site `[rules.<rule>]` Adoption | Mean Turns (Dev / Holdout) | Mean Output Tokens (Dev / Holdout) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -102,7 +122,7 @@ Each trial ran an isolated subagent on a four-module Python repository (`10` gra
 
 ---
 
-## 5. Next Steps
+## 6. Next Steps
 
 1. **Adopted Design ([ADR 007](../decisions/007_rule_taxonomy_and_selection.md), [ADR 008](../decisions/008_rule_documentation_and_discovery.md))**: `RuleDoc::when_to_allow` (`## When to allow`) and the removal of `Precision` from `Classification`, `Facet`, and `Tag` are promoted into [src/rule_declaration/](../../../src/rule_declaration.rs), [src/rule_selection/](../../../src/rule_selection.rs), and [src/rule_catalog.rs](../../../src/rule_catalog.rs).
 2. **Remaining Coaching Follow-ups ([ROADMAP.md](../../../ROADMAP.md) §4)**:
