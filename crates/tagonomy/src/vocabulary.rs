@@ -15,6 +15,18 @@ use crate::tag::{Tag, TagGroup};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TagId(usize);
 
+impl TagId {
+    /// The id at position `index`.
+    pub(crate) const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// The id's position.
+    pub(crate) const fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// Why a set of tags is not a valid [`Vocabulary`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VocabularyError {
@@ -178,8 +190,16 @@ impl Vocabulary {
             .map_or(TagLookupError::Unknown, TagLookupError::Group))
     }
 
-    /// The group whose name loosely equals `name` (ASCII case-insensitively, with spaces,
-    /// underscores and hyphens equivalent).
+    /// The tag whose canonical label (excluding aliases) is `label`.
+    pub(crate) fn by_canonical_label(&self, label: &str) -> Option<TagId> {
+        self.labels
+            .get(label)
+            .copied()
+            .filter(|&id| self.tags[id.0].label == label)
+    }
+
+    /// Finds a group by name, ignoring ASCII case and treating spaces, `_`, and `-` as equal (so
+    /// `"file-scope"` matches `"File scope"`).
     #[must_use]
     pub fn group(&self, name: &str) -> Option<&'static TagGroup> {
         self.groups
@@ -254,6 +274,11 @@ impl Vocabulary {
         let mut path = self.root_chain(through);
         path.extend(self.chain(narrower, through).into_iter().skip(1));
         path
+    }
+
+    /// The tags `id` implies, including itself.
+    pub(crate) fn closure(&self, id: TagId) -> &FixedBitSet {
+        &self.closures[id.0]
     }
 
     /// Two tags of `tags` in `group` that do not imply each other, if `group` is exclusive.
@@ -546,6 +571,11 @@ mod tests {
         ids.into_iter().map(|id| vocabulary.tag(id).label).collect()
     }
 
+    #[test]
+    fn tag_id_preserves_index() {
+        assert_eq!(TagId::new(7).index(), 7);
+    }
+
     #[rstest]
     #[case::empty(&[], &[])]
     #[case::given_after_a_tag_implying_it(&[JJ, ROOT, VCS], &["jj", "root", "vcs"])]
@@ -640,6 +670,8 @@ mod tests {
         let built = vocabulary(&[JJ, LINUX]);
         let all_labels: Vec<_> = built.labels().collect();
         assert_eq!(all_labels, ["jj", "jujutsu", "linux", "unix", "vcs"]);
+        assert_eq!(built.by_canonical_label("jj"), built.id("jujutsu"));
+        assert_eq!(built.by_canonical_label("jujutsu"), None);
     }
 
     #[rstest]
