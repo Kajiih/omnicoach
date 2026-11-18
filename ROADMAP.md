@@ -6,6 +6,10 @@ Items here represent design areas and technical directions to evaluate rather th
 
 ## Adhoc
 
+- Per file ignores/configs should be defined colocatedly within the file (and/or should use the declared components to ignore/config across the declared components rather than just modules)
+- --include-tests on omnicoach graph slice: slice currently excludes tests/** callers, forcing a second rg call whenever finding which unit tests exercise a symbol before editing.
+- Add stmt, ann, assign, to banned abbreviations.
+
 ## Prioritized Next Steps
 
 1. **Agent & Parallel `jj` Workspace Safety Rules & `command_lint` Domain Separation (§1, *Architecture & Conformance* & *Candidate Rules & Rule Follow-ups*)**: Investigate and design the architectural separation of generic shell/CLI parsing (`CommandLintCommand`) from Jujutsu VCS domain semantics (`JJ_CLI_SCHEMA`, `revset.rs`) and tool-specific CLI schema catalogs (`SUBCOMMAND_CLI_SCHEMAS`), alongside multi-workspace `jj` rewrite safety checks, non-interactive `jj` description/squash guardrails, and shell/command-shape guardrails (`command_lint` + `hook`).
