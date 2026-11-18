@@ -27,8 +27,8 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-aarch64-unknown-linu
 pkg-fmt = "zip"
 
 [workspace]
-members = [".", "crates/omnicoach-py", "playground"]
-default-members = ["."]
+members = [".", "crates/omnicoach-py", "crates/tagonomy", "playground"]
+default-members = [".", "crates/tagonomy"]
 
 [workspace.package]
 version = "0.4.1"

@@ -741,18 +741,29 @@ fn test_doc_summaries_open_with_flags_or_requires() {
 /// Crates.io rejects `cargo publish` when a crate declares more than 5 keywords or categories,
 /// or when a keyword exceeds 20 ASCII bytes or starts with a non-alphanumeric character.
 #[rstest]
-#[case("keywords", true)]
-#[case("categories", false)]
-fn test_cargo_manifest_satisfies_crates_io_limits(#[case] field: &str, #[case] check_syntax: bool) {
-    let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+#[case("Cargo.toml", "keywords", true)]
+#[case("Cargo.toml", "categories", false)]
+#[case("crates/tagonomy/Cargo.toml", "keywords", true)]
+#[case("crates/tagonomy/Cargo.toml", "categories", false)]
+fn test_cargo_manifest_satisfies_crates_io_limits(
+    #[case] relative_manifest: &str,
+    #[case] field: &str,
+    #[case] check_syntax: bool,
+) {
+    let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_manifest);
     let manifest: toml::Value =
         toml::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
-    let entries = manifest["workspace"]["package"][field].as_array().unwrap();
+    let entries = manifest["package"][field]
+        .as_array()
+        .or_else(|| {
+            assert_eq!(
+                manifest["package"][field]["workspace"].as_bool(),
+                Some(true)
+            );
+            manifest["workspace"]["package"][field].as_array()
+        })
+        .unwrap();
 
-    assert_eq!(
-        manifest["package"][field]["workspace"].as_bool(),
-        Some(true)
-    );
     assert!(
         (1..=5).contains(&entries.len()),
         "crates.io allows 1..=5 {field}"

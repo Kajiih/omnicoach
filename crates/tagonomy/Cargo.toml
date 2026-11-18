@@ -1,0 +1,21 @@
+[package]
+name = "tagonomy"
+version = "0.0.1"
+edition.workspace = true
+description = "Compile-time tag vocabularies, faceted tag sets, boolean queries, and specificity-ordered selection"
+readme = "README.md"
+repository.workspace = true
+license.workspace = true
+keywords = ["classification", "faceted", "selector", "tags", "taxonomy"]
+categories = ["config", "data-structures"]
+include = ["/LICENSE", "/README.md", "/src/**"]
+
+[dependencies]
+fixedbitset = "0.5"
+thiserror = "2.0"
+
+[dev-dependencies]
+rstest = "0.27"
+
+[lints]
+workspace = true
