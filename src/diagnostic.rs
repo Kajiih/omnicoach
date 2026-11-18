@@ -345,15 +345,6 @@ impl SourceSpan {
         Self { start, end }
     }
 
-    /// Creates a `SourceSpan` from an AST node byte range.
-    #[must_use]
-    pub const fn from_range(range: std::ops::Range<usize>) -> Self {
-        Self {
-            start: range.start,
-            end: range.end,
-        }
-    }
-
     /// Returns true if `self` encloses `other` (`self.start <= other.start && other.end <= self.end`).
     #[must_use]
     pub const fn contains(self, other: Self) -> bool {

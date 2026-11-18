@@ -168,9 +168,10 @@ pub struct RuleDoc<Examples = &'static [Example]> {
     pub examples: Examples,
 }
 
+#[cfg(test)]
 impl RuleDoc {
-    /// Placeholder for rules whose doc is not written yet.
-    pub const TODO: Self = Self {
+    /// Placeholder `RuleDoc` fixture for unit tests that exercise rule registration without prose.
+    pub(crate) const TODO: Self = Self {
         summary: "Documentation pending.",
         what_it_does: "Documentation pending.",
         why_is_this_bad: "Documentation pending.",
@@ -183,8 +184,9 @@ impl RuleDoc {
 
 impl<Examples> RuleDoc<Examples> {
     /// Whether this is the [`RuleDoc::TODO`] placeholder.
+    #[cfg(test)]
     #[must_use]
-    pub fn is_placeholder(&self) -> bool {
+    pub(crate) fn is_placeholder(&self) -> bool {
         self.summary == RuleDoc::TODO.summary
             && self.what_it_does == RuleDoc::TODO.what_it_does
             && self.why_is_this_bad == RuleDoc::TODO.why_is_this_bad

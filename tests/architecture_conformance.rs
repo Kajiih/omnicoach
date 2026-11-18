@@ -5,12 +5,15 @@
 // Workaround for rust-lang/rust-clippy#13981 so clippy.toml `allow-*-in-tests` applies to the whole file.
 #![cfg(test)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use omnicoach::architecture::ArchitectureComponent;
-use omnicoach::code_lint::ast::rust::{collect_inline_test_ranges, summarize_rust_file};
+use omnicoach::code_lint::ast::rust::{
+    collect_inline_test_ranges, collect_rust_consumer_identifiers, collect_test_only_external_mods,
+    collect_unrestricted_pub_declarations, summarize_rust_file,
+};
 use omnicoach::code_lint::ast::{ParsedFile, collect_bindings};
 use omnicoach::code_lint::project::{
     ArchitectureSpec, DiskFileSource, FileSource as _, ProjectIndex, ProjectLayout,
@@ -297,4 +300,124 @@ fn test_code_lint_project_enforces_language_isolation_across_ast_and_bindings() 
     );
     assert_eq!(violations.context_language_bindings, Vec::<String>::new());
     assert_eq!(violations.sibling_language_bindings, Vec::<String>::new());
+}
+
+const ALLOWED_EXTERNAL_SDK_EXPORTS: &[(&str, &str)] = &[
+    ("src/cli.rs", "EXIT_SUCCESS"),
+    ("src/cli.rs", "EXIT_VIOLATIONS"),
+    ("src/cli.rs", "EXIT_ERROR"),
+];
+
+fn collect_dead_workspace_public_exports() -> Vec<String> {
+    let root = repo_root_directory();
+    let src_dir = root.join("src");
+    let source_files = collect_rust_files_under(&src_dir);
+    let mut external_files = Vec::new();
+    for subdirectory in ["tests", "benches", "crates", "playground"] {
+        external_files.extend(collect_rust_files_under(&root.join(subdirectory)));
+    }
+
+    let parsed_sources: Vec<(String, ParsedFile)> = source_files
+        .iter()
+        .map(|path| {
+            let content = DiskFileSource.read_to_string(path).expect("read src file");
+            let relative = path
+                .strip_prefix(&root)
+                .expect("src file under repo root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            (relative, ParsedFile::rust(&content))
+        })
+        .collect();
+    let test_only_prefixes: Vec<String> = parsed_sources
+        .iter()
+        .flat_map(|(relative, parsed)| {
+            let parent_prefix = relative
+                .strip_suffix("/lib.rs")
+                .or_else(|| relative.strip_suffix("/mod.rs"))
+                .or_else(|| relative.strip_suffix(".rs"))
+                .unwrap_or(relative.as_str());
+            collect_test_only_external_mods(parsed)
+                .into_iter()
+                .map(move |mod_name| format!("{parent_prefix}/{mod_name}"))
+        })
+        .collect();
+
+    let mut consumer_counts: HashMap<String, usize> = HashMap::new();
+    let mut declarations_by_file = Vec::new();
+
+    for (relative, parsed) in &parsed_sources {
+        let is_test_only_module = test_only_prefixes.iter().any(|prefix| {
+            *relative == format!("{prefix}.rs") || relative.starts_with(&format!("{prefix}/"))
+        });
+        if is_test_only_module {
+            continue;
+        }
+        let declarations = collect_unrestricted_pub_declarations(parsed);
+        let declaration_spans: HashSet<_> = declarations
+            .iter()
+            .map(|declaration| declaration.name_span)
+            .collect();
+        for (identifier, span) in collect_rust_consumer_identifiers(parsed, false) {
+            if !declaration_spans.contains(&span) {
+                *consumer_counts.entry(identifier).or_insert(0) += 1;
+            }
+        }
+        declarations_by_file.push((relative.clone(), declarations));
+    }
+
+    for path in &external_files {
+        let content = DiskFileSource
+            .read_to_string(path)
+            .expect("read external workspace file");
+        let parsed = ParsedFile::rust(&content);
+        for (identifier, _) in collect_rust_consumer_identifiers(&parsed, true) {
+            *consumer_counts.entry(identifier).or_insert(0) += 1;
+        }
+    }
+
+    let mut dead_exports = Vec::new();
+    for (relative, declarations) in declarations_by_file {
+        for declaration in declarations {
+            if ALLOWED_EXTERNAL_SDK_EXPORTS
+                .contains(&(relative.as_str(), declaration.name.as_str()))
+            {
+                continue;
+            }
+            if consumer_counts.get(&declaration.name).copied().unwrap_or(0) == 0 {
+                let qualified = declaration.enclosing_type.as_deref().map_or_else(
+                    || declaration.name.clone(),
+                    |type_name| format!("{type_name}::{}", declaration.name),
+                );
+                dead_exports.push(format!("{relative}: {qualified}"));
+            }
+        }
+    }
+    dead_exports
+}
+
+fn collect_rust_files_under(directory: &Path) -> Vec<PathBuf> {
+    if !directory.exists() {
+        return Vec::new();
+    }
+    let mut paths = DiskFileSource
+        .walk_files(directory)
+        .expect("walk workspace directory");
+    paths.retain(|path| path.extension().and_then(|extension| extension.to_str()) == Some("rs"));
+    paths.sort();
+    paths
+}
+
+/// Verifies that every unrestricted `pub` item in non-test `src/` modules (including
+/// `macro_rules!`-generated `pub` items) has at least one live non-unit-test consumer across the
+/// Cargo workspace (`src/` production code and rustdoc examples, `tests/`, `benches/`, `crates/`,
+/// and `playground/`), excluding self-`impl` headers, facade `pub use` re-exports, inline
+/// `#[cfg(test)]` blocks, and `#[cfg(test)] mod` support modules. CST identifier matching
+/// approximates receiver-typed method calls by unqualified identifier name.
+#[test]
+fn test_workspace_public_exports_have_live_consumers() {
+    assert_eq!(
+        collect_dead_workspace_public_exports(),
+        Vec::<String>::new()
+    );
 }

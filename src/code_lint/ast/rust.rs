@@ -12,6 +12,7 @@ mod literals;
 mod multiline_strings;
 mod names;
 mod positional_reads;
+mod public_exports;
 mod returns;
 mod statement_spans;
 mod test_analysis;
@@ -36,6 +37,10 @@ pub(super) use self::imports::collect_import_map;
 pub(super) use self::literals::collect_literal_occurrences;
 pub(super) use self::multiline_strings::collect_multiline_strings;
 pub(super) use self::positional_reads::collect_positional_reads;
+pub use self::public_exports::{
+    RustPubDeclaration, collect_rust_consumer_identifiers, collect_test_only_external_mods,
+    collect_unrestricted_pub_declarations,
+};
 pub(super) use self::returns::collect_function_returns;
 pub(in crate::code_lint) use self::returns::nullable_return_collection_type;
 pub(super) use self::statement_spans::{
