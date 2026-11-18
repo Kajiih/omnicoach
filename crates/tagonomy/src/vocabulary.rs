@@ -83,8 +83,10 @@ pub enum TagLookupError {
 pub struct Vocabulary {
     tags: Vec<Tag>,
     parents: Vec<Vec<TagId>>,
-    /// Each tag's reflexive upward closure.
+    /// For each tag, the set of tags it implies (including itself).
     closures: Vec<FixedBitSet>,
+    /// For each tag, the strictly narrower tags that imply it.
+    strict_narrower: Vec<FixedBitSet>,
     /// Canonical labels and aliases.
     labels: BTreeMap<&'static str, TagId>,
     groups: Vec<&'static TagGroup>,
@@ -148,10 +150,12 @@ impl Vocabulary {
                 .collect());
         }
         let closures = compute_closures(&parents);
+        let strict_narrower = compute_strict_narrower(&closures);
         let vocabulary = Self {
             tags,
             parents,
             closures,
+            strict_narrower,
             labels,
             groups,
         };
@@ -279,6 +283,11 @@ impl Vocabulary {
     /// The tags `id` implies, including itself.
     pub(crate) fn closure(&self, id: TagId) -> &FixedBitSet {
         &self.closures[id.0]
+    }
+
+    /// The tags that strictly imply `id` (excluding `id` itself).
+    pub(crate) fn strict_narrower(&self, id: TagId) -> &FixedBitSet {
+        &self.strict_narrower[id.0]
     }
 
     /// Two tags of `tags` in `group` that do not imply each other, if `group` is exclusive.
@@ -447,6 +456,20 @@ fn visit_post_order(
     order.push(index);
 }
 
+/// For each tag, the strictly narrower tags that imply it.
+fn compute_strict_narrower(closures: &[FixedBitSet]) -> Vec<FixedBitSet> {
+    let len = closures.len();
+    let mut narrower = vec![FixedBitSet::with_capacity(len); len];
+    for (sub, closure) in closures.iter().enumerate() {
+        for sup in closure.ones() {
+            if sup != sub {
+                narrower[sup].insert(sub);
+            }
+        }
+    }
+    narrower
+}
+
 /// Reconstructs the path from `broader` down to `narrower` recorded in `reached`; empty if
 /// `broader` was not reached.
 fn chain_from(reached: &[Reached], narrower: TagId, broader: TagId) -> Vec<TagId> {
@@ -604,6 +627,14 @@ mod tests {
         let built = vocabulary(&[EBPF]);
         let [narrower_id, broader_id] = [narrower, broader].map(|label| built.id(label).unwrap());
         assert_eq!(built.implies(narrower_id, broader_id), expected);
+    }
+
+    #[test]
+    fn strict_narrower_excludes_the_tag_itself() {
+        let built = vocabulary(&[EBPF]);
+        let unix = built.id("unix").unwrap();
+        let narrower = labels(&built, built.strict_narrower(unix).ones().map(TagId::new));
+        assert_eq!(narrower, ["ebpf", "linux"]);
     }
 
     #[test]
