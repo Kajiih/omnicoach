@@ -38,8 +38,27 @@ impl From<ProjectTomlError> for ArchitectureError {
     }
 }
 
+/// Cross-component import or path reference evaluated against [`ArchitectureSpec`] reachability and
+/// target `public_exports` rules.
+pub(in crate::code_lint::project) struct CrossComponentReference<'a> {
+    /// Enclosing component name.
+    pub from_component: &'a str,
+    /// Target component name.
+    pub target_component: &'a str,
+    /// Concrete target root module path (`"code_lint::ast"` or `"pkg.core"`).
+    pub target_root: &'a str,
+    /// Full canonical target path (`"code_lint::ast::ParsedFile"` or `"pkg.core.Token"`).
+    pub target_path: &'a str,
+    /// True when the reference is a wildcard import (`use ...::*` or `from ... import *`).
+    pub is_wildcard: bool,
+    /// Language module separator (`"::"` for Rust, `"."` for Python).
+    pub separator: &'a str,
+    /// Source span of the offending import or path reference.
+    pub span: SourceSpan,
+}
+
 /// Validated, language-agnostic architectural specification for a project.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ArchitectureSpec {
     /// Whether unmapped production files are flagged.
     pub(in crate::code_lint::project) require_component_coverage: bool,
@@ -111,10 +130,66 @@ impl ArchitectureSpec {
             }
         }
     }
+
+    /// Evaluates `reference` against allowed cross-component dependencies and target
+    /// `public_exports` rules, recording any `undeclared-component-dependency` or
+    /// `private-component-import` violation in `findings`.
+    pub(in crate::code_lint::project) fn check_cross_component_reference(
+        &self,
+        reference: &CrossComponentReference<'_>,
+        findings: &mut FileArchitectureFindings,
+    ) {
+        if !self.allows_dependency(reference.from_component, reference.target_component) {
+            findings
+                .undeclared_component_dependencies
+                .push(UndeclaredComponentDependencyFinding {
+                    span: reference.span,
+                    component: reference.from_component.to_owned(),
+                    dependency: reference.target_component.to_owned(),
+                });
+            return;
+        }
+        let Some(target_spec) = self.component_spec(reference.target_component) else {
+            return;
+        };
+        let Some(ref exports) = target_spec.public_exports else {
+            return;
+        };
+        if !is_path_allowed_by_exports(
+            reference.target_root,
+            reference.target_path,
+            reference.is_wildcard,
+            reference.separator,
+            exports,
+        ) {
+            let symbol_name =
+                if reference.is_wildcard || reference.target_path == reference.target_root {
+                    None
+                } else {
+                    Some(
+                        reference
+                            .target_path
+                            .rsplit(reference.separator)
+                            .next()
+                            .unwrap_or(reference.target_path)
+                            .to_owned(),
+                    )
+                };
+            findings
+                .private_component_imports
+                .push(PrivateComponentImportFinding {
+                    span: reference.span,
+                    component: reference.from_component.to_owned(),
+                    name: symbol_name,
+                    module: reference.target_root.to_owned(),
+                    dependency: reference.target_component.to_owned(),
+                });
+        }
+    }
 }
 
 /// Validated intra-component submodule entry in [`ComponentSpec`] or a parent [`SubmoduleSpec`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct SubmoduleSpec {
     /// Submodule identifier relative to its parent (`"foundation"`, `"source"`).
     pub name: String,
@@ -133,7 +208,7 @@ impl SubmoduleSpec {
 }
 
 /// Validated component entry in [`ArchitectureSpec`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ComponentSpec {
     /// Component identifier.
     pub name: String,
@@ -146,7 +221,7 @@ pub struct ComponentSpec {
     /// External third-party crates or packages encapsulated by this component.
     owns_external: Vec<String>,
     /// Optional public interface export rules per root module (`None` = unrestricted submodules).
-    pub(in crate::code_lint::project) public_exports: Option<Vec<ExportPattern>>,
+    public_exports: Option<Vec<ExportPattern>>,
     /// Optional recursive submodule DAG inside this component.
     pub submodules: Vec<SubmoduleSpec>,
 }
@@ -161,7 +236,7 @@ impl ComponentSpec {
         rel_subpath: Option<&str>,
         separator: &str,
     ) -> &[SubmoduleSpec] {
-        let Some(subpath) = rel_subpath else {
+        let Some(subpath) = rel_subpath.filter(|path| !path.is_empty()) else {
             return &self.submodules;
         };
         subpath
@@ -184,7 +259,7 @@ impl ComponentSpec {
         rel_subpath: Option<&str>,
         separator: &str,
     ) -> bool {
-        let Some(subpath) = rel_subpath else {
+        let Some(subpath) = rel_subpath.filter(|path| !path.is_empty()) else {
             return true;
         };
         let mut current = self.submodules.as_slice();
@@ -216,14 +291,11 @@ impl ComponentSpec {
         let mut current_submodules = self.submodules.as_slice();
         for (src_seg, tgt_seg) in source_rel.split(separator).zip(target_rel.split(separator)) {
             if src_seg != tgt_seg {
-                if current_submodules.is_empty() {
+                let src_sub = current_submodules.iter().find(|sub| sub.name == src_seg)?;
+                if !current_submodules.iter().any(|sub| sub.name == tgt_seg) {
                     return None;
                 }
-                let allowed = current_submodules
-                    .iter()
-                    .find(|sub| sub.name == src_seg)
-                    .is_some_and(|sub| sub.allows_sibling_dependency(tgt_seg));
-                return (!allowed).then(|| {
+                return (!src_sub.allows_sibling_dependency(tgt_seg)).then(|| {
                     if current_prefix.is_empty() {
                         tgt_seg.to_owned()
                     } else {
@@ -242,31 +314,6 @@ impl ComponentSpec {
                 .map_or(&[], |sub| sub.submodules.as_slice());
         }
         None
-    }
-}
-
-/// Export allowlist glob pattern on a component root.
-#[derive(Debug, Clone)]
-pub(in crate::code_lint::project) struct ExportPattern {
-    matcher: globset::GlobMatcher,
-}
-
-impl PartialEq for ExportPattern {
-    fn eq(&self, other: &Self) -> bool {
-        self.matcher.glob().glob() == other.matcher.glob().glob()
-    }
-}
-
-impl Eq for ExportPattern {}
-
-impl ExportPattern {
-    #[must_use]
-    pub(in crate::code_lint::project) fn matches(&self, candidate: &str) -> bool {
-        self.matcher.is_match(candidate)
-    }
-
-    const fn from_matcher(matcher: globset::GlobMatcher) -> Self {
-        Self { matcher }
     }
 }
 
@@ -487,7 +534,62 @@ pub(in crate::code_lint::project) fn deduplicate_findings(findings: &mut FileArc
     sort_and_dedup(&mut findings.reexported_public_items, |f| f.span);
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+struct ExportPattern {
+    matcher: globset::GlobMatcher,
+}
+
+impl ExportPattern {
+    #[must_use]
+    fn matches(&self, candidate: &str) -> bool {
+        self.matcher.is_match(candidate)
+    }
+
+    #[must_use]
+    fn allows_all_at_root(&self) -> bool {
+        matches!(self.matcher.glob().glob(), "*" | "**")
+    }
+
+    #[must_use]
+    fn allows_all_under(&self, relative_module: &str, separator: &str) -> bool {
+        let raw = self.matcher.glob().glob();
+        matches!(raw, "*" | "**")
+            || raw
+                .strip_prefix(relative_module)
+                .and_then(|rest| rest.strip_prefix(separator))
+                .is_some_and(|tail| matches!(tail, "*" | "**"))
+    }
+
+    const fn from_matcher(matcher: globset::GlobMatcher) -> Self {
+        Self { matcher }
+    }
+}
+
+fn is_path_allowed_by_exports(
+    target_root: &str,
+    target_path: &str,
+    is_wildcard: bool,
+    separator: &str,
+    exports: &[ExportPattern],
+) -> bool {
+    if target_path == target_root {
+        return exports.iter().any(ExportPattern::allows_all_at_root);
+    }
+    let Some(relative_symbol) = target_path
+        .strip_prefix(target_root)
+        .and_then(|rest| rest.strip_prefix(separator))
+    else {
+        return false;
+    };
+    if is_wildcard {
+        return exports
+            .iter()
+            .any(|export| export.allows_all_under(relative_symbol, separator));
+    }
+    exports.iter().any(|export| export.matches(relative_symbol))
+}
+
+#[derive(Debug, Clone, Default)]
 struct ExternalPackageOwner {
     components: Vec<String>,
     display_owners: Vec<String>,
@@ -610,4 +712,94 @@ fn sort_and_dedup<T: PartialEq>(items: &mut Vec<T>, span_of: fn(&T) -> SourceSpa
         (span.start, span.end)
     });
     items.dedup();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::code_lint::project::foundation::config::ArchitectureConfig;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::root_import("pkg::core", false, None)]
+    #[case::wildcard_import("pkg::core::sub", true, None)]
+    #[case::named_private_symbol("pkg::core::_SecretItem", false, Some("_SecretItem"))]
+    fn cross_component_private_imports_distinguish_root_wildcard_and_named_symbols(
+        #[case] target_path: &str,
+        #[case] is_wildcard: bool,
+        #[case] expected_name: Option<&str>,
+    ) {
+        let config: ArchitectureConfig = toml::from_str(indoc::indoc! {r#"
+            [[components]]
+            name = "Core"
+            roots = ["pkg::core"]
+            public-exports = ["[!_]*", "sub::[!_]*"]
+
+            [[components]]
+            name = "Api"
+            roots = ["pkg::api"]
+            depends-on = ["Core"]
+        "#})
+        .expect("valid config");
+        let spec = build_architecture_spec(&config, false).expect("valid spec");
+        let mut findings = FileArchitectureFindings::default();
+
+        spec.check_cross_component_reference(
+            &CrossComponentReference {
+                from_component: "Api",
+                target_component: "Core",
+                target_root: "pkg::core",
+                target_path,
+                is_wildcard,
+                separator: "::",
+                span: SourceSpan::new(0, 5),
+            },
+            &mut findings,
+        );
+        let names: Vec<Option<&str>> = findings
+            .private_component_imports
+            .iter()
+            .map(|finding| finding.name.as_deref())
+            .collect();
+
+        assert_eq!(names, vec![expected_name]);
+    }
+
+    #[rstest]
+    #[case::parent_item("python", "closest_match", None)]
+    #[case::allowed_sibling("python", "foundation", None)]
+    #[case::disallowed_sibling("python", "rust", Some("proj::rust"))]
+    #[case::disallowed_nested(
+        "foundation::source",
+        "foundation::config",
+        Some("proj::foundation::config")
+    )]
+    #[case::allowed_nested("foundation::config", "foundation::source", None)]
+    fn submodule_dag_violation_enforces_nested_and_top_level_edges(
+        #[case] source_rel: &str,
+        #[case] target_rel: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let config: ArchitectureConfig = toml::from_str(indoc::indoc! {r#"
+            [[components]]
+            name = "Project"
+            roots = ["proj"]
+            submodules = [
+              { name = "foundation", submodules = [
+                { name = "source" },
+                { name = "config", depends-on = ["source"] },
+              ] },
+              { name = "python", depends-on = ["foundation"] },
+              { name = "rust", depends-on = ["foundation"] },
+            ]
+        "#})
+        .expect("valid config");
+        let spec = build_architecture_spec(&config, false).expect("valid spec");
+        let comp = spec.component_spec("Project").expect("Project component");
+
+        assert_eq!(
+            comp.submodule_dag_violation(source_rel, target_rel, "proj", "::"),
+            expected.map(str::to_owned)
+        );
+    }
 }

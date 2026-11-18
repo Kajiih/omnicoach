@@ -3,18 +3,17 @@
 
 use super::layout::RustLayout;
 use super::paths::{
-    PathOrigin, is_in_rust_module_subtree, is_rust_crate_root,
-    resolve_inherited_component_with_root, resolve_rust_reference_path,
+    InheritedComponent, PathOrigin, is_in_rust_module_subtree, is_rust_crate_root,
+    resolve_inherited_component_with_root, resolve_rust_reference_path, rust_subpath_under_root,
 };
 use crate::code_lint::ast::ParsedFile;
 use crate::code_lint::ast::rust::{DefinedComponentEntry, RustFileSummary, summarize_rust_file};
 use crate::code_lint::project::foundation::{
     ArchitectureComponentConfig, ArchitectureConfig, ArchitectureSpec, ArchitectureSubmoduleConfig,
-    ComponentSpec, CrossComponentRelativePathFinding, ExportPattern, FileArchitectureFindings,
-    InvalidArchitectureComponentFinding, InvalidArchitectureComponentKind,
-    PrivateComponentImportFinding, ReexportedPublicItemFinding, SiblingModuleDependencyFinding,
-    SubmoduleSpec, UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding,
-    deduplicate_findings,
+    ComponentSpec, CrossComponentReference, CrossComponentRelativePathFinding,
+    FileArchitectureFindings, InvalidArchitectureComponentFinding,
+    InvalidArchitectureComponentKind, ReexportedPublicItemFinding, SiblingModuleDependencyFinding,
+    UnmappedArchitectureModuleFinding, deduplicate_findings,
 };
 use crate::diagnostic::SourceSpan;
 use std::collections::{BTreeMap, HashSet};
@@ -90,18 +89,14 @@ pub(super) fn evaluate_rust_file_architecture(
             shallowest_ancestor,
         } = &resolved.origin
             && let Some(ref inherited) = enclosing
-            && !shallowest_ancestor.as_deref().is_some_and(|ancestor| {
-                is_in_rust_module_subtree(ancestor, inherited.root_module)
-                    && is_in_rust_module_subtree(&resolved.canonical_path, inherited.root_module)
-            })
         {
-            findings
-                .cross_component_relative_paths
-                .push(CrossComponentRelativePathFinding {
-                    span: reference.span,
-                    dependency: resolved.canonical_path.clone(),
-                    component: inherited.component.clone(),
-                });
+            check_rust_relative_path_boundary(
+                shallowest_ancestor.as_deref(),
+                &resolved.canonical_path,
+                inherited,
+                reference.span,
+                &mut findings.cross_component_relative_paths,
+            );
         }
 
         if !resolved.is_crate_local() {
@@ -116,17 +111,9 @@ pub(super) fn evaluate_rust_file_architecture(
             );
         }
 
-        if let Some(ref from_component) = enclosing
-            && let Some(target_component) = resolve_inherited_component_with_root(
-                &resolved.canonical_path,
-                spec.component_roots(),
-            )
-            && from_component.component != target_component.component
-        {
-            check_rust_cross_component_edge(
-                from_component.component,
-                target_component.component,
-                target_component.root_module,
+        if let Some(ref from_component) = enclosing {
+            check_rust_cross_component_target(
+                from_component,
                 &resolved.canonical_path,
                 reference.is_glob,
                 reference.span,
@@ -140,6 +127,16 @@ pub(super) fn evaluate_rust_file_architecture(
             enclosing.as_ref().map(|inherited| inherited.root_module),
             &resolve_reexport,
         );
+        if let Some(ref inherited) = enclosing {
+            check_rust_declared_submodule_dag(
+                &module_path,
+                &sibling_target_path,
+                inherited,
+                reference.span,
+                spec,
+                &mut findings.sibling_module_dependencies,
+            );
+        }
         check_rust_sibling_isolation(
             &module_path,
             &sibling_target_path,
@@ -263,9 +260,8 @@ fn submodule_configs_from_defined(
         .collect()
 }
 
-/// Builds Rust sibling-isolation rules across multi-root components, declared intra-component
-/// `submodules` DAGs (including private `mod` children at all depths), and public `pub mod`
-/// children of component roots without an explicit `submodules` DAG.
+/// Builds Rust sibling-isolation rules across multi-root components and public `pub mod` children
+/// of component roots without an explicit `submodules` DAG.
 #[must_use]
 pub(super) fn build_rust_sibling_isolation_rules(
     components: &[ComponentSpec],
@@ -273,10 +269,10 @@ pub(super) fn build_rust_sibling_isolation_rules(
 ) -> Vec<SiblingIsolationRule> {
     let mut rules = Vec::new();
     for component in components {
-        if !component.isolate_children && component.submodules.is_empty() {
+        if !component.isolate_children {
             continue;
         }
-        if component.isolate_children && component.roots.len() > 1 {
+        if component.roots.len() > 1 {
             for root in &component.roots {
                 let forbidden_siblings: Vec<String> = component
                     .roots
@@ -291,15 +287,11 @@ pub(super) fn build_rust_sibling_isolation_rules(
                 });
             }
         }
+        if !component.submodules.is_empty() {
+            continue;
+        }
         for root in &component.roots {
-            if !component.submodules.is_empty() {
-                append_declared_submodule_isolation_rules(
-                    &component.name,
-                    root,
-                    &component.submodules,
-                    &mut rules,
-                );
-            } else if let Some(root_summary) = summary_of(root) {
+            if let Some(root_summary) = summary_of(root) {
                 let direct_children: Vec<String> = root_summary
                     .external_mods
                     .iter()
@@ -324,110 +316,6 @@ pub(super) fn build_rust_sibling_isolation_rules(
         }
     }
     rules
-}
-
-fn append_declared_submodule_isolation_rules(
-    component_name: &str,
-    parent_prefix: &str,
-    declared_submodules: &[SubmoduleSpec],
-    rules: &mut Vec<SiblingIsolationRule>,
-) {
-    for sub in declared_submodules {
-        let child_prefix = format!("{parent_prefix}::{}", sub.name);
-        let forbidden_siblings: Vec<String> = declared_submodules
-            .iter()
-            .filter(|other| {
-                other.name != sub.name && !sub.allows_sibling_dependency(other.name.as_str())
-            })
-            .map(|other| format!("{parent_prefix}::{}", other.name))
-            .collect();
-        if !forbidden_siblings.is_empty() {
-            rules.push(SiblingIsolationRule {
-                component_name: component_name.to_owned(),
-                subject_prefix: child_prefix.clone(),
-                forbidden_siblings,
-            });
-        }
-        if !sub.submodules.is_empty() {
-            append_declared_submodule_isolation_rules(
-                component_name,
-                &child_prefix,
-                &sub.submodules,
-                rules,
-            );
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "internal helper threading source/target component metadata and glob flag"
-)]
-fn check_rust_cross_component_edge(
-    from_component: &str,
-    target_component: &str,
-    target_root_module: &str,
-    canonical_path: &str,
-    is_glob: bool,
-    span: SourceSpan,
-    spec: &ArchitectureSpec,
-    findings: &mut FileArchitectureFindings,
-) {
-    if !spec.allows_dependency(from_component, target_component) {
-        findings
-            .undeclared_component_dependencies
-            .push(UndeclaredComponentDependencyFinding {
-                span,
-                component: from_component.to_owned(),
-                dependency: target_component.to_owned(),
-            });
-    } else if let Some(target_spec) = spec.component_spec(target_component)
-        && let Some(ref exports) = target_spec.public_exports
-        && !is_rust_path_allowed_by_exports(target_root_module, canonical_path, is_glob, exports)
-    {
-        let symbol_name = if is_glob || canonical_path == target_root_module {
-            None
-        } else {
-            Some(
-                canonical_path
-                    .rsplit(RUST_MODULE_SEPARATOR)
-                    .next()
-                    .unwrap_or(canonical_path)
-                    .to_owned(),
-            )
-        };
-        findings
-            .private_component_imports
-            .push(PrivateComponentImportFinding {
-                span,
-                component: from_component.to_owned(),
-                name: symbol_name,
-                module: target_root_module.to_owned(),
-                dependency: target_component.to_owned(),
-            });
-    }
-}
-
-fn is_rust_path_allowed_by_exports(
-    target_root: &str,
-    canonical_path: &str,
-    is_glob: bool,
-    exports: &[ExportPattern],
-) -> bool {
-    if canonical_path == target_root {
-        return exports.iter().any(|export| export.matches("*"));
-    }
-    let Some(relative_symbol) = canonical_path
-        .strip_prefix(target_root)
-        .and_then(|rest| rest.strip_prefix(RUST_MODULE_SEPARATOR))
-    else {
-        return false;
-    };
-    if is_glob {
-        let glob_probe = format!("{relative_symbol}::*");
-        return exports.iter().any(|export| export.matches(&glob_probe));
-    }
-    exports.iter().any(|export| export.matches(relative_symbol))
 }
 
 fn check_rust_invalid_component_markers(
@@ -519,9 +407,7 @@ fn check_rust_file_coverage_and_routers(
     let component_roots = spec.component_roots();
     if let Some(inherited) = resolve_inherited_component_with_root(module_path, component_roots) {
         if let Some(comp_spec) = spec.component_spec(inherited.component) {
-            let rel_subpath = module_path
-                .strip_prefix(inherited.root_module)
-                .and_then(|rest| rest.strip_prefix(RUST_MODULE_SEPARATOR));
+            let rel_subpath = rust_subpath_under_root(module_path, inherited.root_module);
             let declared_submodules =
                 comp_spec.declared_submodules_at(rel_subpath, RUST_MODULE_SEPARATOR);
             if !declared_submodules.is_empty() {
@@ -641,6 +527,91 @@ fn step_reexport_within_root(
         let rest = tail?;
         module_prefix = format!("{module_prefix}::{symbol}");
         remaining = rest;
+    }
+}
+
+fn check_rust_relative_path_boundary(
+    shallowest_ancestor: Option<&str>,
+    canonical_path: &str,
+    inherited: &InheritedComponent<'_, String>,
+    span: SourceSpan,
+    out: &mut Vec<CrossComponentRelativePathFinding>,
+) {
+    let stays_in_component = shallowest_ancestor.is_some_and(|ancestor| {
+        is_in_rust_module_subtree(ancestor, inherited.root_module)
+            && is_in_rust_module_subtree(canonical_path, inherited.root_module)
+    });
+    if !stays_in_component {
+        out.push(CrossComponentRelativePathFinding {
+            span,
+            dependency: canonical_path.to_owned(),
+            component: inherited.component.clone(),
+        });
+    }
+}
+
+fn check_rust_cross_component_target(
+    from_component: &InheritedComponent<'_, String>,
+    canonical_path: &str,
+    is_glob: bool,
+    span: SourceSpan,
+    spec: &ArchitectureSpec,
+    findings: &mut FileArchitectureFindings,
+) {
+    let Some(target_component) =
+        resolve_inherited_component_with_root(canonical_path, spec.component_roots())
+    else {
+        return;
+    };
+    if from_component.component == target_component.component {
+        return;
+    }
+    spec.check_cross_component_reference(
+        &CrossComponentReference {
+            from_component: from_component.component,
+            target_component: target_component.component,
+            target_root: target_component.root_module,
+            target_path: canonical_path,
+            is_wildcard: is_glob,
+            separator: RUST_MODULE_SEPARATOR,
+            span,
+        },
+        findings,
+    );
+}
+
+fn check_rust_declared_submodule_dag(
+    module_path: &str,
+    sibling_target_path: &str,
+    inherited: &InheritedComponent<'_, String>,
+    span: SourceSpan,
+    spec: &ArchitectureSpec,
+    out: &mut Vec<SiblingModuleDependencyFinding>,
+) {
+    let Some(comp_spec) = spec.component_spec(inherited.component) else {
+        return;
+    };
+    if comp_spec.submodules.is_empty() {
+        return;
+    }
+    let (Some(source_rel), Some(target_rel)) = (
+        rust_subpath_under_root(module_path, inherited.root_module),
+        rust_subpath_under_root(sibling_target_path, inherited.root_module),
+    ) else {
+        return;
+    };
+    if let Some(forbidden_sibling) = comp_spec.submodule_dag_violation(
+        source_rel,
+        target_rel,
+        inherited.root_module,
+        RUST_MODULE_SEPARATOR,
+    ) {
+        out.push(SiblingModuleDependencyFinding {
+            span,
+            module: module_path.to_owned(),
+            dependency: forbidden_sibling,
+            component: inherited.component.clone(),
+        });
     }
 }
 

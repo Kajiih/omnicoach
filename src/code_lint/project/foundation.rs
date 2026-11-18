@@ -6,14 +6,14 @@ mod config;
 mod facts;
 mod source;
 
+pub(in crate::code_lint::project) use self::architecture::{
+    CrossComponentReference, ROOT_MODULE_TAG, build_architecture_spec, deduplicate_findings,
+};
 pub(in crate::code_lint) use self::architecture::{
     CrossComponentRelativePathFinding, FileArchitectureFindings,
     InvalidArchitectureComponentFinding, InvalidArchitectureComponentKind,
-    PrivateComponentImportFinding, ReexportedPublicItemFinding, SiblingModuleDependencyFinding,
+    ReexportedPublicItemFinding, SiblingModuleDependencyFinding,
     UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding,
-};
-pub(in crate::code_lint::project) use self::architecture::{
-    ExportPattern, ROOT_MODULE_TAG, build_architecture_spec, deduplicate_findings,
 };
 pub(in crate::code_lint::project) use self::config::{
     ArchitectureComponentConfig, ArchitectureSubmoduleConfig, ProjectTomlError, WorkspaceAnchor,

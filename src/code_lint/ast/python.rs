@@ -65,11 +65,9 @@ pub(in crate::code_lint) use self::format_strings::{
     PythonFormatPlaceholder, PythonFormatString, PythonFormatStyle, collect_format_strings,
     extract_valid_field_root, named_format_field_roots,
 };
+pub(in crate::code_lint) use self::functions::PythonParameterKind;
 pub use self::functions::{
     PythonFunctionSignature, PythonParameterInfo, extract_function_signatures,
-};
-pub(in crate::code_lint) use self::functions::{
-    PythonParameterKind, find_nested_classes, find_nested_functions,
 };
 pub(super) use self::imports::collect_import_map;
 pub use self::imports::{PythonImportReference, collect_python_import_references};
@@ -91,4 +89,5 @@ pub(super) use self::test_analysis::{
     collect_test_function_assertion_counts, collect_test_logic_constructs,
     collect_test_setup_scopes, collect_test_to_test_calls,
 };
+pub(in crate::code_lint) use self::tree::{find_nested_classes, find_nested_functions};
 pub(super) use self::trivia::collect_comment_spans;

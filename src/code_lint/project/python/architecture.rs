@@ -9,10 +9,9 @@ use crate::code_lint::ast::python::{
     PythonImportReference, collect_python_import_references, summarize_python_file,
 };
 use crate::code_lint::project::foundation::{
-    ArchitectureSpec, ComponentSpec, CrossComponentRelativePathFinding, ExportPattern,
-    FileArchitectureFindings, FileSource, PrivateComponentImportFinding, ROOT_MODULE_TAG,
-    SiblingModuleDependencyFinding, UndeclaredComponentDependencyFinding,
-    UnmappedArchitectureModuleFinding, deduplicate_findings,
+    ArchitectureSpec, ComponentSpec, CrossComponentReference, CrossComponentRelativePathFinding,
+    FileArchitectureFindings, FileSource, ROOT_MODULE_TAG, SiblingModuleDependencyFinding,
+    UndeclaredComponentDependencyFinding, UnmappedArchitectureModuleFinding, deduplicate_findings,
 };
 use crate::diagnostic::SourceSpan;
 use std::path::Path;
@@ -50,8 +49,7 @@ pub(super) fn evaluate_python_file_architecture(
         let is_undeclared_submodule = enclosing.as_ref().is_some_and(|matched| {
             spec.component_spec(matched.component_name)
                 .is_some_and(|comp_spec| {
-                    let root_base = python_root_base(matched.matched_root);
-                    let rel_subpath = relative_python_subpath(&module_path, root_base);
+                    let rel_subpath = python_subpath_under_root(&module_path, matched.matched_root);
                     !comp_spec.is_declared_submodule_path(rel_subpath, PYTHON_MODULE_SEPARATOR)
                 })
         });
@@ -171,6 +169,16 @@ pub(super) fn routes_to_python_component(module_path: &str, spec: &ArchitectureS
         })
 }
 
+/// Returns the dotted subpath of `module_path` relative to `matched_root`'s base package (`None`
+/// when `module_path` is the root itself or `"<root>"`).
+#[must_use]
+pub(super) fn python_subpath_under_root<'a>(
+    module_path: &'a str,
+    matched_root: &str,
+) -> Option<&'a str> {
+    relative_python_subpath(module_path, python_root_base(matched_root))
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedPythonImports {
     targets: Vec<ResolvedPythonImport>,
@@ -256,44 +264,19 @@ fn check_python_first_party_edge(
         return;
     }
 
-    if !spec.allows_dependency(from_match.component_name, target_match.component_name) {
-        findings
-            .undeclared_component_dependencies
-            .push(UndeclaredComponentDependencyFinding {
-                span,
-                component: from_match.component_name.to_owned(),
-                dependency: target_match.component_name.to_owned(),
-            });
-    } else if let Some(target_spec) = spec.component_spec(target_match.component_name)
-        && let Some(ref exports) = target_spec.public_exports
-    {
-        let concrete_root = concrete_python_target_root(target_match.matched_root, resolved);
-        if !is_python_import_allowed_by_exports(&concrete_root, resolved, exports) {
-            let symbol_name = if resolved.imported_member.as_deref() == Some("*")
-                || (resolved.module_path == concrete_root && resolved.imported_member.is_none())
-            {
-                None
-            } else {
-                Some(resolved.imported_member.clone().unwrap_or_else(|| {
-                    resolved
-                        .full_target_path
-                        .rsplit(PYTHON_MODULE_SEPARATOR)
-                        .next()
-                        .unwrap_or(&resolved.full_target_path)
-                        .to_owned()
-                }))
-            };
-            findings
-                .private_component_imports
-                .push(PrivateComponentImportFinding {
-                    span,
-                    component: from_match.component_name.to_owned(),
-                    name: symbol_name,
-                    module: concrete_root,
-                    dependency: target_match.component_name.to_owned(),
-                });
-        }
-    }
+    let concrete_root = concrete_python_target_root(target_match.matched_root, resolved);
+    spec.check_cross_component_reference(
+        &CrossComponentReference {
+            from_component: from_match.component_name,
+            target_component: target_match.component_name,
+            target_root: &concrete_root,
+            target_path: &resolved.full_target_path,
+            is_wildcard: resolved.imported_member.as_deref() == Some("*"),
+            separator: PYTHON_MODULE_SEPARATOR,
+            span,
+        },
+        findings,
+    );
 }
 
 fn python_sibling_violation(
@@ -441,39 +424,6 @@ fn direct_child_in_python_root(module_path: &str, root: &str) -> Option<String> 
         .strip_prefix(PYTHON_MODULE_SEPARATOR)?;
     let child = rest.split(PYTHON_MODULE_SEPARATOR).next()?;
     (!child.is_empty()).then(|| format!("{base}.{child}"))
-}
-
-fn is_python_import_allowed_by_exports(
-    target_root: &str,
-    resolved: &ResolvedPythonImport,
-    exports: &[ExportPattern],
-) -> bool {
-    if resolved.module_path == target_root {
-        return match resolved.imported_member.as_deref() {
-            None | Some("*") => exports
-                .iter()
-                .any(|export_pattern| export_pattern.matches("*")),
-            Some(member) => exports
-                .iter()
-                .any(|export_pattern| export_pattern.matches(member)),
-        };
-    }
-    let Some(subpath) = resolved
-        .full_target_path
-        .strip_prefix(target_root)
-        .and_then(|rest| rest.strip_prefix(PYTHON_MODULE_SEPARATOR))
-    else {
-        return false;
-    };
-    if resolved.imported_member.as_deref() == Some("*") {
-        let star_probe = format!("{subpath}.*");
-        return exports
-            .iter()
-            .any(|export_pattern| export_pattern.matches(&star_probe));
-    }
-    exports
-        .iter()
-        .any(|export_pattern| export_pattern.matches(subpath))
 }
 
 fn resolve_imported_members_on_base(

@@ -246,6 +246,14 @@ pub(super) fn is_in_rust_module_subtree(path: &str, module_prefix: &str) -> bool
             .is_some_and(|rest| rest.starts_with(RUST_MODULE_SEP))
 }
 
+/// Returns the `::`-delimited subpath of `path` strictly beneath `root_module` (`None` when `path`
+/// equals `root_module` or lies outside it).
+#[must_use]
+pub(super) fn rust_subpath_under_root<'a>(path: &'a str, root_module: &str) -> Option<&'a str> {
+    path.strip_prefix(root_module)
+        .and_then(|rest| rest.strip_prefix(RUST_MODULE_SEP))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
