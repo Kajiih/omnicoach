@@ -11,16 +11,15 @@ architecture_component!(RuleSelection);
 
 mod taxonomy;
 
-use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use strum::IntoEnumIterator as _;
+use tagonomy::{Catalog, ItemId, LabelError, Reason, Selection, Selector, Verdict};
 
-pub use self::taxonomy::{AnalyzedInput, Derived, Facet, RegisteredRule, Tag, registered_topics};
-use self::taxonomy::{REGISTERED_RULES, Selector};
+use self::taxonomy::CATALOG;
+pub use self::taxonomy::{AnalyzedInput, RegisteredRule, registered_topics};
 use crate::code_lint::project::{
     ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig,
     compile_glob, lexical_normalize, resolve_against_cwd,
@@ -157,7 +156,7 @@ pub struct UnknownLabel {
 /// Every registered rule, in registry order.
 #[must_use]
 pub fn registered_rules() -> &'static [RegisteredRule] {
-    &REGISTERED_RULES
+    CATALOG.values()
 }
 
 /// The rules that `select = ["<label>"]` would select: a topic includes its subtopics and
@@ -167,14 +166,15 @@ pub fn registered_rules() -> &'static [RegisteredRule] {
 ///
 /// Returns [`UnknownLabel`] if `label` is not a rule, a tag or a synonym.
 pub fn rules_tagged(label: &str) -> Result<Vec<&'static RegisteredRule>, UnknownLabel> {
-    let selector = taxonomy::lookup(label).ok_or_else(|| UnknownLabel {
+    let selector = CATALOG.resolve(label).map_err(|_| UnknownLabel {
         kind: "tag",
         label: label.to_owned(),
         suggestion: taxonomy::closest_label(label),
     })?;
-    Ok(REGISTERED_RULES
-        .iter()
-        .filter(|rule| rule.matches(selector))
+    Ok(CATALOG
+        .items()
+        .filter(|&item| CATALOG.selects(selector, item))
+        .map(|item| &CATALOG[item])
         .collect())
 }
 
@@ -184,9 +184,9 @@ pub fn rules_tagged(label: &str) -> Result<Vec<&'static RegisteredRule>, Unknown
 ///
 /// Returns [`UnknownLabel`] if no rule has this name.
 pub fn find_rule(name: &str) -> Result<&'static RegisteredRule, UnknownLabel> {
-    REGISTERED_RULES
-        .iter()
-        .find(|rule| rule.name.0 == name)
+    CATALOG
+        .item(name)
+        .map(|item| &CATALOG[item])
         .ok_or_else(|| UnknownLabel {
             kind: "rule",
             label: name.to_owned(),
@@ -332,7 +332,9 @@ pub fn rule_status_with_overrides(
     rule: &RegisteredRule,
 ) -> Result<RuleStatus, ConfigError> {
     let raw: RawConfig = toml::from_str(config_toml)?;
-    Ok(apply_overrides(parse_plan(raw.select, raw.ignore)?, overrides)?.decide(rule))
+    let file = parse_selection(raw.select.as_deref(), &raw.ignore)?;
+    let selection = apply_overrides(file.selection, overrides)?;
+    Ok(status(&CATALOG, &selection, rule.item_id()))
 }
 
 /// Parses a TOML config and resolves its selectors into rule names.
@@ -357,19 +359,23 @@ pub fn parse_config_with_overrides(
     if let Some(ref architecture) = raw.architecture {
         architecture.validate()?;
     }
-    let file = parse_plan(raw.select, raw.ignore)?;
-    let warnings = ineffective_selector_warnings(&file);
-    let plan = apply_overrides(file, overrides)?;
-    let disabled_rules = rule_names(|rule| !plan.decide(rule).enabled());
+    let file = parse_selection(raw.select.as_deref(), &raw.ignore)?;
+    let warnings = ineffective_selector_warnings(file.duplicates, &file.selection);
+    let selection = apply_overrides(file.selection, overrides)?;
+    let disabled_rules = rule_names(|item| !selection.matches(item));
     let per_file_ignores = raw
         .per_file_ignores
         .into_iter()
         .map(|(pattern, labels)| {
-            let selectors = resolve_all(labels, &Location::PerFile(pattern.clone()))?;
+            let selectors = resolve_all(&labels, &Location::PerFile(pattern.clone()))?;
             let matcher = compile_glob(&pattern)
                 .map_err(|source| ConfigError::Glob { pattern, source })?
                 .compile_matcher();
-            let rules = rule_names(|rule| selectors.iter().any(|&selector| rule.matches(selector)));
+            let rules = rule_names(|item| {
+                selectors
+                    .iter()
+                    .any(|&selector| CATALOG.selects(selector, item))
+            });
             Ok((matcher, rules))
         })
         .collect::<Result<_, ConfigError>>()?;
@@ -377,9 +383,9 @@ pub fn parse_config_with_overrides(
         .rules
         .iter()
         .map(|(name, value)| {
-            let rule = REGISTERED_RULES
-                .iter()
-                .find(|rule| rule.name.0 == name)
+            let rule = CATALOG
+                .item(name)
+                .map(|item| &CATALOG[item])
                 .ok_or_else(|| ConfigError::UnknownRule {
                     name: name.clone(),
                     suggestion: taxonomy::closest_rule_name(name),
@@ -405,49 +411,40 @@ pub fn parse_config_with_overrides(
 /// ignores aside). Its `Display` is the one-line explanation shown by `--explain`.
 #[derive(Debug)]
 pub struct RuleStatus {
-    selected_by_default: bool,
-    deciding: Option<Decision>,
+    enabled: bool,
+    deciding: Option<Deciding>,
 }
 
 impl RuleStatus {
     /// Whether the rule is on.
     #[must_use]
-    pub fn enabled(&self) -> bool {
-        self.deciding
-            .as_ref()
-            .map_or(self.selected_by_default, |decision| {
-                decision.verdict == Verdict::Select
-            })
+    pub const fn enabled(&self) -> bool {
+        self.enabled
     }
 }
 
 impl fmt::Display for RuleStatus {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = if self.enabled() {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        let Some(decision) = &self.deciding else {
-            let reason = if self.selected_by_default {
+        let state = if self.enabled { "enabled" } else { "disabled" };
+        let Some(deciding) = &self.deciding else {
+            let reason = if self.enabled {
                 "default"
             } else {
                 "not in `select`"
             };
             return write!(formatter, "{state} ({reason})");
         };
-        let list = match decision.verdict {
-            Verdict::Select => "select",
-            Verdict::Ignore => "ignore",
+        let list = match deciding.verdict {
+            Verdict::Include => "select",
+            Verdict::Exclude => "ignore",
         };
         write!(
             formatter,
             "{state} by `{list} = [\"{}\"]`",
-            decision.selector.label()
+            deciding.selector
         )?;
-        if matches!(decision.selector, Selector::Tag(_)) && decision.branch.len() > 1 {
-            let path: Vec<_> = decision.branch.iter().map(|&tag| tag.label()).collect();
-            write!(formatter, " (via {})", path.join(" > "))?;
+        if deciding.branch.len() > 1 {
+            write!(formatter, " (via {})", deciding.branch.join(" > "))?;
         }
         Ok(())
     }
@@ -613,198 +610,179 @@ struct RawConfig {
     architecture: Option<ArchitectureConfig>,
 }
 
-fn rule_names(mut predicate: impl FnMut(&RegisteredRule) -> bool) -> HashSet<RuleName> {
-    REGISTERED_RULES
-        .iter()
-        .filter(|rule| predicate(rule))
-        .map(|rule| rule.name)
+fn rule_names(mut predicate: impl FnMut(ItemId) -> bool) -> HashSet<RuleName> {
+    CATALOG
+        .items()
+        .filter(|&item| predicate(item))
+        .map(|item| RuleName(CATALOG.name(item)))
         .collect()
 }
 
-/// Validated `select` and `ignore` sets (`select: None` selects every rule by default).
-struct Plan {
-    select: Option<BTreeSet<Selector>>,
-    ignore: BTreeSet<Selector>,
-    duplicates: BTreeSet<Selector>,
+/// Whether `item` is on under `selection`, and why.
+fn status<T>(catalog: &Catalog<T>, selection: &Selection<'_, T>, item: ItemId) -> RuleStatus {
+    let decision = selection.decide(item);
+    let vocabulary = catalog.vocabulary();
+    let deciding = match decision.reason {
+        Reason::Default => None,
+        Reason::Item => Some(Deciding {
+            verdict: decision.verdict,
+            selector: catalog.name(item),
+            branch: Vec::new(),
+        }),
+        Reason::Tag { tag, source } => Some(Deciding {
+            verdict: decision.verdict,
+            selector: vocabulary.tag(tag).label,
+            branch: vocabulary
+                .chain_through(source, tag)
+                .into_iter()
+                .map(|id| vocabulary.tag(id).label)
+                .collect(),
+        }),
+    };
+    RuleStatus {
+        enabled: decision.verdict == Verdict::Include,
+        deciding,
+    }
 }
 
-impl Plan {
-    /// Selectors in `self` whose removal, with the others kept, changes no registered rule's
-    /// outcome.
-    fn ineffective(&self) -> Vec<Selector> {
-        let verdicts = OnceCell::new();
-        let selectors = self.select.iter().flatten().chain(&self.ignore).copied();
-        selectors
-            .filter(|&selector| {
-                self.duplicates.contains(&selector) || {
-                    let verdicts = verdicts.get_or_init(|| {
-                        REGISTERED_RULES
-                            .iter()
-                            .map(|rule| self.decide(rule).enabled())
-                            .collect::<Vec<_>>()
-                    });
-                    REGISTERED_RULES
-                        .iter()
-                        .zip(verdicts)
-                        .all(|(rule, &enabled)| {
-                            self.decide_skipping(rule, Some(selector)).enabled() == enabled
-                        })
-                }
-            })
-            .collect()
-    }
-
-    /// Model B: nearest selector per branch, then ignore wins across branches.
-    fn decide(&self, rule: &RegisteredRule) -> RuleStatus {
-        self.decide_skipping(rule, None)
-    }
-
-    fn decide_skipping(&self, rule: &RegisteredRule, skipped: Option<Selector>) -> RuleStatus {
-        let decisions = rule.branches().into_iter().filter_map(|branch| {
-            let (selector, verdict) = std::iter::once(Selector::Rule(rule.name))
-                .chain(branch.iter().rev().map(|&tag| Selector::Tag(tag)))
-                .filter(|&selector| Some(selector) != skipped)
-                .find_map(|selector| Some((selector, self.verdict(selector)?)))?;
-            Some(Decision {
-                verdict,
-                selector,
-                branch,
-            })
-        });
-        RuleStatus {
-            selected_by_default: self.select.is_none(),
-            // The first `ignore` decision if any, else the first `select` one.
-            deciding: decisions.min_by_key(|decision| decision.verdict == Verdict::Select),
-        }
-    }
-
-    fn verdict(&self, selector: Selector) -> Option<Verdict> {
-        if self.ignore.contains(&selector) {
-            Some(Verdict::Ignore)
-        } else if self.select.as_ref()?.contains(&selector) {
-            Some(Verdict::Select)
-        } else {
-            None
-        }
-    }
+/// The selector that decided a rule's status.
+#[derive(Debug)]
+struct Deciding {
+    /// What the selector asks for.
+    verdict: Verdict,
+    /// The selector's canonical label.
+    selector: &'static str,
+    /// The root-to-leaf path of the rule's tag the selector applies through; empty for a
+    /// rule name.
+    branch: Vec<&'static str>,
 }
 
 /// One warning per entry of the config file's `select` and `ignore` whose removal changes
 /// no rule's outcome. Command-line overrides are left out: they are not in the file.
-fn ineffective_selector_warnings(file: &Plan) -> Vec<String> {
-    file.ineffective()
+fn ineffective_selector_warnings(
+    mut duplicates: BTreeMap<Selector, Verdict>,
+    selection: &Selection<'_, RegisteredRule>,
+) -> Vec<String> {
+    duplicates.extend(selection.ineffective());
+    duplicates
         .into_iter()
-        .map(|selector| {
-            let location = if file.ignore.contains(&selector) {
-                Location::Ignore
-            } else {
-                Location::Select
+        .map(|(selector, verdict)| {
+            let location = match verdict {
+                Verdict::Include => Location::Select,
+                Verdict::Exclude => Location::Ignore,
             };
             format!(
                 "`{}` in {location} changes no rule's outcome; remove it",
-                selector.label()
+                taxonomy::selector_label(&CATALOG, selector)
             )
         })
         .collect()
 }
 
-/// The file's plan with the command-line `--select` and `--ignore` applied.
-fn apply_overrides(mut plan: Plan, overrides: &ConfigOverrides) -> Result<Plan, ConfigError> {
-    let cli = parse_plan(overrides.select.clone(), overrides.ignore.clone())?;
-    if cli.select.is_some() {
-        plan = cli;
-    } else if !cli.ignore.is_empty() {
-        if let Some(selected) = &mut plan.select {
-            for selector in &cli.ignore {
-                selected.remove(selector);
-            }
-        }
-        plan.ignore.extend(cli.ignore);
+/// Resolves the active [`Selection`] after applying command-line `--select` and `--ignore`.
+fn apply_overrides(
+    file: Selection<'static, RegisteredRule>,
+    overrides: &ConfigOverrides,
+) -> Result<Selection<'static, RegisteredRule>, ConfigError> {
+    if overrides.select.is_none() && overrides.ignore.is_empty() {
+        return Ok(file);
     }
-    Ok(plan)
+    if overrides.select.is_some() {
+        return parse_selection(overrides.select.as_deref(), &overrides.ignore)
+            .map(|parsed| parsed.selection);
+    }
+    let cli_ignores = resolve_all(&overrides.ignore, &Location::Ignore)?
+        .into_iter()
+        .map(|selector| (selector, Verdict::Exclude));
+    file.override_with(cli_ignores)
+        .map_err(|conflicts| first_conflict(&conflicts))
 }
 
-fn parse_plan(select: Option<Vec<String>>, ignore: Vec<String>) -> Result<Plan, ConfigError> {
-    let mut duplicates = BTreeSet::new();
-    let select = select
-        .map(|labels| resolve_set(labels, &Location::Select, &mut duplicates))
-        .transpose()?;
-    let ignore = resolve_set(ignore, &Location::Ignore, &mut duplicates)?;
-    if let Some(&both) = select
-        .iter()
-        .flatten()
-        .find(|&selector| ignore.contains(selector))
-    {
-        return Err(ConfigError::Conflict(both.label()));
+/// A parsed file or CLI selection alongside any duplicate entries within `select` or `ignore`.
+struct ParsedSelection {
+    selection: Selection<'static, RegisteredRule>,
+    duplicates: BTreeMap<Selector, Verdict>,
+}
+
+fn parse_selection(
+    select: Option<&[String]>,
+    ignore: &[String],
+) -> Result<ParsedSelection, ConfigError> {
+    let mut directives = Vec::new();
+    let mut duplicates = BTreeMap::new();
+    if let Some(labels) = select {
+        resolve_directives(
+            labels,
+            &Location::Select,
+            Verdict::Include,
+            &mut directives,
+            &mut duplicates,
+        )?;
     }
-    Ok(Plan {
-        select,
+    resolve_directives(
         ignore,
+        &Location::Ignore,
+        Verdict::Exclude,
+        &mut directives,
+        &mut duplicates,
+    )?;
+    let default = if select.is_some() {
+        Verdict::Exclude
+    } else {
+        Verdict::Include
+    };
+    let selection = Selection::new(&CATALOG, default, directives)
+        .map_err(|conflicts| first_conflict(&conflicts))?;
+    Ok(ParsedSelection {
+        selection,
         duplicates,
     })
 }
 
-fn resolve_set(
-    labels: Vec<String>,
-    location: &Location,
-    duplicates: &mut BTreeSet<Selector>,
-) -> Result<BTreeSet<Selector>, ConfigError> {
-    let mut unique = BTreeSet::new();
-    for label in labels {
-        let selector = resolve(label, location)?;
-        if !unique.insert(selector) {
-            duplicates.insert(selector);
-        }
-    }
-    Ok(unique)
+fn first_conflict(conflicts: &[tagonomy::Conflict]) -> ConfigError {
+    ConfigError::Conflict(taxonomy::selector_label(&CATALOG, conflicts[0].selector))
 }
 
-fn resolve_all(
-    labels: Vec<String>,
+fn resolve_directives(
+    labels: &[String],
     location: &Location,
-) -> Result<BTreeSet<Selector>, ConfigError> {
+    verdict: Verdict,
+    directives: &mut Vec<(Selector, Verdict)>,
+    duplicates: &mut BTreeMap<Selector, Verdict>,
+) -> Result<(), ConfigError> {
+    let mut seen = BTreeSet::new();
+    for label in labels {
+        let selector = resolve(label, location)?;
+        if seen.insert(selector) {
+            directives.push((selector, verdict));
+        } else {
+            duplicates.insert(selector, verdict);
+        }
+    }
+    Ok(())
+}
+
+fn resolve_all(labels: &[String], location: &Location) -> Result<BTreeSet<Selector>, ConfigError> {
     labels
-        .into_iter()
+        .iter()
         .map(|label| resolve(label, location))
         .collect()
 }
 
-fn resolve(label: String, location: &Location) -> Result<Selector, ConfigError> {
-    if let Some(selector) = taxonomy::lookup(&label) {
-        return Ok(selector);
-    }
-    let location = location.clone();
-    match Facet::iter().find(|facet| facet.matches_label(&label)) {
-        Some(facet) => Err(ConfigError::FacetLabel {
-            label,
-            location,
-            values: taxonomy::all_tags()
-                .filter(|tag| tag.facet() == facet)
-                .map(Tag::label)
-                .collect::<Vec<_>>()
-                .join(", "),
+fn resolve(label: &str, location: &Location) -> Result<Selector, ConfigError> {
+    match CATALOG.resolve(label) {
+        Ok(selector) => Ok(selector),
+        Err(LabelError::Group(group)) => Err(ConfigError::FacetLabel {
+            label: label.to_owned(),
+            location: location.clone(),
+            values: taxonomy::group_values(group),
         }),
-        None => Err(ConfigError::UnknownSelector {
-            suggestion: taxonomy::closest_label(&label),
-            label,
-            location,
+        Err(LabelError::Unknown) => Err(ConfigError::UnknownSelector {
+            suggestion: taxonomy::closest_label(label),
+            label: label.to_owned(),
+            location: location.clone(),
         }),
     }
-}
-
-/// The selector that decided a rule's status, on the branch where it was found.
-#[derive(Debug)]
-struct Decision {
-    verdict: Verdict,
-    selector: Selector,
-    branch: Vec<Tag>,
-}
-
-/// What a selector asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verdict {
-    Select,
-    Ignore,
 }
 
 #[cfg(test)]
@@ -814,7 +792,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::rule_declaration::{Classification, Consensus, ImpactedQuality, Topic, TopicDoc};
+    use crate::rule_declaration::{Consensus, ImpactedQuality, Topic, TopicDoc};
 
     const DOC: TopicDoc = TopicDoc {
         description: "Doc.",
@@ -824,14 +802,8 @@ mod tests {
     const CHILD: Topic = Topic::sub("child", &PARENT, DOC);
     const OTHER: Topic = Topic::root("other", DOC);
 
-    const RULE: Selector = Selector::Rule(RuleName("rule"));
-    const PARENT_TAG: Selector = Selector::Tag(Tag::Topic(PARENT));
-    const CHILD_TAG: Selector = Selector::Tag(Tag::Topic(CHILD));
-    const OTHER_TAG: Selector = Selector::Tag(Tag::Topic(OTHER));
-    const OPINIONATED: Selector = Selector::Tag(Tag::Consensus(Consensus::Opinionated));
-
     fn enabled(config: &Config, path: &str) -> BTreeSet<&'static str> {
-        REGISTERED_RULES
+        registered_rules()
             .iter()
             .map(|rule| rule.name)
             .filter(|&name| config.is_rule_enabled_for_path(name, Path::new(path)))
@@ -840,7 +812,7 @@ mod tests {
     }
 
     fn all_except(excluded: &[&str]) -> BTreeSet<&'static str> {
-        REGISTERED_RULES
+        registered_rules()
             .iter()
             .map(|rule| rule.name.0)
             .filter(|name| !excluded.contains(name))
@@ -849,63 +821,112 @@ mod tests {
 
     /// The status of `rule`, on the branches `parent > child`, `other` and `opinionated`.
     #[rstest]
-    #[case::default_on_without_select(None, &[], "enabled (default)")]
-    #[case::default_off_with_select(Some(vec![]), &[], "disabled (not in `select`)")]
-    #[case::ignored_without_select(None, &[OTHER_TAG], "disabled by `ignore = [\"other\"]`")]
+    #[case::default_on_without_select(Verdict::Include, &[], &[], "enabled (default)")]
+    #[case::default_off_with_select(Verdict::Exclude, &[], &[], "disabled (not in `select`)")]
+    #[case::ignored_without_select(
+        Verdict::Include,
+        &[],
+        &["other"],
+        "disabled by `ignore = [\"other\"]`"
+    )]
     #[case::ancestor_selected(
-        Some(vec![PARENT_TAG]),
+        Verdict::Exclude,
+        &["parent"],
         &[],
         "enabled by `select = [\"parent\"]` (via parent > child)"
     )]
     #[case::nearest_select_on_a_branch_wins(
-        Some(vec![CHILD_TAG]),
-        &[PARENT_TAG],
+        Verdict::Exclude,
+        &["child"],
+        &["parent"],
         "enabled by `select = [\"child\"]` (via parent > child)"
     )]
     #[case::nearest_ignore_on_a_branch_wins(
-        Some(vec![PARENT_TAG]),
-        &[CHILD_TAG],
+        Verdict::Exclude,
+        &["parent"],
+        &["child"],
         "disabled by `ignore = [\"child\"]` (via parent > child)"
     )]
     #[case::ignore_wins_across_topics(
-        Some(vec![CHILD_TAG]),
-        &[OTHER_TAG],
+        Verdict::Exclude,
+        &["child"],
+        &["other"],
         "disabled by `ignore = [\"other\"]`"
     )]
     #[case::ignore_wins_across_facets(
-        Some(vec![OPINIONATED]),
-        &[PARENT_TAG],
+        Verdict::Exclude,
+        &["opinionated"],
+        &["parent"],
         "disabled by `ignore = [\"parent\"]` (via parent > child)"
     )]
     #[case::selected_rule_name_beats_tags(
-        Some(vec![RULE]),
-        &[PARENT_TAG, OTHER_TAG, OPINIONATED],
+        Verdict::Exclude,
+        &["rule"],
+        &["parent", "other", "opinionated"],
         "enabled by `select = [\"rule\"]`"
     )]
     #[case::ignored_rule_name_beats_tags(
-        Some(vec![PARENT_TAG, OTHER_TAG, OPINIONATED]),
-        &[RULE],
+        Verdict::Exclude,
+        &["parent", "other", "opinionated"],
+        &["rule"],
         "disabled by `ignore = [\"rule\"]`"
     )]
     fn the_nearest_selector_decides_and_ignore_wins_across_branches(
-        #[case] select: Option<Vec<Selector>>,
-        #[case] ignore: &[Selector],
+        #[case] default: Verdict,
+        #[case] select: &[&str],
+        #[case] ignore: &[&str],
         #[case] expected: &str,
     ) {
-        let rule = RegisteredRule::synthetic(
-            "rule",
-            Classification {
-                topics: &[CHILD, OTHER],
-                consensus: Consensus::Opinionated,
-                impacted_quality: ImpactedQuality::Maintainability,
-            },
-        );
-        let plan = Plan {
-            select: select.map(|selectors| selectors.into_iter().collect()),
-            ignore: ignore.iter().copied().collect(),
-            duplicates: BTreeSet::new(),
+        let tags = [
+            CHILD.tag(),
+            OTHER.tag(),
+            Consensus::Opinionated.tag(),
+            ImpactedQuality::Maintainability.tag(),
+        ];
+        let vocabulary = tagonomy::Vocabulary::new(tags).unwrap();
+        let catalog = Catalog::new(vocabulary, [tagonomy::Item::named("rule", tags)]).unwrap();
+        let directives = select
+            .iter()
+            .map(|label| (catalog.resolve(label).unwrap(), Verdict::Include))
+            .chain(
+                ignore
+                    .iter()
+                    .map(|label| (catalog.resolve(label).unwrap(), Verdict::Exclude)),
+            );
+        let selection = Selection::new(&catalog, default, directives).unwrap();
+        let rule_status = status(&catalog, &selection, catalog.item("rule").unwrap());
+        assert_eq!(rule_status.to_string(), expected);
+    }
+
+    #[test]
+    fn status_routes_witness_branch_through_the_deciding_tag_on_a_polyhierarchy() {
+        const GROUP: tagonomy::TagGroup = tagonomy::TagGroup {
+            name: "subject",
+            cardinality: tagonomy::Cardinality::AtLeastOne,
         };
-        assert_eq!(plan.decide(&rule).to_string(), expected);
+        const FIRST_ROOT: tagonomy::Tag = tagonomy::Tag::new(&GROUP, "first-root", "First root.");
+        const SECOND_ROOT: tagonomy::Tag =
+            tagonomy::Tag::new(&GROUP, "second-root", "Second root.");
+        const SECOND_BRANCH: tagonomy::Tag =
+            tagonomy::Tag::new(&GROUP, "second-branch", "Second branch.").implies(&[SECOND_ROOT]);
+        const LEAF: tagonomy::Tag =
+            tagonomy::Tag::new(&GROUP, "leaf", "Leaf.").implies(&[FIRST_ROOT, SECOND_BRANCH]);
+
+        let vocabulary =
+            tagonomy::Vocabulary::new([FIRST_ROOT, SECOND_ROOT, SECOND_BRANCH, LEAF]).unwrap();
+        let catalog = Catalog::new(vocabulary, [tagonomy::Item::named("rule", [LEAF])]).unwrap();
+        let selection = Selection::new(
+            &catalog,
+            Verdict::Exclude,
+            [(catalog.resolve("second-branch").unwrap(), Verdict::Include)],
+        )
+        .unwrap();
+        let rule_status = status(&catalog, &selection, catalog.item("rule").unwrap());
+
+        assert_eq!(
+            rule_status.to_string(),
+            "enabled by `select = [\"second-branch\"]` (via second-root > second-branch > leaf)"
+        );
     }
 
     #[rstest]
@@ -920,6 +941,10 @@ mod tests {
     #[case::duplicate_in_select(
         r#"select = ["testing", "testing"]"#,
         &["`testing` in `select` changes no rule's outcome; remove it"]
+    )]
+    #[case::duplicate_and_ineffective_emits_single_warning(
+        r#"select = ["testing", "test-timing", "test-timing"]"#,
+        &["`test-timing` in `select` changes no rule's outcome; remove it"]
     )]
     #[case::synonym_duplicate_in_ignore(
         r#"ignore = ["jj", "jujutsu"]"#,
@@ -1145,6 +1170,34 @@ mod tests {
         vec!["sleep-in-tests".to_owned()],
         "sleep-in-tests",
         "disabled by `ignore = [\"sleep-in-tests\"]`"
+    )]
+    #[case::cli_ignore_without_select_keeps_other_toml_selected_rules(
+        "select = [\"sleep-in-tests\", \"nested-function\"]",
+        None,
+        vec!["sleep-in-tests".to_owned()],
+        "nested-function",
+        "enabled by `select = [\"nested-function\"]`"
+    )]
+    #[case::cli_ignore_without_select_keeps_unselected_rules_off(
+        "select = [\"sleep-in-tests\", \"nested-function\"]",
+        None,
+        vec!["sleep-in-tests".to_owned()],
+        "single-letter-name",
+        "disabled (not in `select`)"
+    )]
+    #[case::cli_ignore_without_select_preserves_toml_ignore(
+        "ignore = [\"sleep-in-tests\"]",
+        None,
+        vec!["nested-function".to_owned()],
+        "sleep-in-tests",
+        "disabled by `ignore = [\"sleep-in-tests\"]`"
+    )]
+    #[case::cli_ignore_tag_without_select_carves_exception_from_toml_select(
+        "select = [\"testing\"]",
+        None,
+        vec!["test-timing".to_owned()],
+        "sleep-in-tests",
+        "disabled by `ignore = [\"test-timing\"]` (via testing > test-timing)"
     )]
     fn cli_overrides_resolve_precedence(
         #[case] config_toml: &str,

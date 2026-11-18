@@ -3,6 +3,25 @@
 //! Pure, constant metadata with no queries. Rules and runners never branch on it.
 
 use strum::{EnumIter, EnumMessage, IntoStaticStr};
+use tagonomy::{Cardinality, Tag, TagGroup};
+
+/// The topic facet: a rule declares one or more topics.
+const TOPIC_GROUP: TagGroup = TagGroup {
+    name: "Topic",
+    cardinality: Cardinality::AtLeastOne,
+};
+
+/// The consensus facet: a rule declares exactly one value.
+const CONSENSUS_GROUP: TagGroup = TagGroup {
+    name: "Consensus",
+    cardinality: Cardinality::ExactlyOne,
+};
+
+/// The impacted-quality facet: a rule declares exactly one value.
+const IMPACTED_QUALITY_GROUP: TagGroup = TagGroup {
+    name: "Impacted quality",
+    cardinality: Cardinality::ExactlyOne,
+};
 
 /// The subject of a rule: the only multi-valued, hierarchical facet.
 ///
@@ -13,13 +32,10 @@ use strum::{EnumIter, EnumMessage, IntoStaticStr};
 /// all-and-some test under its parent, (3) has a `description` and an includes/excludes
 /// `scope_note`, (4) has a unique `kebab-case` label, and (5) has at least one rule
 /// (`docs/dev/tag_guide.md` §4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Topic {
-    label: &'static str,
-    parent: Option<&'static Self>,
-    description: &'static str,
-    scope_note: &'static str,
-    synonyms: &'static [&'static str],
+    /// The topic's tag; its `implies` holds the parent topic's tag, if any.
+    tag: Tag,
 }
 
 /// What a [`Topic`] covers: both fields are required, so a topic without a scope note does
@@ -33,69 +49,82 @@ pub struct TopicDoc {
 }
 
 impl Topic {
+    /// The topic facet group.
+    pub(crate) const GROUP: &'static TagGroup = &TOPIC_GROUP;
+
     /// A root topic with no broader parent topic.
     #[must_use]
     pub const fn root(label: &'static str, doc: TopicDoc) -> Self {
         Self {
-            label,
-            parent: None,
-            description: doc.description,
-            scope_note: doc.scope_note,
-            synonyms: &[],
+            tag: Tag::new(&TOPIC_GROUP, label, doc.description).scope_note(doc.scope_note),
         }
     }
 
     /// A subtopic under `parent`. Taking a `&'static Topic` keeps parents within the topic
-    /// facet (`E0308`), and `const` evaluation makes a parent cycle a compile error (`E0391`).
+    /// facet (`E0308`), and reading the parent's tag makes a parent cycle a `const`
+    /// evaluation cycle (`E0391`).
     #[must_use]
     pub const fn sub(label: &'static str, parent: &'static Self, doc: TopicDoc) -> Self {
         Self {
-            label,
-            parent: Some(parent),
-            description: doc.description,
-            scope_note: doc.scope_note,
-            synonyms: &[],
+            tag: Tag::new(&TOPIC_GROUP, label, doc.description)
+                .implies(core::slice::from_ref(&parent.tag))
+                .scope_note(doc.scope_note),
         }
+    }
+
+    /// Wraps a topic [`Tag`] read back from the registered rule catalog.
+    pub(crate) const fn from_tag(tag: Tag) -> Self {
+        Self { tag }
     }
 
     /// Sets alternative labels that resolve to this topic.
     #[must_use]
-    pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
-        self.synonyms = aliases;
-        self
+    pub const fn aliases(self, aliases: &'static [&'static str]) -> Self {
+        Self {
+            tag: self.tag.aliases(aliases),
+        }
+    }
+
+    /// The topic's underlying [`Tag`].
+    #[must_use]
+    pub(crate) const fn tag(self) -> Tag {
+        self.tag
     }
 
     /// The topic's canonical `kebab-case` label, e.g. `test-timing`.
     #[must_use]
     pub const fn label(self) -> &'static str {
-        self.label
+        self.tag.label
     }
 
     /// The broader topic, if any.
     #[must_use]
     pub const fn parent(self) -> Option<Self> {
-        match self.parent {
-            Some(parent) => Some(*parent),
-            None => None,
+        match self.tag.implies {
+            [parent, ..] => Some(Self { tag: *parent }),
+            [] => None,
         }
     }
 
     /// One-line description of the topic.
     #[must_use]
     pub const fn description(self) -> &'static str {
-        self.description
+        self.tag.description
     }
 
     /// What belongs under the topic and what does not.
     #[must_use]
     pub const fn scope_note(self) -> &'static str {
-        self.scope_note
+        match self.tag.scope_note {
+            Some(note) => note,
+            None => "",
+        }
     }
 
     /// Other labels that select the same topic. Only the canonical label is ever displayed.
     #[must_use]
     pub const fn synonyms(self) -> &'static [&'static str] {
-        self.synonyms
+        self.tag.aliases
     }
 }
 
@@ -363,6 +392,14 @@ pub enum Consensus {
     Unopinionated,
 }
 
+impl Consensus {
+    /// The value's [`Tag`].
+    #[must_use]
+    pub(crate) fn tag(self) -> Tag {
+        facet_tag(&CONSENSUS_GROUP, self)
+    }
+}
+
 /// Impacted quality facet (ISO/IEC 25010): what software quality suffers when violated.
 ///
 /// **Test:** does the flagged code or command have a *mechanism that leads to wrong
@@ -380,6 +417,14 @@ pub enum ImpactedQuality {
     Reliability,
     /// Keeps code readable and changeable.
     Maintainability,
+}
+
+impl ImpactedQuality {
+    /// The value's [`Tag`].
+    #[must_use]
+    pub(crate) fn tag(self) -> Tag {
+        facet_tag(&IMPACTED_QUALITY_GROUP, self)
+    }
 }
 
 /// A rule's declared classification: one mandatory field per declared facet.
@@ -494,4 +539,37 @@ pub struct Classification {
     pub consensus: Consensus,
     /// Impacted quality value.
     pub impacted_quality: ImpactedQuality,
+}
+
+/// Builds a [`Tag`] in `group` from a `strum`-annotated enum variant's serialized label and
+/// doc comment.
+fn facet_tag<V>(group: &'static TagGroup, value: V) -> Tag
+where
+    V: Into<&'static str> + EnumMessage,
+{
+    let description = value.get_documentation().unwrap_or_default();
+    Tag::new(group, value.into(), description)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_and_sub_topics_preserve_hierarchy_aliases_and_docs() {
+        assert_eq!(Topic::VCS.parent(), None);
+        assert_eq!(Topic::JJ.parent(), Some(Topic::VCS));
+        assert_eq!(Topic::JJ.label(), "jj");
+        assert_eq!(Topic::JJ.synonyms(), ["jujutsu"]);
+    }
+
+    #[test]
+    fn topic_and_facet_tags_expose_descriptions_and_scope_notes() {
+        let bare = Topic::from_tag(Tag::new(Topic::GROUP, "bare", "Bare."));
+
+        assert_eq!(Topic::JJ.description(), "Rules specific to Jujutsu.");
+        assert!(Topic::JJ.scope_note().contains("Jujutsu"));
+        assert_eq!(bare.scope_note(), "");
+        assert_ne!(Consensus::Opinionated.tag().description, "");
+    }
 }

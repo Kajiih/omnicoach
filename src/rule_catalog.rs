@@ -10,7 +10,7 @@ use crate::rule_declaration::{
     LanguageDefaults, OptionSpec,
 };
 use crate::rule_selection::{
-    ConfigError, ConfigOverrides, Facet, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
+    ConfigError, ConfigOverrides, RegisteredRule, RuleStatus, UnknownLabel, find_rule,
     load_rule_status, registered_rules, registered_topics, rule_status, rules_tagged,
 };
 use std::path::Path;
@@ -131,9 +131,7 @@ pub fn list_rules(tag: Option<&str>) -> Result<String, CatalogError> {
     let lines: Vec<String> = rules
         .iter()
         .map(|rule| {
-            let languages = Some(facet_tags(rule, Facet::Languages))
-                .filter(|languages| !languages.is_empty())
-                .unwrap_or_else(|| facet_tags(rule, Facet::Input));
+            let languages = rule.language_or_input_labels().join(", ");
             format!("- `{}` ({languages}): {}", rule.name, rule.doc.summary)
         })
         .collect();
@@ -285,12 +283,29 @@ fn render_rule(rule: &RegisteredRule, status_result: &Result<RuleStatus, ConfigE
     }
     lines.extend([String::new(), "## Tags".to_owned(), String::new()]);
     lines.extend(
-        Facet::iter()
-            .map(|facet| (facet, facet_tags(rule, facet)))
-            .filter(|(_, tags)| !tags.is_empty())
-            .map(|(facet, tags)| format!("- {}: {tags}", facet.label())),
+        rule.facet_chains()
+            .into_iter()
+            .map(|(facet, chains)| format!("- {facet}: {}", format_facet_chains(&chains))),
     );
     lines.join("\n") + "\n"
+}
+
+/// Formats root-to-leaf facet chains comma-separated, naming the leaf topic for implied
+/// ancestors (e.g. `testing [via test-timing]`).
+fn format_facet_chains(chains: &[Vec<&'static str>]) -> String {
+    let mut labels = Vec::new();
+    for chain in chains {
+        if let Some((&leaf, ancestors)) = chain.split_last() {
+            labels.push(leaf.to_owned());
+            labels.extend(
+                ancestors
+                    .iter()
+                    .rev()
+                    .map(|ancestor| format!("{ancestor} [via {leaf}]")),
+            );
+        }
+    }
+    labels.join(", ")
 }
 
 fn example_lines(examples: DeclaredExamples) -> Vec<String> {
@@ -442,28 +457,6 @@ fn list_default(defaults: &FilterListDefaults) -> String {
         .map(|&(language, items)| format!("{} removes {}", language.as_str(), quoted(items)));
     let parts: Vec<String> = std::iter::once(base).chain(added).chain(removed).collect();
     parts.join("; ")
-}
-
-/// The rule's tags in `facet`, comma-separated; an ancestor topic names the topic it comes
-/// from, e.g. `testing [via test-timing]`.
-fn facet_tags(rule: &RegisteredRule, facet: Facet) -> String {
-    let mut labels = Vec::new();
-    for branch in rule.branches() {
-        let Some((leaf, ancestors)) = branch.split_last() else {
-            continue;
-        };
-        if leaf.facet() != facet {
-            continue;
-        }
-        labels.push(leaf.label().to_owned());
-        labels.extend(
-            ancestors
-                .iter()
-                .rev()
-                .map(|ancestor| format!("{} [via {}]", ancestor.label(), leaf.label())),
-        );
-    }
-    labels.join(", ")
 }
 
 #[cfg(test)]

@@ -18,8 +18,9 @@
 //!   allowed only from a private direct child (`mod child; pub use self::child::Item;`), and a
 //!   `macro_rules!` macro declares its path with `pub(crate) use name;` next to its definition
 //!   (`#[macro_export]` only in `src/lib.rs`).
-//! - **Encapsulation**: only `diagnostic`, `code_lint::ast`, `code_lint::project`,
-//!   and `command_lint::command` use component-owned external crates (`owns_external`).
+//! - **Encapsulation**: only `diagnostic`, `rule_declaration`, `rule_selection`,
+//!   `code_lint::ast`, `code_lint::project`, and `command_lint::command` use component-owned
+//!   external crates (`owns_external`).
 
 architecture_component!(Architecture);
 
@@ -125,7 +126,7 @@ define_architecture! {
     /// VCS detection and the changed lines of a working copy (`diff`).
     Diff                => [],
     /// What every rule states about itself: name, template, languages, options, classification and doc (`rule_declaration`).
-    RuleDeclaration     => [Diagnostic] (modules: {
+    RuleDeclaration     => [Diagnostic] (owns_external: ["tagonomy"]) (modules: {
         documentation => [],
         options => [],
         taxonomy => [],
@@ -210,7 +211,8 @@ define_architecture! {
 
     // --- Rule Selection ---
     /// Taxonomy queries, config selector resolution and rule option validation (`rule_selection`).
-    RuleSelection       => [Diff, RuleDeclaration, CodeLintRules, CodeLintSuppression, CommandLintRules, Config],
+    // omni:ignore [repeated-literal] -- define_architecture! CST extractor requires literal external crate names
+    RuleSelection       => [Diff, RuleDeclaration, CodeLintRules, CodeLintSuppression, CommandLintRules, Config] (owns_external: ["tagonomy"]),
     /// Rule list and single-rule Markdown rendering for discovery commands (`rule_catalog`).
     RuleCatalog         => [RuleSelection, RuleDeclaration],
 
