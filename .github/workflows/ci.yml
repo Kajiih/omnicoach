@@ -63,6 +63,7 @@ jobs:
       - run: cargo clippy -p omnicoach-playground --target wasm32-unknown-unknown --locked -- -D warnings
       - run: cargo build --locked --release --target wasm32-unknown-unknown -p omnicoach-playground
       - run: node playground/tests/verify_wasm.mjs
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'
       - run: cargo doc --workspace --no-deps --locked
       - run: cargo doc --workspace --no-deps --document-private-items --locked
       - run: cargo publish --workspace --dry-run --locked

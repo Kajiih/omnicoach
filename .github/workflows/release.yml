@@ -273,4 +273,4 @@ jobs:
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --locked
+        run: python3 scripts/publish_crates.py -- --locked
