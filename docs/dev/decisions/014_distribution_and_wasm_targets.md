@@ -30,7 +30,7 @@ The measurements behind this decision are in [01b_macos_santa_probe.md](../wheel
 
 ## 4. Consequences
 
-- A release publishes the wheels and sdist to PyPI, the standalone archives and playground module to GitHub Releases, and the `omnicoach` crate to crates.io, all from one tag ([releasing.md](../releasing.md)); `[workspace.package]` keeps their versions identical.
+- A release publishes the wheels and sdist to PyPI, the standalone archives and playground module to GitHub Releases, and missing workspace crate versions (`tagonomy`, `omnicoach`) to crates.io via [publish_crates.py](../../../scripts/publish_crates.py), all from one tag ([releasing.md](../releasing.md)); `[workspace.package]` keeps `omnicoach` and `omnicoach-py` versions identical while `crates/tagonomy` versions independently.
 - Code reachable from `run_from_args` must not call `std::process::exit` (it would end the host Python process) or `println!` (it panics when stdout is closed).
 - Dependencies added to code compiled for the playground must not pull in `wasm-bindgen` on `wasm32-unknown-unknown`; gate them as `brush-parser` is gated.
 - The `omnicoach-py` crate has no Rust tests of its own; CI covers it by building and running the wheel on Linux, macOS, and Windows with [verify_wheel.py](../../../scripts/verify_wheel.py).

@@ -1,7 +1,7 @@
 # Tag Guide
 
 > [!NOTE]
-> Normative contributor guide for Omni's rule taxonomy and selection system. Design rationale: [ADR 007](decisions/007_rule_taxonomy_and_selection.md).
+> Normative contributor guide for Omni's rule taxonomy and selection system. Design rationale: [ADR 007](decisions/007_rule_taxonomy_and_selection.md) and [ADR 013](decisions/013_tagonomy_crate.md).
 
 This guide is for contributors who **classify a rule** or **add a tag**. Every structural rule below is enforced by the compiler or a test (§5). The guide explains the *why* and gives the yes/no questions that tests cannot answer.
 
@@ -25,7 +25,7 @@ Rules of the namespace:
 - **Facet labels are never selectors**. `select = ["consensus"]` or `select = ["impacted-quality"]` is an error that lists the values.
 - **Every label is globally unique**: rule names, topic labels, facet values and synonyms share one namespace. That is why values are bare (`opinionated`, not `consensus:opinionated`).
 - **Derived facets cannot be declared.** The rule has no field for them.
-- **Behaviour never depends on a tag**. The classification is constant data with no queries; the queries (`ancestors`, `path`, `matches`) live in `rule_selection`, and the architecture graph (`src/architecture.rs`) keeps rules and runners from depending on it.
+- **Behaviour never depends on a tag**. The classification is constant data with no queries; hierarchy and selection queries (`Topic::parent`, `RegisteredRule::facet_chains`, `Catalog::selects`, `Selection::decide`) live in `rule_selection` (backed by `tagonomy`), and the architecture graph (`src/architecture.rs`) keeps rules and runners from depending on it.
 
 ---
 
@@ -133,8 +133,8 @@ A topic is admitted when **all** of these hold. The number of rules it has is **
 ### 4.2 Structure
 
 - **A single-spot `const` declaration**: each topic is declared once as an associated `const` on `Topic`: `Topic::root("...", TopicDoc { description, scope_note })` or `Topic::sub("...", &Self::..., TopicDoc { description, scope_note })`, optionally followed by `.aliases(&[...])`.
-- **A tree**: one parent at most, enforced by `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent), read by callers through `ancestors()`, `path()`, and `Topic::parent()`.
-- **Compile-time acyclicity**: because topics are `const`s referencing `Option<&'static Topic>`, any cycle in `parent` links fails to compile with `E0391` (`cycle detected when const-evaluating`).
+- **A tree**: one parent at most, enforced by `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent), read by callers through `Topic::parent()` and `RegisteredRule::facet_chains`.
+- **Compile-time acyclicity**: because topics are `const`s wrapping `tagonomy::Tag` (`core::slice::from_ref(&parent.tag)`), any cycle in `parent` links fails to compile with `E0391` (`cycle detected when const-evaluating`).
 - **Topics only**: `Topic::sub` takes `&'static Topic`, so a parent from another facet fails to compile with `E0308`.
 
 ### 4.3 Synonyms
@@ -155,15 +155,15 @@ Compiler checks are pinned by `compile_fail` doctests on `Classification` in `sr
 | Guide rule | Caught by |
 |---|---|
 | §2: each single-valued facet has exactly one value | Compiler (`E0063` missing / `E0062` duplicate field) |
-| §2.1: at least one topic | Test `every_rule_has_a_topic` |
-| §2.1: most specific topics only | Test `no_rule_lists_a_topic_with_its_ancestor_or_twice` |
+| §2.1: at least one topic | `tagonomy::TagSet` (`MissingGroup { group: "Topic" }`) via `the_registered_rules_form_a_valid_catalog` |
+| §2.1: most specific topics only | `tagonomy::TagSet` (`RedundantTag` / `RepeatedTag`) via `the_registered_rules_form_a_valid_catalog` |
 | §2.1: topics are topics, not facet values | Compiler (`E0308` type mismatch) |
 | §1: derived facets cannot be declared | Compiler (`E0560` no such field) |
 | §2: topics exist | Compiler (`E0599` no such associated `const`) |
-| §4.2: a tree without cycles | Compiler (`E0391` `const` evaluation cycle on `parent: Option<&'static Topic>`) |
-| §1, §4.1.4: labels are globally unique, `kebab-case`, and not facet labels | Test `labels_are_globally_unique_and_not_facet_labels` |
-| §2.3, §4.1.5: every topic and facet value has at least one rule | Test `every_tag_has_a_rule` + `dead_code` lint on unused `pub(crate) const` topics |
+| §4.2: a tree without cycles | Compiler (`E0391` `const` evaluation cycle on `Tag::implies`) |
+| §1, §4.1.4: labels are globally unique, `kebab-case`, and not facet labels | `tagonomy` (`DuplicateLabel`, `NameCollision`) + tests `the_registered_rules_form_a_valid_catalog` and `labels_are_kebab_case` |
+| §2.3, §4.1.5: every topic and facet value has at least one rule | Test `every_tag_has_a_rule` (`Catalog::unused_tags`) + `dead_code` lint on unused `pub(crate) const` topics |
 | §4.2: a topic's parent is a topic | Compiler (`E0308` type mismatch on `Topic::sub`) |
-| §1: behaviour never depends on a tag | Architecture graph (`src/architecture.rs`: rules and runners cannot depend on `RuleSelection`) checked by `test_architecture_conformance` in `tests/architecture_conformance.rs` |
+| §1: behaviour never depends on a tag | Architecture graph (`src/architecture.rs`: rules and runners cannot depend on `RuleSelection`, and only `RuleDeclaration` / `RuleSelection` own `tagonomy`) checked by `test_production_architecture_rules_on_src` in `tests/architecture_conformance.rs` |
 | §4.1.3: every tag has a description and every topic has a scope note | `missing_docs` lint (`strum::EnumMessage` derives facet value descriptions from their doc comments) + compiler (`E0063` if a `TopicDoc` field is missing) + test `every_topic_is_documented` (non-empty); **Review** (meaning) |
 | §2.2–§2.3, §4.1.1–4.1.2: the yes/no questions | **Review.** A test cannot judge meaning; the worked examples are the reference. |

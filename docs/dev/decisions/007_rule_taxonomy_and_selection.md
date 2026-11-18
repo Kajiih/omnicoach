@@ -10,7 +10,7 @@ Omni's initial rule tagging and selection mechanism in `src/core.rs` and `src/co
 4. **Coarse Precedence**: Any matching `ignore` beat any `select`, making it impossible to ignore a broad tag (`ignore = ["testing"]` or `ignore = ["vcs"]`) while re-enabling a child tag (`select = ["jj"]`) or a specific rule (`select = ["no-sleep-in-tests"]`).
 5. **Behaviour Coupled to Tags**: `src/code_lint/runner.rs` branched on `rule.tags().contains(&Tag::Suppression)` in four places to separate suppression-directive audits from ordinary AST rules, and `Rule::tags()` exposed tags to rule implementations and runners.
 
-Contributor guidelines and yes/no classification tests live in [tag_guide.md](../tag_guide.md).
+Contributor guidelines and yes/no classification tests live in [tag_guide.md](../tag_guide.md). The domain-independent vocabulary, `TagSet`, `Catalog`, boolean `Expr`, and specificity `Selection` engine extracted from this design live in [crates/tagonomy](../../../crates/tagonomy/src/lib.rs) ([ADR 013](013_tagonomy_crate.md)).
 
 ---
 
@@ -44,7 +44,7 @@ pub struct Classification {
 
 ### 2.2. Topic Tree as Plain `const` Declarations (`D16`, `D24`, `D25`, `D32`–`D34`)
 
-`Topic` is a `struct` with private fields (`label`, `parent: Option<&'static Topic>`, `description`, `scope_note`, `synonyms`), constructed via `Topic::root` or `Topic::sub`, with each topic declared in **one spot** as an associated `const` on `Topic` (`Topic::NAMING`, `Topic::JJ`, …):
+`Topic` is a `struct` wrapping a private `tagonomy::Tag` (`tag: Tag`), constructed via `Topic::root` or `Topic::sub`, with each topic declared in **one spot** as an associated `const` on `Topic` (`Topic::NAMING`, `Topic::JJ`, …):
 
 ```rust
 pub(crate) const JJ: Self = Self::sub(
@@ -59,11 +59,11 @@ pub(crate) const JJ: Self = Self::sub(
 ```
 
 1. **Single-Spot Declaration & Mandatory Documentation (`C2`, `D32`)**: Every topic's `label`, parent (`Topic::root` vs. `Topic::sub`), `description`, `scope_note`, and synonyms (`.aliases(&[...])`: `version-control` → `vcs`, `jujutsu` → `jj`) live in a single `const` expression. `TopicDoc` is a struct literal, so omitting `description` or `scope_note` is a compile error (`E0063`); an empty description or scope note fails `every_topic_is_documented`. Single-valued facet enums (`Consensus`, `ImpactedQuality`) derive `strum::IntoStaticStr` and `strum::EnumMessage`, so their tag label and description come directly from the variant and its doc comment (enforced by `missing_docs`).
-2. **Native Compile-Time Cycle Prevention (`D34`, `E0391`)**: Because each topic is a `const` and `Topic::sub` stores `parent: Some(parent)` (`Option<&'static Topic>`), any cycle in `parent` links fails to compile with `rustc`'s native `E0391` (`cycle detected when const-evaluating`), regardless of declaration order. There is no arbitrary maximum depth limit.
-3. **A Tree Checked at Compile Time**: `Topic`'s fields are private, and `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent) enforce at compile time that a topic has at most one parent, itself a topic (`E0308` otherwise).
-4. **Active Topics Derived from Rules & Unused-Topic Detection (`M10`)**: `RuleSelection` collects `all_topics()` by walking registered rules' `classification.topics` and their `.ancestors()` (no second `ALL` list or macro). In production, `pub(crate) const` topic declarations that are not referenced by any rule or child topic are caught at compile time by `rustc`'s `dead_code` lint.
-5. **Encapsulated Hierarchy Traversal (`D33`)**: Selection and description callers in `RuleSelection` read hierarchy through `ancestors()`, `path()`, and `Topic::parent()`.
-6. **Most-Specific Rule Tagging**: A rule lists only its most specific topics (`&[Topic::TEST_TIMING]`, never `&[Topic::TESTING, Topic::TEST_TIMING]`), enforced by unit test.
+2. **Native Compile-Time Cycle Prevention (`D34`, `E0391`)**: `Topic` wraps `tagonomy::Tag`, and `Topic::sub` stores `core::slice::from_ref(&parent.tag)` (`&'static [Tag]`), so any cycle in `parent` links fails to compile with `rustc`'s native `E0391` (`cycle detected when const-evaluating`), regardless of declaration order. There is no arbitrary maximum depth limit.
+3. **A Tree Checked at Compile Time**: `Topic`'s inner `Tag` is private, and `Topic::root` (no parent) and `Topic::sub` (one `&'static Topic` parent) enforce at compile time that a topic has at most one parent, itself a topic (`E0308` otherwise).
+4. **Active Topics Derived from Rules & Unused-Topic Detection (`M10`)**: `RuleSelection` builds its `tagonomy::Vocabulary` from registered rules' topics plus the fixed facet tags (with no second `ALL` list or macro), and `registered_topics()` sorts active topics by their root-to-leaf label paths so parents always precede subtopics. In production, `pub(crate) const` topic declarations that are not referenced by any rule or child topic are caught at compile time by `rustc`'s `dead_code` lint.
+5. **Encapsulated Hierarchy Traversal (`D33`)**: Selection and description callers in `RuleSelection` read hierarchy through `Topic::parent()` and `RegisteredRule::facet_chains` (backed by `tagonomy::Vocabulary::root_chain`).
+6. **Most-Specific Rule Tagging**: A rule lists only its most specific topics (`&[Topic::TEST_TIMING]`, never `&[Topic::TESTING, Topic::TEST_TIMING]`), enforced by `tagonomy::TagSet` (`TagSetError::RedundantTag`).
 
 ### 2.3. Selection Precedence Model B and Config Validation (`D15`, `D18`, `D35`)
 
@@ -108,9 +108,8 @@ The verification suite lives in production: `compile_fail` doctests on `Classifi
   - Unknown topic constant (`M7`: `E0599`)
   - Cycle in `Topic` parent links (`M8`: `E0391`, `D34`)
 - **Architecture Graph**: tag-free `Rule` contract (`M13`, `D37`; §2.4)
-- **Taxonomy Invariant Tests**:
-  - `every_rule_has_a_topic` (`M3`)
-  - `no_rule_lists_a_topic_with_its_ancestor_or_twice` (`M4`)
-  - `labels_are_globally_unique_and_not_facet_labels` (`M9`, `DI5`, `D19`, including `kebab-case` syntax and multi-word facet label checks)
-  - `every_tag_has_a_rule` (`M10`, across all topics and facet values in `all_tags()`; unused `pub(crate) const` topics also fail `dead_code` at compile time)
+- **Taxonomy Invariant Tests** (backed by `tagonomy::Vocabulary`, `TagSet`, and `Catalog` invariants; [ADR 013](013_tagonomy_crate.md)):
+  - `the_registered_rules_form_a_valid_catalog` (`M3` `MissingGroup`, `M4` `RedundantTag` / `RepeatedTag`, `M9` / `DI5` / `D19` `DuplicateLabel` & `NameCollision`)
+  - `labels_are_kebab_case` (`kebab-case` syntax across every registered rule, topic, facet value, and synonym)
+  - `every_tag_has_a_rule` (`M10`, via `Catalog::unused_tags()`; unused `pub(crate) const` topics also fail `dead_code` at compile time)
   - `every_topic_is_documented` (non-empty `description` and `scope_note` on every topic; facet values are covered by the `missing_docs` lint)

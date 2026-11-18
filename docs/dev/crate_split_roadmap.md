@@ -8,6 +8,7 @@ Related design documents:
 - [ADR 007: Faceted Rule Taxonomy, Hierarchical Selection, and Tag-Free Rule Execution](decisions/007_rule_taxonomy_and_selection.md)
 - [ADR 011: Colocated Top-Down Abstraction Ordering](decisions/011_colocated_abstraction_ordering.md)
 - [ADR 012: Module Placement by Abstraction](decisions/012_module_placement_by_abstraction.md)
+- [ADR 013: Standalone tagonomy Crate](decisions/013_tagonomy_crate.md)
 - [Abstraction Graph 03 Design](abstraction_graph/03_design.md) and [05 Decisions](abstraction_graph/05_decisions.md)
 
 ---
@@ -67,21 +68,15 @@ One remaining seam inside `src/` couples foundational layers to higher-level `om
   - **Graph builder (Layer L2), format renderers & queries (Layer L3)**: `build_file_graph`, `build_project_graph`, `ProjectDepth` ([src/code_lint/graph/builder.rs](../../src/code_lint/graph/builder.rs)), `OutputFormat` renderers ([src/code_lint/graph/render.rs](../../src/code_lint/graph/render.rs)), and `find` / `slice` queries ([src/code_lint/graph/query.rs](../../src/code_lint/graph/query.rs)).
 - **Decoupling needed**: Extract `SourceSpan` and `Language` from `Diagnostic` (§2.1).
 
-### 3.3. Faceted Tag & Hierarchical Selector Engine (`tagonomy`)
+### 3.3. Completed: Tag Vocabulary, Boolean Query & Override Selection Engine (`tagonomy`)
 
-- **Purpose**: Provide a reusable faceted classification and hierarchical selector resolution engine (`select` / `ignore` / `explain`) with compile-time and test-time taxonomy invariants for any rule, check, test, or plugin registry.
+- **Status**: **Extracted** in [crates/tagonomy](../../crates/tagonomy/src/lib.rs) ([ADR 013](decisions/013_tagonomy_crate.md); design in [01_understand.md](tag_crate/01_understand.md), [02_references.md](tag_crate/02_references.md), and [03_design.md](tag_crate/03_design.md)).
 - **Contents**:
-  - **Taxonomy primitives**:
-    - Hierarchical `Topic` (`label`, `parent: Option<&'static Topic>`, `description`, `scope_note`, `synonyms`, `ancestors()`, `path()`, compile-time cycle prevention via `const` evaluation).
-    - Trait or descriptor for facet values and classified items (mapping an item to its leaf identifier and root-to-leaf tag branches).
-  - **Selection & explanation engine**:
-    - Precedence Model B resolver (`Plan::decide` $\to$ `RuleStatus` / `SelectionStatus` from [src/rule_selection.rs](../../src/rule_selection.rs)): nearest selector wins along each branch, `ignore` beats `select` across branches, item name is the implicit leaf of every branch.
-    - Loud selector parser: global label lookup, synonym canonicalization, `select` $\cap$ `ignore` conflict detection, facet-label rejection (listing valid facet values), and case-insensitive optimal string alignment `closest_match` typo suggestions ([src/rule_declaration.rs](../../src/rule_declaration.rs)).
-  - **Reusable taxonomy verification suite**:
-    - Invariant checks from [src/rule_selection/taxonomy.rs](../../src/rule_selection/taxonomy.rs): every item has at least one topic, no item lists a topic together with its ancestor or twice, every tag matches at least one item, every topic has non-empty documentation, and all canonical labels/synonyms/item names are globally unique `kebab-case` and never collide with facet labels.
+  - **Definitions & validation layers**: Plain `const` `Tag`, `TagGroup`, and `Cardinality` (`Any`, `AtMostOne`, `AtLeastOne`, `ExactlyOne`) with `E0391` compile-time cycle rejection; `Vocabulary` (precomputed parent bitsets, aliases, exclusive-group checks, shortest `chain`, `root_chain`, and `chain_through`); standalone `TagSet` (rejects redundant parent tags like `[ebpf, linux]` and enforces group rules); and optional `Catalog<T>` (`Catalog::new` and validate-then-build `Catalog::new_with`, plus `Catalog::unused_tags`).
+  - **Boolean queries & override rules**: `Expr` (`All`, `None`, `Tag`, `ExplicitTag`, `Not`, `And`, `Or`, zero-dependency string parser `Expr::parse`, and static query linter `Expr::lint`), `TagSelection<'a>` over `&'a Vocabulary` (narrower tags override broader parents, `Exclude` wins ties across branches, `override_with` layering, exact `to_expr() -> Expr` conversion), and `Selection<'a, T>` over `&'a Catalog<T>` (exact item overrides, `override_with` layering, and `ineffective()` returning `(Selector, Verdict)` pairs without cloning bitsets).
 - **What stays in `omnicoach`**:
-  - Concrete `omnicoach` facets (`Precision`, `Consensus`, `ImpactedQuality`, `Derived`) and `Topic::*` constants in [src/rule_declaration/taxonomy.rs](../../src/rule_declaration/taxonomy.rs).
-  - `.omnicoach.toml` `RawConfig` deserialization, `per-file-ignores` glob compilation, and `[rules.<name>]` option override parsing.
+  - Concrete `omnicoach` facets (`Topic`, `Consensus`, `ImpactedQuality` in [src/rule_declaration/taxonomy.rs](../../src/rule_declaration/taxonomy.rs), plus derived `AnalyzedInput`, `RuleTarget` file scope, and `Language` mappings in [src/rule_selection/taxonomy.rs](../../src/rule_selection/taxonomy.rs); `owns_external: ["tagonomy"]` in [src/architecture.rs](../../src/architecture.rs)).
+  - `.omnicoach.toml` `RawConfig` deserialization, edit-distance typo suggestions, `per-file-ignores` glob compilation, and `[rules.<name>]` option override parsing.
 
 ### 3.4. Syntax & Fact Layer (`code_lint::ast`) and Shell Command Parser (`command_lint::command`)
 
