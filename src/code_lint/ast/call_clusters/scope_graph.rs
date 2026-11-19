@@ -253,6 +253,16 @@ fn ordering_edges(items: &[ScopeItem<'_>]) -> Vec<OrderingEdge> {
                         .or_insert(OrderingReason::Encapsulation);
                 }
             }
+            ScopeItemKind::Constant => {
+                for &(lower, _) in &item.references {
+                    let reason = if items[lower].kind == ScopeItemKind::Callable {
+                        OrderingReason::Call
+                    } else {
+                        OrderingReason::Containment
+                    };
+                    reasons.entry((higher, lower)).or_insert(reason);
+                }
+            }
         }
     }
     for (callable, item) in items.iter().enumerate() {

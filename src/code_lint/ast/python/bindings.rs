@@ -227,6 +227,20 @@ pub(super) fn parameters_shadow_name(parameters: &Parameters, parameter_name: &s
             .is_some_and(|kwarg| kwarg.name.id.as_str() == parameter_name)
 }
 
+/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
+pub(super) fn is_constant_name(name: &str) -> bool {
+    !is_dunder_name(name)
+        && name.chars().any(|character| character.is_ascii_uppercase())
+        && name.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+}
+
+/// Returns true if `name` is a dunder identifier (`__all__`, `__version__`).
+pub(super) fn is_dunder_name(name: &str) -> bool {
+    name.starts_with("__") && name.ends_with("__")
+}
+
 struct BindingVisitor<'a> {
     file: &'a ParsedFile,
     bindings: Vec<Binding<'a>>,
@@ -360,20 +374,6 @@ impl<'a> SourceOrderVisitor<'a> for BindingVisitor<'a> {
         }
         self.visit_body(&match_case.body);
     }
-}
-
-/// Returns true if `name` is spelled as a constant (`MAX_RETRIES`, `_TIMEOUT_S`).
-fn is_constant_name(name: &str) -> bool {
-    !is_dunder_name(name)
-        && name.chars().any(|character| character.is_ascii_uppercase())
-        && name.chars().all(|character| {
-            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-        })
-}
-
-/// Returns true if `name` is a dunder identifier (`__all__`, `__version__`).
-fn is_dunder_name(name: &str) -> bool {
-    name.starts_with("__") && name.ends_with("__")
 }
 
 /// Collects single-name module-level assignments from `stmts`, recursing into top-level

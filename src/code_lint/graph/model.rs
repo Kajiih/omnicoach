@@ -54,16 +54,19 @@ pub(super) enum DeclarationKind {
     Method,
     /// A struct, enum, union, trait, or class.
     Type,
+    /// A module-level constant or static definition.
+    Constant,
 }
 
 impl DeclarationKind {
-    /// Compact label for this declaration kind (`"fn"`, `"method"`, or `"type"`).
+    /// Compact label for this declaration kind (`"fn"`, `"method"`, `"type"`, or `"const"`).
     #[must_use]
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Callable => "fn",
             Self::Method => "method",
             Self::Type => "type",
+            Self::Constant => "const",
         }
     }
 }
@@ -79,7 +82,7 @@ pub(super) struct DeclarationNode {
     pub(super) signature: Option<String>,
     /// Identifier of the declaration scope this item came from.
     pub(super) scope_id: usize,
-    /// Callable, method, or type.
+    /// Callable, method, type, or constant.
     pub(super) kind: DeclarationKind,
     /// Public or private.
     pub(super) visibility: Visibility,

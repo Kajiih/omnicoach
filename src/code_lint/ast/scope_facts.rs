@@ -33,7 +33,8 @@ pub struct ScopeFacts {
 pub struct ItemFacts {
     /// Identifier name of the declaration.
     pub name: String,
-    /// Callable (`fn` / `def`) or type (`struct`, `enum`, `union`, `trait`, `class`).
+    /// Callable (`fn` / `def`), type (`struct`, `enum`, `union`, `trait`, `class`), or
+    /// module-level constant (`const`, `static`, `UPPER_SNAKE_CASE` / `Final`).
     pub kind: ScopeItemKind,
     /// Public or private visibility tier.
     pub visibility: Visibility,
@@ -199,9 +200,12 @@ pub fn collect_intra_file_references(
         }
     }
     let raw_sites = match file.lang() {
-        Language::Python => {
-            super::python::collect_intra_file_ref_sites(file, &module_items, &method_items)
-        }
+        Language::Python => super::python::collect_intra_file_ref_sites(
+            file,
+            &module_items,
+            &module_types,
+            &method_items,
+        ),
         Language::Rust => super::rust::collect_intra_file_ref_sites(
             file,
             &module_items,
@@ -776,5 +780,252 @@ mod tests {
                 "run".to_owned(),
             ])
         );
+    }
+
+    #[test]
+    fn coalesced_module_extracts_rust_constants_statics_and_signatures() {
+        let rust_source = indoc::indoc! {r#"
+            const DEFAULT_LIMIT: usize = 16;
+            pub static GLOBAL_TAG: &str = "v1";
+
+            const _: () = {
+                assert!(DEFAULT_LIMIT > 0);
+            };
+
+            pub enum Mode {
+                Fast,
+                Safe,
+            }
+
+            pub struct Entry {
+                pub limit: usize,
+            }
+
+            pub const REGISTRY: &[Entry] =
+                // Core registry entries.
+                &[Entry { limit: DEFAULT_LIMIT }];
+            pub static DEFAULT_MODE: Mode = Mode::Fast;
+
+            pub fn load_limit() -> usize {
+                DEFAULT_LIMIT
+            }
+        "#};
+        let rust_file = ParsedFile::rust(rust_source);
+
+        let rust_scopes = collect_scope_facts(&rust_file);
+        let lint_scopes = super::super::call_clusters::collect_declaration_scopes(&rust_file);
+        let rust_items: Vec<_> = rust_scopes[0]
+            .items
+            .iter()
+            .map(|item| {
+                (
+                    item.name.as_str(),
+                    item.kind,
+                    item.signature.as_deref(),
+                    item.findings.len(),
+                )
+            })
+            .collect();
+        let rust_refs = collect_intra_file_references(&rust_file, &rust_scopes);
+
+        assert_eq!(
+            rust_items,
+            [
+                (
+                    "DEFAULT_LIMIT",
+                    ScopeItemKind::Constant,
+                    Some("const DEFAULT_LIMIT: usize"),
+                    0,
+                ),
+                (
+                    "GLOBAL_TAG",
+                    ScopeItemKind::Constant,
+                    Some("pub static GLOBAL_TAG: &str"),
+                    0,
+                ),
+                (
+                    "Mode",
+                    ScopeItemKind::Type,
+                    Some("pub enum Mode { Fast, Safe }"),
+                    0,
+                ),
+                (
+                    "Entry",
+                    ScopeItemKind::Type,
+                    Some("pub struct Entry { pub limit: usize }"),
+                    0,
+                ),
+                (
+                    "REGISTRY",
+                    ScopeItemKind::Constant,
+                    Some("pub const REGISTRY: &[Entry]"),
+                    0,
+                ),
+                (
+                    "DEFAULT_MODE",
+                    ScopeItemKind::Constant,
+                    Some("pub static DEFAULT_MODE: Mode"),
+                    0,
+                ),
+                (
+                    "load_limit",
+                    ScopeItemKind::Callable,
+                    Some("pub fn load_limit() -> usize"),
+                    0,
+                ),
+            ]
+        );
+        assert!(
+            lint_scopes[0]
+                .items
+                .iter()
+                .all(|item| item.kind != ScopeItemKind::Constant)
+        );
+        assert!(rust_refs.iter().any(|reference| {
+            reference.source_symbol == "REGISTRY"
+                && reference.target_symbol == "Entry"
+                && reference.kind == RelationKind::Composition
+        }));
+        assert!(rust_refs.iter().any(|reference| {
+            reference.source_symbol == "DEFAULT_MODE"
+                && reference.target_symbol == "Mode"
+                && reference.kind == RelationKind::Composition
+        }));
+    }
+
+    #[test]
+    fn coalesced_module_filters_python_constants_and_skips_class_attributes_and_type_aliases() {
+        let py_source = indoc::indoc! {r#"
+            from typing import Final, TypeAlias
+
+            __all__: Final[list[str]] = ["Endpoint"]
+            T = int
+            _DEFAULT_PORT = 8080
+            local_counter = 0
+            mutable_count: int = 1
+            unassigned_flag: Final[int]
+            PortAlias: TypeAlias = int
+            max_retries: Final[int] = 3
+
+            class Endpoint:
+                CLASS_TIMEOUT = 30
+                CLASS_LIMIT: Final[int] = 5
+
+                def ping(self) -> int:
+                    return 1
+
+            PUBLIC_ENDPOINTS: Final[tuple[Endpoint, ...]] = (Endpoint(),)
+
+            def default_port() -> int:
+                return _DEFAULT_PORT + max_retries
+        "#};
+        let py_file = ParsedFile::new(py_source, Language::Python);
+
+        let py_scopes = collect_scope_facts(&py_file);
+        let lint_scopes = super::super::call_clusters::collect_declaration_scopes(&py_file);
+        let py_items: Vec<_> = py_scopes[0]
+            .items
+            .iter()
+            .map(|item| (item.name.as_str(), item.kind, item.findings.len()))
+            .collect();
+        let py_refs = collect_intra_file_references(&py_file, &py_scopes);
+
+        assert_eq!(
+            py_items,
+            [
+                ("_DEFAULT_PORT", ScopeItemKind::Constant, 0),
+                ("max_retries", ScopeItemKind::Constant, 0),
+                ("Endpoint", ScopeItemKind::Type, 0),
+                ("PUBLIC_ENDPOINTS", ScopeItemKind::Constant, 0),
+                ("default_port", ScopeItemKind::Callable, 0),
+            ]
+        );
+        assert_eq!(py_scopes[1].items.len(), 1);
+        assert!(
+            lint_scopes[0]
+                .items
+                .iter()
+                .all(|item| item.kind != ScopeItemKind::Constant)
+        );
+        assert!(py_refs.iter().any(|reference| {
+            reference.source_symbol == "PUBLIC_ENDPOINTS"
+                && reference.target_symbol == "Endpoint"
+                && reference.kind == RelationKind::Composition
+        }));
+    }
+
+    #[test]
+    fn coalesced_module_constant_only_scope_reports_no_findings() {
+        let const_only_file = ParsedFile::rust(
+            "const PRIVATE_LIMIT: usize = 4;\npub const PUBLIC_LIMIT: usize = PRIVATE_LIMIT;\n",
+        );
+
+        let const_only_scopes = collect_scope_facts(&const_only_file);
+
+        assert!(
+            const_only_scopes[0]
+                .items
+                .iter()
+                .all(|item| item.findings.is_empty())
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::pinned_by_mid_constant(
+        indoc::indoc! {r#"
+            HEADER_PREFIX = "v1"
+
+            def _build_default() -> str:
+                return HEADER_PREFIX
+
+            ACTIVE_DEFAULT = _build_default()
+
+            def public_api() -> str:
+                return _build_default()
+        "#},
+        0
+    )]
+    #[case::pinned_by_runtime_stmt(
+        indoc::indoc! {r#"
+            HEADER_PREFIX = "v1"
+
+            def _build_default() -> str:
+                return HEADER_PREFIX
+
+            active_default = _build_default()
+
+            def public_api() -> str:
+                return _build_default()
+        "#},
+        0
+    )]
+    #[case::unpinned_trailing_constant(
+        indoc::indoc! {r#"
+            HEADER_PREFIX = "v1"
+
+            def _build_default() -> str:
+                return HEADER_PREFIX
+
+            def public_api() -> str:
+                return _build_default()
+
+            ACTIVE_DEFAULT = _build_default()
+        "#},
+        1
+    )]
+    fn coalesced_module_definition_time_bounds_remap_past_leading_constants(
+        #[case] py_source: &str,
+        #[case] expected_findings: usize,
+    ) {
+        let py_file = ParsedFile::new(py_source, Language::Python);
+
+        let py_scopes = collect_scope_facts(&py_file);
+        let helper = py_scopes[0]
+            .items
+            .iter()
+            .find(|item| item.name == "_build_default")
+            .expect("helper item");
+
+        assert_eq!(helper.findings.len(), expected_findings);
     }
 }

@@ -1004,4 +1004,83 @@ mod tests {
             "pkg.service.tracker.run"
         ));
     }
+
+    #[test]
+    fn slice_resolves_rust_module_constant_and_containment_edge() {
+        let root = PathBuf::from(MemoryFileSource::VIRTUAL_ROOT);
+        let files = [(
+            "src/arch.rs",
+            indoc::indoc! {"
+                pub struct Entry;
+                pub const DEAD_GRAPH: &[Entry] = &[Entry];
+            "},
+        )];
+        let memory = MemoryFileSource::from_relative_files(&root, &files);
+        let discovered = discover_project_sources_in(
+            std::slice::from_ref(&root),
+            &memory,
+            &ProjectConfig::default(),
+        )
+        .expect("discover rust sources");
+
+        let rust_slice = slice_in_sources(&discovered, &["DEAD_GRAPH".to_owned()], 1, 800).unwrap();
+
+        assert!(
+            rust_slice.contains("pub const] arch::DEAD_GRAPH"),
+            "expected Rust const slice in:\n{rust_slice}"
+        );
+        assert!(
+            rust_slice.contains("<- used_by (0):"),
+            "expected zero callers on DEAD_GRAPH in:\n{rust_slice}"
+        );
+        assert!(
+            rust_slice.contains("arch::Entry"),
+            "expected DEAD_GRAPH -> Entry containment edge in:\n{rust_slice}"
+        );
+    }
+
+    #[test]
+    fn slice_resolves_python_module_constant_and_cross_module_caller() {
+        let root = PathBuf::from(MemoryFileSource::VIRTUAL_ROOT);
+        let files = [
+            ("pkg/__init__.py", ""),
+            (
+                "pkg/catalog.py",
+                indoc::indoc! {"
+                    class Stage:
+                        pass
+
+                    STAGE_CATALOG = (Stage(),)
+                "},
+            ),
+            (
+                "pkg/consumer.py",
+                indoc::indoc! {"
+                    from pkg.catalog import STAGE_CATALOG
+
+                    def count_stages() -> int:
+                        return len(STAGE_CATALOG)
+                "},
+            ),
+        ];
+        let memory = MemoryFileSource::from_relative_files(&root, &files);
+        let discovered = discover_project_sources_in(
+            std::slice::from_ref(&root),
+            &memory,
+            &ProjectConfig::default(),
+        )
+        .expect("discover python sources");
+
+        let py_slice =
+            slice_in_sources(&discovered, &["STAGE_CATALOG".to_owned()], 1, 800).unwrap();
+
+        assert!(
+            py_slice.contains("pub const] pkg.catalog::STAGE_CATALOG"),
+            "expected Python const slice in:\n{py_slice}"
+        );
+        assert!(
+            py_slice.contains("pkg.consumer::count_stages"),
+            "expected cross-module caller of STAGE_CATALOG in:\n{py_slice}"
+        );
+    }
 }

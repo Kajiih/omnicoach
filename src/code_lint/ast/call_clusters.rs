@@ -39,18 +39,20 @@ impl Visibility {
     }
 }
 
-/// Whether a [`ScopeItem`] is a callable (`fn` / `def`) or a type definition (`struct`, `enum`,
-/// `union`, `trait`, `class`).
+/// Whether a [`ScopeItem`] is a callable (`fn` / `def`), a type definition (`struct`, `enum`,
+/// `union`, `trait`, `class`), or a module-level constant (`const`, `static`, `UPPER_SNAKE_CASE`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ScopeItemKind {
     /// A function or method definition.
     Callable,
     /// A class, struct, enum, union, or trait definition.
     Type,
+    /// A module-level constant or static definition (extracted in `CoalescedModule` mode).
+    Constant,
 }
 
-/// A function, method, or type definition inside a module, Python `class`, or Rust inherent
-/// `impl` scope.
+/// A function, method, type, or module-level constant definition inside a module, Python `class`,
+/// or Rust inherent `impl` scope.
 #[derive(Clone)]
 pub(super) struct ScopeItem<'a> {
     /// Identifier AST node of the declaration.
@@ -62,10 +64,10 @@ pub(super) struct ScopeItem<'a> {
     /// 1-based last line of the declaration (including contiguous overloads/accessors or inherent
     /// `impl` blocks).
     pub(super) end_line: usize,
-    /// Compact one-line signature: the header of a callable, or the header and public fields or
-    /// variants of a type, when the language module renders one.
+    /// Compact one-line signature: the header of a callable, the header and public fields or
+    /// variants of a type, or the type/binding header of a constant.
     pub(super) signature: Option<String>,
-    /// Whether this item is a callable or a type definition.
+    /// Whether this item is a callable, a type definition, or a module-level constant.
     pub(super) kind: ScopeItemKind,
     /// Visibility tier (`Public` vs. `Private`).
     pub(super) visibility: Visibility,
@@ -397,11 +399,61 @@ pub(super) fn collect_graph_declaration_scopes(file: &ParsedFile) -> Vec<Declara
     )
 }
 
-/// Finds the call-cluster findings of one scope from its graph.
+/// Finds the call-cluster findings of one scope from its graph, excluding module constants
+/// extracted in [`ScopeExtractionMode::CoalescedModule`] so call-cluster findings match
+/// [`ScopeExtractionMode::LintSegments`].
 pub(super) fn scope_findings(
     scope: &DeclarationScope<'_>,
     graph: &ScopeGraph,
 ) -> Vec<ScopeFinding> {
+    if scope
+        .items
+        .iter()
+        .any(|item| item.kind == ScopeItemKind::Constant)
+    {
+        let mut orig_indices = Vec::new();
+        let mut old_to_new = vec![None; scope.items.len()];
+        for (idx, item) in scope.items.iter().enumerate() {
+            if item.kind != ScopeItemKind::Constant {
+                old_to_new[idx] = Some(orig_indices.len());
+                orig_indices.push(idx);
+            }
+        }
+        let filtered_items: Vec<ScopeItem<'_>> = orig_indices
+            .iter()
+            .map(|&idx| {
+                let mut item = scope.items[idx].clone();
+                item.references = item
+                    .references
+                    .into_iter()
+                    .filter_map(|(target, kind)| Some((old_to_new[target]?, kind)))
+                    .collect();
+                item.evaluated_before = item
+                    .evaluated_before
+                    .and_then(|bound| orig_indices.iter().position(|&orig| orig >= bound));
+                item
+            })
+            .collect();
+        let filtered_scope = DeclarationScope {
+            kind: scope.kind.clone(),
+            items: filtered_items,
+        };
+        let filtered_graph = ScopeGraph::new(&filtered_scope.items);
+        return evaluate_scope_findings(&filtered_scope, &filtered_graph)
+            .into_iter()
+            .map(|finding| ScopeFinding {
+                rule: finding.rule,
+                item: orig_indices[finding.item],
+                related: orig_indices[finding.related],
+                anchor: finding.anchor,
+                reason: finding.reason,
+            })
+            .collect();
+    }
+    evaluate_scope_findings(scope, graph)
+}
+
+fn evaluate_scope_findings(scope: &DeclarationScope<'_>, graph: &ScopeGraph) -> Vec<ScopeFinding> {
     let placements = generate_placements(&scope.items, graph);
     let source_order: Vec<usize> = (0..scope.items.len()).collect();
     let source = Layout::new(&source_order, &scope.items, graph);

@@ -1,7 +1,11 @@
 //! Python declaration-order scope builders and field-after-method extraction.
 
-use super::annotations::annotated_metadata_exprs;
-use super::bindings::{collect_local_bound_names, parameters_shadow_name};
+use super::annotations::{
+    annotated_metadata_exprs, has_final_annotation_expr, has_type_alias_annotation_expr,
+};
+use super::bindings::{
+    collect_local_bound_names, is_constant_name, is_dunder_name, parameters_shadow_name,
+};
 use super::functions::{CLS_RECEIVER, SELF_RECEIVER, is_overload_def, is_property_accessor_def};
 use crate::code_lint::ast::call_clusters::{
     DeclarationScope, DeclarationScopeKind, PlacementAnchor, RelationKind, ScopeExtractionMode,
@@ -220,10 +224,11 @@ pub fn collect_statements_after_main_guard(
 /// Collects [`IntraFileReference`] entries for intra-file references to `module_items` and
 /// `method_items` across functions and classes in a Python `file`.
 #[must_use]
-pub fn collect_intra_file_ref_sites(
+pub fn collect_intra_file_ref_sites<'a>(
     file: &ParsedFile,
-    module_items: &HashSet<&str>,
-    method_items: &HashSet<String>,
+    module_items: &'a HashSet<&'a str>,
+    module_types: &'a HashSet<&'a str>,
+    method_items: &'a HashSet<String>,
 ) -> Vec<IntraFileReference> {
     struct TopLevelIntraRefCollector<'a> {
         file: &'a ParsedFile,
@@ -250,6 +255,36 @@ pub fn collect_intra_file_ref_sites(
                 Stmt::ClassDef(class_def) => {
                     visit_python_intra_ref_class(class_def, self.file, self.targets, &mut self.out);
                 }
+                Stmt::Assign(assign) => {
+                    if let [Expr::Name(target)] = assign.targets.as_slice() {
+                        let name = target.id.as_str();
+                        if self.targets.module_items.contains(name) {
+                            visit_python_intra_ref_constant(
+                                None,
+                                Some(&assign.value),
+                                self.file,
+                                self.targets,
+                                name,
+                                &mut self.out,
+                            );
+                        }
+                    }
+                }
+                Stmt::AnnAssign(ann_assign) => {
+                    if let Expr::Name(target) = ann_assign.target.as_ref() {
+                        let name = target.id.as_str();
+                        if self.targets.module_items.contains(name) {
+                            visit_python_intra_ref_constant(
+                                Some(&ann_assign.annotation),
+                                ann_assign.value.as_deref(),
+                                self.file,
+                                self.targets,
+                                name,
+                                &mut self.out,
+                            );
+                        }
+                    }
+                }
                 _ => walk_stmt(self, statement),
             }
         }
@@ -262,6 +297,7 @@ pub fn collect_intra_file_ref_sites(
         file,
         targets: IntraRefTargets {
             module_items,
+            module_types,
             method_items,
         },
         out: Vec::new(),
@@ -294,16 +330,25 @@ fn build_module_declaration_scopes<'a>(
     mode: ScopeExtractionMode,
     file: &'a ParsedFile,
 ) -> Vec<DeclarationScope<'a>> {
-    let grouped = group_scope_items(module_body, false, file);
+    let include_constants = mode == ScopeExtractionMode::CoalescedModule;
+    let grouped = group_scope_items(module_body, false, include_constants, file);
     if grouped.is_empty() {
         return Vec::new();
     }
     if mode == ScopeExtractionMode::CoalescedModule {
         let indexed = index_grouped_items(&grouped, true);
+        let mut type_indices = HashSet::new();
+        for group in &grouped {
+            if matches!(group.item, ScopeItemAst::Type(_))
+                && let Some(&idx) = indexed.by_name.get(&group.name)
+            {
+                type_indices.insert(idx);
+            }
+        }
         let mut items: Vec<ScopeItem<'a>> = Vec::with_capacity(indexed.first_stmt_indices.len());
         for group in &grouped {
             let target_idx = indexed.by_name[&group.name];
-            let built = build_module_scope_item(group, &indexed.by_name, file);
+            let built = build_module_scope_item(group, &indexed.by_name, &type_indices, file);
             ScopeItem::push_or_merge(&mut items, target_idx, built);
         }
         let evaluated_before = direct_evaluated_before(
@@ -340,9 +385,14 @@ fn build_module_declaration_scopes<'a>(
             .map_or(module_body.len(), |next| next[0].first_stmt_idx);
 
         let indexed = index_grouped_items(segment, false);
+        let type_indices: HashSet<usize> = segment
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, group)| matches!(group.item, ScopeItemAst::Type(_)).then_some(idx))
+            .collect();
         let mut items: Vec<ScopeItem<'a>> = segment
             .iter()
-            .map(|group| build_module_scope_item(group, &indexed.by_name, file))
+            .map(|group| build_module_scope_item(group, &indexed.by_name, &type_indices, file))
             .collect();
 
         let evaluated_before = direct_evaluated_before(
@@ -377,7 +427,7 @@ fn build_class_declaration_scope<'a>(
     let first_class = *class_defs.first()?;
     let grouped: Vec<GroupedScopeItem<'a, '_>> = class_defs
         .iter()
-        .flat_map(|class_def| group_scope_items(&class_def.body, true, file))
+        .flat_map(|class_def| group_scope_items(&class_def.body, true, false, file))
         .collect();
     if grouped.is_empty() {
         return None;
@@ -511,6 +561,7 @@ fn index_grouped_items(grouped: &[GroupedScopeItem<'_, '_>], coalesce: bool) -> 
 fn build_module_scope_item<'a>(
     group: &GroupedScopeItem<'a, '_>,
     item_by_name: &HashMap<String, usize>,
+    type_indices: &HashSet<usize>,
     file: &ParsedFile,
 ) -> ScopeItem<'a> {
     let empty_locals = HashSet::new();
@@ -559,6 +610,35 @@ fn build_module_scope_item<'a>(
             );
             extend_references(&mut references, all_callees, RelationKind::Behavior);
             ScopeItemKind::Type
+        }
+        ScopeItemAst::Constant { annotation, value } => {
+            let mut const_callees = Vec::new();
+            let mut on_expr = |expr: &Expr, active_locals: &HashSet<String>, _: bool, _: bool| {
+                record_module_name_ref(expr, item_by_name, active_locals, &mut const_callees);
+            };
+            let mut visitor = PythonRefWalker {
+                file,
+                local_names: &empty_locals,
+                has_self_param: false,
+                has_cls_param: false,
+                allow_nested_defs: false,
+                on_expr: &mut on_expr,
+            };
+            if let Some(ann) = annotation {
+                visitor.visit_expr(ann);
+            }
+            if let Some(val) = value {
+                visitor.visit_expr(val);
+            }
+            for target in const_callees {
+                let relation = if type_indices.contains(&target) {
+                    RelationKind::Composition
+                } else {
+                    RelationKind::Body
+                };
+                extend_references(&mut references, [target], relation);
+            }
+            ScopeItemKind::Constant
         }
     };
     ScopeItem {
@@ -782,11 +862,13 @@ impl SourceOrderVisitor<'_> for DefinitionTimeRefVisitor<'_, '_> {
     }
 }
 
-/// Collects direct functions and classes in `scope_body` in source order, grouping `@overload`
-/// signatures and `@<prop>.setter` / `@<prop>.deleter` accessors with their first definition.
+/// Collects direct functions and classes (plus module-level constants when `include_constants` is
+/// true) in `scope_body` in source order, grouping `@overload` signatures and `@<prop>.setter` /
+/// `@<prop>.deleter` accessors with their first definition.
 fn group_scope_items<'a, 'ast>(
     scope_body: &'ast [Stmt],
     is_class_scope: bool,
+    include_constants: bool,
     file: &'a ParsedFile,
 ) -> Vec<GroupedScopeItem<'a, 'ast>> {
     struct SeenCallable {
@@ -856,22 +938,23 @@ fn group_scope_items<'a, 'ast>(
                 });
             }
             Stmt::ClassDef(class_def) if !is_class_scope => {
-                let name = class_def.name.id.to_string();
-                seen_by_name.remove(&name);
-                let visibility = visibility_of(&name);
-                let class_node = AstNode::from_span(file, span_from_ruff_range(class_def.range));
-                items.push(GroupedScopeItem {
-                    name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
-                    name,
-                    start_line: class_node.start_line(),
-                    end_line: class_node.end_line(),
-                    signature: class_signature_text(class_def, file),
-                    visibility,
-                    is_constructor: false,
-                    has_receiver: false,
-                    first_stmt_idx: stmt_idx,
-                    item: ScopeItemAst::Type(class_def),
-                });
+                let class_item = grouped_class_item(class_def, stmt_idx, file);
+                seen_by_name.remove(&class_item.name);
+                items.push(class_item);
+            }
+            Stmt::Assign(assign) if !is_class_scope && include_constants => {
+                if let Some(constant_item) = grouped_constant_from_assign(assign, stmt_idx, file) {
+                    seen_by_name.remove(&constant_item.name);
+                    items.push(constant_item);
+                }
+            }
+            Stmt::AnnAssign(ann_assign) if !is_class_scope && include_constants => {
+                if let Some(constant_item) =
+                    grouped_constant_from_ann_assign(ann_assign, stmt_idx, file)
+                {
+                    seen_by_name.remove(&constant_item.name);
+                    items.push(constant_item);
+                }
             }
             _ => {}
         }
@@ -880,9 +963,106 @@ fn group_scope_items<'a, 'ast>(
     items
 }
 
+fn grouped_class_item<'a, 'ast>(
+    class_def: &'ast StmtClassDef,
+    stmt_idx: usize,
+    file: &'a ParsedFile,
+) -> GroupedScopeItem<'a, 'ast> {
+    let name = class_def.name.id.to_string();
+    let visibility = visibility_of(&name);
+    let class_node = AstNode::from_span(file, span_from_ruff_range(class_def.range));
+    GroupedScopeItem {
+        name_node: AstNode::from_span(file, span_from_ruff_range(class_def.name.range)),
+        name,
+        start_line: class_node.start_line(),
+        end_line: class_node.end_line(),
+        signature: class_signature_text(class_def, file),
+        visibility,
+        is_constructor: false,
+        has_receiver: false,
+        first_stmt_idx: stmt_idx,
+        item: ScopeItemAst::Type(class_def),
+    }
+}
+
+fn grouped_constant_from_assign<'a, 'ast>(
+    assign: &'ast ruff_python_ast::StmtAssign,
+    stmt_idx: usize,
+    file: &'a ParsedFile,
+) -> Option<GroupedScopeItem<'a, 'ast>> {
+    let [Expr::Name(target)] = assign.targets.as_slice() else {
+        return None;
+    };
+    if !is_module_constant_identifier(target.id.as_str()) {
+        return None;
+    }
+    let name = target.id.to_string();
+    let stmt_node = AstNode::from_span(file, span_from_ruff_range(assign.range));
+    Some(GroupedScopeItem {
+        name_node: AstNode::from_span(file, span_from_ruff_range(target.range)),
+        signature: format!("{name} = ..."),
+        visibility: visibility_of(&name),
+        name,
+        start_line: stmt_node.start_line(),
+        end_line: stmt_node.end_line(),
+        is_constructor: false,
+        has_receiver: false,
+        first_stmt_idx: stmt_idx,
+        item: ScopeItemAst::Constant {
+            annotation: None,
+            value: Some(&assign.value),
+        },
+    })
+}
+
+fn grouped_constant_from_ann_assign<'a, 'ast>(
+    ann_assign: &'ast ruff_python_ast::StmtAnnAssign,
+    stmt_idx: usize,
+    file: &'a ParsedFile,
+) -> Option<GroupedScopeItem<'a, 'ast>> {
+    let Expr::Name(target) = ann_assign.target.as_ref() else {
+        return None;
+    };
+    let target_name = target.id.as_str();
+    if ann_assign.value.is_none()
+        || is_dunder_name(target_name)
+        || has_type_alias_annotation_expr(&ann_assign.annotation, file)
+        || (!is_module_constant_identifier(target_name)
+            && !has_final_annotation_expr(&ann_assign.annotation, file))
+    {
+        return None;
+    }
+    let name = target.id.to_string();
+    let stmt_node = AstNode::from_span(file, span_from_ruff_range(ann_assign.range));
+    let ann_text = collapse_whitespace(&file.source[ann_assign.annotation.range()]);
+    Some(GroupedScopeItem {
+        name_node: AstNode::from_span(file, span_from_ruff_range(target.range)),
+        signature: format!("{name}: {ann_text}"),
+        visibility: visibility_of(&name),
+        name,
+        start_line: stmt_node.start_line(),
+        end_line: stmt_node.end_line(),
+        is_constructor: false,
+        has_receiver: false,
+        first_stmt_idx: stmt_idx,
+        item: ScopeItemAst::Constant {
+            annotation: Some(&ann_assign.annotation),
+            value: ann_assign.value.as_deref(),
+        },
+    })
+}
+
 enum ScopeItemAst<'ast> {
     Callable(Vec<&'ast StmtFunctionDef>),
     Type(&'ast StmtClassDef),
+    Constant {
+        annotation: Option<&'ast Expr>,
+        value: Option<&'ast Expr>,
+    },
+}
+
+fn is_module_constant_identifier(name: &str) -> bool {
+    is_constant_name(name) && name.trim_matches('_').len() >= 2
 }
 
 /// Classifies the visibility tier of a Python declaration identifier: public or `__dunder__`
@@ -1068,8 +1248,57 @@ fn public_attributes(body: &[Stmt], source: &str) -> Vec<String> {
 struct IntraRefTargets<'a> {
     /// Names of the file's module-level items.
     module_items: &'a HashSet<&'a str>,
+    /// Names of the file's module-level `class` items.
+    module_types: &'a HashSet<&'a str>,
     /// `Class::method` names of the file's methods.
     method_items: &'a HashSet<String>,
+}
+
+fn visit_python_intra_ref_constant<'a>(
+    annotation: Option<&Expr>,
+    value: Option<&Expr>,
+    file: &'a ParsedFile,
+    targets: IntraRefTargets<'a>,
+    const_name: &str,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let empty_locals = HashSet::new();
+    let mut on_expr =
+        |expr: &Expr, active_locals: &HashSet<String>, has_self: bool, has_cls: bool| {
+            let kind = if let Expr::Name(name) = expr
+                && targets.module_types.contains(name.id.as_str())
+            {
+                RelationKind::Composition
+            } else {
+                RelationKind::Body
+            };
+            record_python_intra_ref_expr(
+                expr,
+                file,
+                targets,
+                const_name,
+                None,
+                active_locals,
+                has_self,
+                has_cls,
+                kind,
+                out,
+            );
+        };
+    let mut visitor = PythonRefWalker {
+        file,
+        local_names: &empty_locals,
+        has_self_param: false,
+        has_cls_param: false,
+        allow_nested_defs: false,
+        on_expr: &mut on_expr,
+    };
+    if let Some(ann) = annotation {
+        visitor.visit_expr(ann);
+    }
+    if let Some(val) = value {
+        visitor.visit_expr(val);
+    }
 }
 
 fn visit_python_intra_ref_class<'a>(

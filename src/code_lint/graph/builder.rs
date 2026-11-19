@@ -1069,6 +1069,7 @@ fn build_declaration_node(
             match item.kind {
                 ScopeItemKind::Callable => DeclarationKind::Callable,
                 ScopeItemKind::Type => DeclarationKind::Type,
+                ScopeItemKind::Constant => DeclarationKind::Constant,
             },
             mapped_owners,
         )

@@ -29,6 +29,7 @@ const TYPING_PREFIX: &str = "typing.";
 const TYPING_EXTENSIONS_PREFIX: &str = "typing_extensions.";
 const TYPE_ANNOTATED: &str = "Annotated";
 const TYPE_FINAL: &str = "Final";
+const TYPE_ALIAS: &str = "TypeAlias";
 const TYPE_COROUTINE: &str = "Coroutine";
 const TYPE_MAPPING: &str = "Mapping";
 const LIST_CONSTRUCTOR: &str = "list";
@@ -193,6 +194,15 @@ pub(super) fn has_final_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> 
     written_name(candidate, &file.source)
         .resolve(file)
         .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_FINAL]))
+}
+
+/// True if `type_expr` resolves to `TypeAlias` (`typing.TypeAlias` or `typing_extensions.TypeAlias`,
+/// optionally wrapped in `Annotated`).
+pub(super) fn has_type_alias_annotation_expr(type_expr: &Expr, file: &ParsedFile) -> bool {
+    let unwrapped = unwrap_annotated_expr(type_expr, file);
+    written_name(unwrapped, &file.source)
+        .resolve(file)
+        .is_some_and(|name| is_std_type_constructor(&name.path, &name.terminal, &[TYPE_ALIAS]))
 }
 
 /// Returns true if `type_expr` is an unparameterized `Final` qualifier (`Final`, `typing.Final`,

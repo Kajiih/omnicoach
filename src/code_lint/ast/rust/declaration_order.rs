@@ -72,7 +72,7 @@ fn collect_coalesced_rust_scopes<'a>(
     let RustModuleContents {
         declarations,
         impl_items,
-    } = collect_rust_module_decls(root_items, file);
+    } = collect_rust_module_decls(root_items, true, file);
     let impl_scopes = build_coalesced_rust_impl_scopes(&impl_items, file);
     if declarations.is_empty() && impl_scopes.is_empty() {
         return Vec::new();
@@ -97,7 +97,7 @@ fn build_rust_module_declaration_scopes<'a>(
     let RustModuleContents {
         declarations,
         impl_items,
-    } = collect_rust_module_decls(items, file);
+    } = collect_rust_module_decls(items, false, file);
     if declarations.is_empty() {
         return Vec::new();
     }
@@ -172,10 +172,12 @@ struct RustModuleContents<'a> {
     impl_items: Vec<(usize, ast::Impl)>,
 }
 
-/// Collects the direct `fn`, `struct`, `enum`, `union`, and `trait` declarations in `items`,
-/// alongside every `impl` block keyed by its starting offset.
+/// Collects the direct `fn`, `struct`, `enum`, `union`, and `trait` declarations (plus named
+/// `const` and `static` items when `include_constants` is true) in `items`, alongside every `impl`
+/// block keyed by its starting offset.
 fn collect_rust_module_decls<'a>(
     items: &[ast::Item],
+    include_constants: bool,
     file: &'a ParsedFile,
 ) -> RustModuleContents<'a> {
     let mut declarations = Vec::new();
@@ -219,6 +221,12 @@ fn collect_rust_module_decls<'a>(
             }
             ast::Item::Trait(trait_item) => {
                 declarations.extend(rust_type_decl(trait_item, syntax_start, file));
+            }
+            ast::Item::Const(const_item) if include_constants => {
+                declarations.extend(rust_const_decl(const_item, syntax_start, file));
+            }
+            ast::Item::Static(static_item) if include_constants => {
+                declarations.extend(rust_const_decl(static_item, syntax_start, file));
             }
             ast::Item::Impl(impl_item) => impl_items.push((syntax_start, impl_item.clone())),
             _ => {}
@@ -307,6 +315,32 @@ fn rust_type_decl<'a>(
     })
 }
 
+fn rust_const_decl<'a>(
+    const_item: &(impl ast::HasName + ast::HasVisibility),
+    syntax_start: usize,
+    file: &'a ParsedFile,
+) -> Option<RustModuleDecl<'a>> {
+    let name_node = const_item.name()?;
+    let name = name_node.text().trim().to_owned();
+    if name.is_empty() || name == "_" {
+        return None;
+    }
+    let visibility = if const_item.visibility().is_some() {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    };
+    Some(RustModuleDecl {
+        name_node: AstNode::from_span(file, span_from_rowan_range(name_node.syntax().text_range())),
+        name,
+        start_line: file.line_index.line(syntax_start),
+        visibility,
+        syntax_start,
+        signature: rust_item_signature(const_item.syntax(), &file.source),
+        item: RustModuleItem::Constant(const_item.syntax().clone()),
+    })
+}
+
 struct RustDeclSpans {
     end_line: usize,
     impl_spans: Vec<(usize, usize)>,
@@ -324,6 +358,7 @@ fn rust_decl_spans(
     let (syntax, is_type) = match &decl.item {
         RustModuleItem::Fn(function) => (function.syntax(), false),
         RustModuleItem::Type(syntax) => (syntax, true),
+        RustModuleItem::Constant(syntax) => (syntax, false),
     };
     let mut end_line =
         AstNode::from_span(file, span_from_rowan_range(syntax.text_range())).end_line();
@@ -398,6 +433,27 @@ fn build_rust_module_scope_item<'a>(
                 RelationKind::Composition,
             );
             ScopeItemKind::Type
+        }
+        RustModuleItem::Constant(syntax) => {
+            let empty_generics = HashSet::new();
+            let mut const_callees = Vec::new();
+            collect_rust_module_item_refs(
+                syntax,
+                item_by_name,
+                segment_is_type,
+                external_impl_callees,
+                &empty_generics,
+                &mut const_callees,
+            );
+            for target in const_callees {
+                let relation = if segment_is_type[target] {
+                    RelationKind::Composition
+                } else {
+                    RelationKind::Body
+                };
+                extend_references(&mut references, [target], relation);
+            }
+            ScopeItemKind::Constant
         }
     };
     extend_references(
@@ -495,6 +551,7 @@ fn collect_rust_fn_module_references(
 enum RustModuleItem {
     Fn(ast::Fn),
     Type(SyntaxNode),
+    Constant(SyntaxNode),
 }
 
 struct RustImplCallees {
@@ -903,35 +960,9 @@ fn rust_item_signature(node: &SyntaxNode, source: &str) -> Option<String> {
             let fields = rust_fields_summary(struct_item.field_list(), true);
             Some(format!("{}{fields}", header(start, end)))
         }
-        ast::Item::Enum(enum_item) => {
-            let start = enum_item
-                .visibility()
-                .map(|visibility| visibility.syntax().text_range().start())
-                .or_else(|| {
-                    enum_item
-                        .enum_token()
-                        .map(|token| token.text_range().start())
-                })
-                .unwrap_or(item_start);
-            let end = enum_item
-                .variant_list()
-                .map_or(item_end, |variants| variants.syntax().text_range().start());
-            let variants: Vec<String> = enum_item
-                .variant_list()
-                .into_iter()
-                .flat_map(|variants| variants.variants())
-                .filter_map(|variant| {
-                    let name = variant.name()?.text().to_string();
-                    let payload = rust_fields_summary(variant.field_list(), false);
-                    Some(format!("{name}{payload}"))
-                })
-                .collect();
-            Some(format!(
-                "{} {{ {} }}",
-                header(start, end),
-                variants.join(", ")
-            ))
-        }
+        ast::Item::Enum(enum_item) => Some(rust_enum_item_signature(
+            &enum_item, item_start, item_end, source,
+        )),
         ast::Item::Trait(trait_item) => {
             let start = trait_item
                 .visibility()
@@ -947,8 +978,99 @@ fn rust_item_signature(node: &SyntaxNode, source: &str) -> Option<String> {
                 .map_or(item_end, |items| items.syntax().text_range().start());
             Some(header(start, end))
         }
+        ast::Item::Const(const_item) => Some(rust_value_item_signature(
+            const_item.visibility(),
+            const_item.const_token(),
+            value_signature_end(
+                const_item.ty(),
+                const_item.eq_token(),
+                const_item.body(),
+                item_end,
+            ),
+            item_start,
+            source,
+        )),
+        ast::Item::Static(static_item) => Some(rust_value_item_signature(
+            static_item.visibility(),
+            static_item
+                .unsafe_token()
+                .or_else(|| static_item.static_token()),
+            value_signature_end(
+                static_item.ty(),
+                static_item.eq_token(),
+                static_item.body(),
+                item_end,
+            ),
+            item_start,
+            source,
+        )),
         _ => None,
     }
+}
+
+fn rust_enum_item_signature(
+    enum_item: &ast::Enum,
+    item_start: ra_ap_syntax::TextSize,
+    item_end: ra_ap_syntax::TextSize,
+    source: &str,
+) -> String {
+    let start = enum_item
+        .visibility()
+        .map(|visibility| visibility.syntax().text_range().start())
+        .or_else(|| {
+            enum_item
+                .enum_token()
+                .map(|token| token.text_range().start())
+        })
+        .unwrap_or(item_start);
+    let end = enum_item
+        .variant_list()
+        .map_or(item_end, |variants| variants.syntax().text_range().start());
+    let variants: Vec<String> = enum_item
+        .variant_list()
+        .into_iter()
+        .flat_map(|variants| variants.variants())
+        .filter_map(|variant| {
+            let name = variant.name()?.text().to_string();
+            let payload = rust_fields_summary(variant.field_list(), false);
+            Some(format!("{name}{payload}"))
+        })
+        .collect();
+    let header_text =
+        collapse_whitespace(source[usize::from(start)..usize::from(end)].trim_end_matches(';'));
+    format!("{header_text} {{ {} }}", variants.join(", "))
+}
+
+fn rust_value_item_signature(
+    visibility: Option<ast::Visibility>,
+    leading_keyword: Option<SyntaxToken>,
+    end: ra_ap_syntax::TextSize,
+    item_start: ra_ap_syntax::TextSize,
+    source: &str,
+) -> String {
+    let start = visibility
+        .map(|modifier| modifier.syntax().text_range().start())
+        .or_else(|| leading_keyword.map(|token| token.text_range().start()))
+        .unwrap_or(item_start);
+    collapse_whitespace(
+        source[usize::from(start)..usize::from(end)]
+            .trim_end()
+            .trim_end_matches(';')
+            .trim_end_matches('='),
+    )
+}
+
+fn value_signature_end(
+    type_annotation: Option<ast::Type>,
+    equals_token: Option<SyntaxToken>,
+    initializer: Option<ast::Expr>,
+    item_end: ra_ap_syntax::TextSize,
+) -> ra_ap_syntax::TextSize {
+    type_annotation
+        .map(|annotation| annotation.syntax().text_range().end())
+        .or_else(|| equals_token.map(|token| token.text_range().start()))
+        .or_else(|| initializer.map(|body| body.syntax().text_range().start()))
+        .unwrap_or(item_end)
 }
 
 /// Renders a struct or variant field list as ` { name: Type, ... }` or `(Type, ...)`.
@@ -1098,70 +1220,63 @@ pub fn collect_intra_file_ref_sites<'a>(
         if file.is_in_rust_inline_test(start_offset) {
             continue;
         }
-        match item {
+        let (type_name, type_syntax) = match &item {
             ast::Item::Fn(function) => {
-                let Some(name_node) = function.name() else {
-                    continue;
-                };
-                let fn_name = name_node.text().trim();
-                if module_items.contains(fn_name) {
-                    collect_rust_fn_intra_refs(
-                        &function,
-                        file,
-                        targets,
-                        fn_name,
-                        None,
-                        &empty_generics,
-                        &mut out,
-                    );
+                if let Some(name_node) = function.name() {
+                    let fn_name = name_node.text().trim();
+                    if module_items.contains(fn_name) {
+                        collect_rust_fn_intra_refs(
+                            function,
+                            file,
+                            targets,
+                            fn_name,
+                            None,
+                            &empty_generics,
+                            &mut out,
+                        );
+                    }
                 }
+                continue;
             }
-            ast::Item::Struct(struct_item) => {
-                collect_rust_type_item_intra_refs(
-                    struct_item.name(),
-                    struct_item.syntax(),
+            ast::Item::Const(const_item) => {
+                collect_rust_const_item_intra_refs(
+                    const_item.name(),
+                    const_item.syntax(),
                     file,
                     targets,
+                    &empty_generics,
                     &mut out,
                 );
+                continue;
             }
-            ast::Item::Enum(enum_item) => {
-                collect_rust_type_item_intra_refs(
-                    enum_item.name(),
-                    enum_item.syntax(),
+            ast::Item::Static(static_item) => {
+                collect_rust_const_item_intra_refs(
+                    static_item.name(),
+                    static_item.syntax(),
                     file,
                     targets,
+                    &empty_generics,
                     &mut out,
                 );
-            }
-            ast::Item::Union(union_item) => {
-                collect_rust_type_item_intra_refs(
-                    union_item.name(),
-                    union_item.syntax(),
-                    file,
-                    targets,
-                    &mut out,
-                );
-            }
-            ast::Item::Trait(trait_item) => {
-                collect_rust_type_item_intra_refs(
-                    trait_item.name(),
-                    trait_item.syntax(),
-                    file,
-                    targets,
-                    &mut out,
-                );
+                continue;
             }
             ast::Item::Impl(impl_item) => {
-                collect_rust_impl_intra_refs(&impl_item, file, targets, &mut out);
+                collect_rust_impl_intra_refs(impl_item, file, targets, &mut out);
+                continue;
             }
             ast::Item::Module(module) => {
                 if let Some(body) = module.item_list() {
                     items.extend(body.items());
                 }
+                continue;
             }
-            _ => {}
-        }
+            ast::Item::Struct(struct_item) => (struct_item.name(), struct_item.syntax()),
+            ast::Item::Enum(enum_item) => (enum_item.name(), enum_item.syntax()),
+            ast::Item::Union(union_item) => (union_item.name(), union_item.syntax()),
+            ast::Item::Trait(trait_item) => (trait_item.name(), trait_item.syntax()),
+            _ => continue,
+        };
+        collect_rust_type_item_intra_refs(type_name, type_syntax, file, targets, &mut out);
     }
     out
 }
@@ -1175,6 +1290,40 @@ struct IntraRefTargets<'a> {
     module_types: &'a HashSet<&'a str>,
     /// `Type::method` names of the file's methods.
     method_items: &'a HashSet<String>,
+}
+
+fn collect_rust_const_item_intra_refs(
+    name: Option<ast::Name>,
+    syntax: &SyntaxNode,
+    file: &ParsedFile,
+    targets: IntraRefTargets<'_>,
+    empty_generics: &HashSet<String>,
+    out: &mut Vec<IntraFileReference>,
+) {
+    let Some(name_node) = name else {
+        return;
+    };
+    let item_name = name_node.text().trim();
+    if targets.module_items.contains(item_name) {
+        let start_idx = out.len();
+        collect_rust_node_intra_refs(
+            syntax,
+            file,
+            targets,
+            IntraRefScope {
+                source_symbol: item_name,
+                enclosing_self_type: None,
+                local_names: empty_generics,
+            },
+            RelationKind::Body,
+            out,
+        );
+        for added in &mut out[start_idx..] {
+            if targets.module_types.contains(added.target_symbol.as_str()) {
+                added.kind = RelationKind::Composition;
+            }
+        }
+    }
 }
 
 fn collect_rust_type_item_intra_refs(
