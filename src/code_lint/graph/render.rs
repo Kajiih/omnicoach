@@ -4,8 +4,10 @@
 //! `docs/dev/abstraction_graph/08_stage_c_agent_formats.md`.
 
 use super::index::{DirectedEdge, DirectedGroupEdge, GraphIndex};
-use super::model::{AbstractionGraph, DeclarationNode, EdgeReason, GroupKind, GroupNode, NodeId};
-use crate::code_lint::ast::FindingFact;
+use super::model::{
+    AbstractionGraph, DeclarationKind, DeclarationNode, EdgeReason, GroupKind, GroupNode, NodeId,
+};
+use crate::code_lint::ast::{FindingFact, Visibility};
 use std::fmt::Write as _;
 
 /// Alpha status banner included in rendered `# Scope:` headers.
@@ -30,17 +32,38 @@ pub enum OutputFormat {
     CompactBi,
 }
 
+/// Serializes a single-file `graph` into `format`, including a scope notice clarifying that
+/// single-file graphs contain intra-file edges only.
+#[must_use]
+pub(super) fn render_single_file_graph(graph: &AbstractionGraph, format: OutputFormat) -> String {
+    render_graph_inner(graph, format, true)
+}
+
 /// Serializes `graph` into `format`.
 #[must_use]
 pub(super) fn render_graph(graph: &AbstractionGraph, format: OutputFormat) -> String {
+    render_graph_inner(graph, format, false)
+}
+
+fn render_graph_inner(
+    graph: &AbstractionGraph,
+    format: OutputFormat,
+    single_file_scope: bool,
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# Scope: {} {ALPHA_BANNER}", graph.title());
+    let comment_prefix = match format {
+        OutputFormat::AnnotatedStubs => "// ",
+        OutputFormat::CompactBi => "",
+    };
+    if single_file_scope {
+        let _ = writeln!(
+            out,
+            "{comment_prefix}Intra-file edges only; run `omnicoach graph slice <symbol>` for cross-module callers."
+        );
+    }
     let graph_index = GraphIndex::new(graph);
     if omits_module_edges(&graph_index) {
-        let comment_prefix = match format {
-            OutputFormat::AnnotatedStubs => "// ",
-            OutputFormat::CompactBi => "",
-        };
         let _ = writeln!(
             out,
             "{comment_prefix}Module edges omitted for {} modules; graph a single component or submodule directory to see them.",
@@ -417,6 +440,11 @@ fn write_decl(
     if !in_edges.is_empty() {
         let formatted = format_declaration_edges(&declaration.id, in_edges, graph_index);
         let _ = writeln!(out, "{edge_prefix}<- {formatted}");
+    } else if graph_index.module_group_count() > 0
+        && declaration.visibility == Visibility::Public
+        && declaration.kind != DeclarationKind::Method
+    {
+        let _ = writeln!(out, "{edge_prefix}<- (0 in-scope callers)");
     }
     for finding in &declaration.findings {
         let _ = writeln!(out, "{edge_prefix}! {}", format_finding(finding));
@@ -784,6 +812,157 @@ mod tests {
         assert!(twenty.contains("### Module [L0] unit_19 (src/unit_19.rs)\n"));
         assert!(twenty.contains("-> unit_1[xmod x1,inferred]\n"));
         assert!(twenty_one.contains("... (+19 more modules in Core)\n"));
+    }
+
+    #[test]
+    fn single_file_graph_renders_scope_notice_without_zero_caller_marker() {
+        let single = render_single_file_graph(&fixture_graph(), OutputFormat::AnnotatedStubs);
+
+        assert!(single.contains("Intra-file edges only; run `omnicoach graph slice <symbol>`"));
+        assert!(!single.contains("(0 in-scope callers)"));
+    }
+
+    #[test]
+    fn project_graph_marks_zero_caller_public_items_inside_submodules() {
+        let dead_const = DeclarationNode {
+            id: NodeId::new("m0:s0:i0:LEGACY_GRAPH"),
+            name: "LEGACY_GRAPH".to_owned(),
+            signature: Some("pub const LEGACY_GRAPH: &[usize]".to_owned()),
+            scope_id: 0,
+            kind: DeclarationKind::Constant,
+            visibility: Visibility::Public,
+            is_constructor: false,
+            has_receiver: false,
+            location: SourceLocation {
+                file: "src/arch.rs".to_owned(),
+                line: 4,
+                column: 1,
+                end_line: 4,
+            },
+            owners: vec![NodeId::new("m0:s0:i0:LEGACY_GRAPH")],
+            recursion_group: 0,
+            level: 0,
+            findings: Vec::new(),
+        };
+        let mod_group = GroupNode {
+            id: NodeId::new("mod:arch"),
+            label: "arch".to_owned(),
+            kind: GroupKind::Module {
+                path: "arch".to_owned(),
+                file: "src/arch.rs".to_owned(),
+                declared_dependencies: Some(Vec::new()),
+            },
+            recursion_group: 0,
+            level: 0,
+            children: vec![NodeId::new("m0:s0:i0:LEGACY_GRAPH")],
+        };
+        let sub_group = GroupNode {
+            id: NodeId::new("sub:Core/foundation"),
+            label: "foundation".to_owned(),
+            kind: GroupKind::Submodule {
+                path: "foundation".to_owned(),
+                declared_dependencies: Vec::new(),
+            },
+            recursion_group: 0,
+            level: 0,
+            children: vec![NodeId::new("mod:arch")],
+        };
+        let project_graph = AbstractionGraph::new(GraphParts {
+            title: "project".to_owned(),
+            declarations: vec![dead_const],
+            groups: vec![sub_group, mod_group],
+            ordering_edges: Vec::new(),
+            reference_edges: Vec::new(),
+            summary_edges: Vec::new(),
+        })
+        .expect("valid project graph");
+
+        let rendered_project = render_graph(&project_graph, OutputFormat::AnnotatedStubs);
+
+        assert!(rendered_project.contains("### Submodule [L0] foundation (depends_on=[])"));
+        assert!(rendered_project.contains("#### Module [L0] arch (depends_on=[]) (src/arch.rs)"));
+        assert!(rendered_project.contains("//   <- (0 in-scope callers)"));
+    }
+
+    #[test]
+    fn project_graph_skips_zero_caller_marker_on_private_and_method_declarations() {
+        let priv_fn = DeclarationNode {
+            id: NodeId::new("m0:s0:i0:helper"),
+            name: "helper".to_owned(),
+            signature: Some("fn helper()".to_owned()),
+            scope_id: 0,
+            kind: DeclarationKind::Callable,
+            visibility: Visibility::Private,
+            is_constructor: false,
+            has_receiver: false,
+            location: SourceLocation {
+                file: "src/arch.rs".to_owned(),
+                line: 2,
+                column: 1,
+                end_line: 2,
+            },
+            owners: Vec::new(),
+            recursion_group: 0,
+            level: 0,
+            findings: Vec::new(),
+        };
+        let pub_method = DeclarationNode {
+            id: NodeId::new("m0:s1:i0:Spec::check"),
+            name: "Spec::check".to_owned(),
+            signature: Some("pub fn check(&self)".to_owned()),
+            scope_id: 1,
+            kind: DeclarationKind::Method,
+            visibility: Visibility::Public,
+            is_constructor: false,
+            has_receiver: true,
+            location: SourceLocation {
+                file: "src/arch.rs".to_owned(),
+                line: 6,
+                column: 1,
+                end_line: 6,
+            },
+            owners: vec![NodeId::new("m0:s1:i0:Spec::check")],
+            recursion_group: 0,
+            level: 0,
+            findings: Vec::new(),
+        };
+        let unowned_group = GroupNode {
+            id: NodeId::new("m0:unowned"),
+            label: "unowned".to_owned(),
+            kind: GroupKind::Unowned,
+            recursion_group: 0,
+            level: 0,
+            children: vec![NodeId::new("m0:s0:i0:helper")],
+        };
+        let mod_group = GroupNode {
+            id: NodeId::new("mod:arch"),
+            label: "arch".to_owned(),
+            kind: GroupKind::Module {
+                path: "arch".to_owned(),
+                file: "src/arch.rs".to_owned(),
+                declared_dependencies: None,
+            },
+            recursion_group: 0,
+            level: 0,
+            children: vec![
+                NodeId::new("m0:unowned"),
+                NodeId::new("m0:s1:i0:Spec::check"),
+            ],
+        };
+        let project_graph = AbstractionGraph::new(GraphParts {
+            title: "project".to_owned(),
+            declarations: vec![priv_fn, pub_method],
+            groups: vec![mod_group, unowned_group],
+            ordering_edges: Vec::new(),
+            reference_edges: Vec::new(),
+            summary_edges: Vec::new(),
+        })
+        .expect("valid project graph");
+
+        let rendered = render_graph(&project_graph, OutputFormat::AnnotatedStubs);
+
+        assert!(rendered.contains("// === [L0] unowned ==="));
+        assert!(!rendered.contains("(0 in-scope callers)"));
     }
 
     fn module_depth_fixture_graph(module_count: usize) -> AbstractionGraph {

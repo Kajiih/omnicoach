@@ -78,6 +78,7 @@ struct AccumulatedProjectModules {
     reference_edges: Vec<ReferenceEdge>,
     inner_summaries: Vec<SummaryEdge>,
     decl_by_mod_and_name: BTreeMap<(String, String), NodeId>,
+    source_owners_by_mod_and_name: BTreeMap<(String, String), Vec<NodeId>>,
     next_scope_id: usize,
 }
 
@@ -93,6 +94,7 @@ fn accumulate_project_modules(
         reference_edges: Vec::new(),
         inner_summaries: Vec::new(),
         decl_by_mod_and_name: BTreeMap::new(),
+        source_owners_by_mod_and_name: BTreeMap::new(),
         next_scope_id: 0,
     };
 
@@ -187,16 +189,19 @@ fn extract_public_surface_module(
         }
     }
 
+    let projected_sources = record_public_surface_source_owners(
+        &module_fact.module_path,
+        &module_graph,
+        &kept_old_to_new,
+        acc,
+    );
     let mod_ordering = project_public_surface_ordering_edges(&module_graph, &kept_old_to_new);
     acc.reference_edges
-        .extend(module_graph.reference_edges().iter().filter_map(|edge| {
-            Some(ReferenceEdge {
-                source: kept_old_to_new.get(&edge.source)?.clone(),
-                target: kept_old_to_new.get(&edge.target)?.clone(),
-                kind: edge.kind,
-                lines: edge.lines.clone(),
-            })
-        }));
+        .extend(project_public_surface_reference_edges(
+            &module_graph,
+            &kept_old_to_new,
+            &projected_sources,
+        ));
 
     let pub_ids: Vec<NodeId> = pub_decls.iter().map(|decl| decl.id.clone()).collect();
     let pairs: Vec<(NodeId, NodeId)> = mod_ordering
@@ -212,6 +217,83 @@ fn extract_public_surface_module(
     acc.declarations.extend(pub_decls);
     acc.ordering_edges.extend(mod_ordering);
     Ok(children)
+}
+
+fn record_public_surface_source_owners(
+    module_path: &str,
+    module_graph: &AbstractionGraph,
+    kept_old_to_new: &BTreeMap<NodeId, NodeId>,
+    acc: &mut AccumulatedProjectModules,
+) -> BTreeMap<NodeId, Vec<NodeId>> {
+    let type_owners_by_name: BTreeMap<&str, &[NodeId]> = module_graph
+        .declarations()
+        .iter()
+        .filter(|decl| decl.kind == DeclarationKind::Type)
+        .map(|decl| (decl.name.as_str(), decl.owners.as_slice()))
+        .collect();
+    let mut by_old_id = BTreeMap::new();
+    for decl in module_graph.declarations() {
+        let projected: Vec<NodeId> = if let Some(kept_id) = kept_old_to_new.get(&decl.id) {
+            vec![kept_id.clone()]
+        } else if let Some((type_name, _)) = decl.name.split_once("::") {
+            let fallback_owners = type_owners_by_name
+                .get(type_name)
+                .copied()
+                .unwrap_or(decl.owners.as_slice());
+            acc.decl_by_mod_and_name
+                .get(&(module_path.to_owned(), type_name.to_owned()))
+                .map_or_else(
+                    || {
+                        fallback_owners
+                            .iter()
+                            .filter_map(|owner_id| kept_old_to_new.get(owner_id).cloned())
+                            .collect()
+                    },
+                    |type_id| vec![type_id.clone()],
+                )
+        } else {
+            decl.owners
+                .iter()
+                .filter_map(|owner_id| kept_old_to_new.get(owner_id).cloned())
+                .collect()
+        };
+        if !projected.is_empty() {
+            acc.source_owners_by_mod_and_name.insert(
+                (module_path.to_owned(), decl.name.clone()),
+                projected.clone(),
+            );
+            by_old_id.insert(decl.id.clone(), projected);
+        }
+    }
+    by_old_id
+}
+
+fn project_public_surface_reference_edges(
+    module_graph: &AbstractionGraph,
+    kept_old_to_new: &BTreeMap<NodeId, NodeId>,
+    projected_sources: &BTreeMap<NodeId, Vec<NodeId>>,
+) -> Vec<ReferenceEdge> {
+    let mut projected = Vec::new();
+    for edge in module_graph.reference_edges() {
+        let (Some(target), Some(sources)) = (
+            kept_old_to_new.get(&edge.target),
+            projected_sources.get(&edge.source),
+        ) else {
+            continue;
+        };
+        for source in sources {
+            if source != target {
+                projected.push(ReferenceEdge {
+                    source: source.clone(),
+                    target: target.clone(),
+                    kind: edge.kind,
+                    lines: edge.lines.clone(),
+                });
+            }
+        }
+    }
+    merge_reference_edges(&mut projected);
+    projected
 }
 
 fn project_public_surface_ordering_edges(
@@ -295,6 +377,10 @@ fn extract_full_module(
         acc.decl_by_mod_and_name.insert(
             (module_fact.module_path.clone(), decl.name.clone()),
             new_id.clone(),
+        );
+        acc.source_owners_by_mod_and_name.insert(
+            (module_fact.module_path.clone(), decl.name.clone()),
+            vec![new_id.clone()],
         );
         acc.declarations.push(DeclarationNode {
             id: new_id,
@@ -418,35 +504,51 @@ fn append_cross_module_decl_edges(project: &ProjectFacts, acc: &mut AccumulatedP
         let (Some(src_sym), Some(dst_sym)) = (&rel.source_symbol, &rel.target_symbol) else {
             continue;
         };
-        let Some(source_id) = resolve_symbol_or_owner(src_sym, |sym| {
-            acc.decl_by_mod_and_name
+        let source_ids = resolve_source_owner_ids(src_sym, |sym| {
+            acc.source_owners_by_mod_and_name
                 .get(&(rel.source_module.clone(), sym.to_owned()))
-        }) else {
+                .map(Vec::as_slice)
+        });
+        if source_ids.is_empty() {
             continue;
-        };
+        }
         let target_ids = resolve_symbol_and_owner_targets(dst_sym, |sym| {
             acc.decl_by_mod_and_name
                 .get(&(rel.target_module.clone(), sym.to_owned()))
         });
-        for target_id in target_ids {
-            if source_id != target_id {
-                acc.reference_edges.push(ReferenceEdge {
-                    source: source_id.clone(),
-                    target: target_id.clone(),
-                    kind: RelationKind::Body,
-                    lines: vec![rel.line],
-                });
-                acc.ordering_edges.push(OrderingEdge {
-                    higher: source_id.clone(),
-                    lower: target_id,
-                    reason: EdgeReason::CrossModule,
-                });
+        for source_id in &source_ids {
+            for target_id in &target_ids {
+                if source_id != target_id {
+                    acc.reference_edges.push(ReferenceEdge {
+                        source: source_id.clone(),
+                        target: target_id.clone(),
+                        kind: RelationKind::Body,
+                        lines: vec![rel.line],
+                    });
+                    acc.ordering_edges.push(OrderingEdge {
+                        higher: source_id.clone(),
+                        lower: target_id.clone(),
+                        reason: EdgeReason::CrossModule,
+                    });
+                }
             }
         }
     }
     acc.ordering_edges.sort();
     acc.ordering_edges.dedup();
     merge_reference_edges(&mut acc.reference_edges);
+}
+
+fn resolve_source_owner_ids<'a, F>(symbol: &str, lookup: F) -> Vec<NodeId>
+where
+    F: Fn(&str) -> Option<&'a [NodeId]>,
+{
+    lookup(symbol)
+        .or_else(|| {
+            let owner = symbol.split("::").next()?;
+            lookup(owner)
+        })
+        .map_or_else(Vec::new, <[NodeId]>::to_vec)
 }
 
 struct BuiltContainerHierarchy {
@@ -2580,6 +2682,108 @@ mod tests {
         }));
         assert_eq!(sibling_edge_count, 1);
         assert!(!has_ancestor_module_edge);
+    }
+
+    #[test]
+    fn public_surface_projects_private_caller_edges_onto_public_owners() {
+        let ir_file = crate::code_lint::ast::ParsedFile::rust(
+            "pub const DEAD_CATALOG: &[usize] = &[];\npub fn make_node() -> usize { 1 }\n",
+        );
+        let ir_scopes = crate::code_lint::ast::collect_scope_facts(&ir_file);
+        let ir_refs = crate::code_lint::ast::collect_intra_file_references(&ir_file, &ir_scopes);
+
+        let plan_file = crate::code_lint::ast::ParsedFile::rust(indoc::indoc! {"
+            pub struct PlanRunner;
+            impl PlanRunner {
+                pub fn reset(&self) -> Self { PlanRunner }
+            }
+            pub fn build_plan() -> usize { helper_step() }
+            fn helper_step() -> usize {
+                let worker = PrivateWorker;
+                worker.run()
+            }
+            struct PrivateWorker;
+            impl PrivateWorker {
+                fn run(&self) -> usize { intra_target() }
+            }
+            pub fn intra_target() -> usize { 1 }
+        "});
+        let plan_scopes = crate::code_lint::ast::collect_scope_facts(&plan_file);
+        let plan_refs =
+            crate::code_lint::ast::collect_intra_file_references(&plan_file, &plan_scopes);
+
+        let project = ProjectFacts {
+            title: "public_surface_owners".to_owned(),
+            has_declared_architecture: false,
+            components: Vec::new(),
+            modules: vec![
+                ModuleFact {
+                    module_path: "core::ir".to_owned(),
+                    path: "src/core/ir.rs".to_owned(),
+                    component: "Core".to_owned(),
+                    submodule_path: Vec::new(),
+                    scopes: ir_scopes,
+                    intra_file_refs: ir_refs,
+                },
+                ModuleFact {
+                    module_path: "core::plan".to_owned(),
+                    path: "src/core/plan.rs".to_owned(),
+                    component: "Core".to_owned(),
+                    submodule_path: Vec::new(),
+                    scopes: plan_scopes,
+                    intra_file_refs: plan_refs,
+                },
+            ],
+            cross_module_refs: vec![CrossModuleRefFact {
+                source_module: "core::plan".to_owned(),
+                source_symbol: Some("PrivateWorker::run".to_owned()),
+                target_module: "core::ir".to_owned(),
+                target_symbol: Some("make_node".to_owned()),
+                line: 13,
+            }],
+        };
+
+        let pub_graph = build_project_graph(&project, ProjectDepth::PublicSurface)
+            .expect("valid public-surface graph");
+        let decl_id = |name: &str| {
+            pub_graph
+                .declarations()
+                .iter()
+                .find(|decl| decl.name == name)
+                .unwrap_or_else(|| panic!("missing declaration {name}"))
+                .id
+                .clone()
+        };
+        let make_node_id = decl_id("make_node");
+        let dead_catalog_id = decl_id("DEAD_CATALOG");
+        let build_plan_id = decl_id("build_plan");
+        let intra_target_id = decl_id("intra_target");
+        let plan_runner_id = decl_id("PlanRunner");
+
+        assert!(
+            pub_graph
+                .reference_edges()
+                .iter()
+                .any(|edge| { edge.source == build_plan_id && edge.target == make_node_id })
+        );
+        assert!(
+            pub_graph
+                .reference_edges()
+                .iter()
+                .any(|edge| { edge.source == build_plan_id && edge.target == intra_target_id })
+        );
+        assert!(
+            !pub_graph
+                .reference_edges()
+                .iter()
+                .any(|edge| { edge.source == plan_runner_id && edge.target == plan_runner_id })
+        );
+        assert!(
+            !pub_graph
+                .reference_edges()
+                .iter()
+                .any(|edge| edge.target == dead_catalog_id)
+        );
     }
 
     fn recursive_submodule_fixture_project() -> ProjectFacts {

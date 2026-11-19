@@ -16,7 +16,7 @@ pub use self::query::{FindQueryOptions, SliceQueryOptions, run_find_query, run_s
 pub use self::render::OutputFormat;
 
 use self::builder::{build_file_graph, build_project_graph};
-use self::render::render_graph;
+use self::render::{render_graph, render_single_file_graph};
 
 use crate::code_lint::ast::{ParsedFile, collect_intra_file_references, collect_scope_facts};
 use crate::code_lint::project::{
@@ -80,7 +80,7 @@ fn generate_single_file_graph(path: &Path, format: OutputFormat) -> anyhow::Resu
     let intra_refs = collect_intra_file_references(&parsed, &scopes);
     let display_path = path.strip_prefix("./").unwrap_or(path);
     let graph = build_file_graph(display_path, &scopes, &intra_refs)?;
-    Ok(render_graph(&graph, format))
+    Ok(render_single_file_graph(&graph, format))
 }
 
 fn generate_project_graphs(
