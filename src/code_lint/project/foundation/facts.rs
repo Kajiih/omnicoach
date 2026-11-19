@@ -1,6 +1,6 @@
 //! Language-agnostic multi-file project fact models and module-graph helpers.
 
-use super::architecture::ArchitectureSpec;
+use super::architecture::{ArchitectureSpec, SubmoduleSpec};
 use crate::code_lint::ast::{IntraFileReference, ScopeFacts};
 use crate::diagnostic::Language;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -91,11 +91,26 @@ impl ProjectFacts {
                     })
                     .map(str::to_owned)
                     .collect();
+                let active_prefixes: HashSet<Vec<&str>> = modules
+                    .iter()
+                    .filter(|module| module.component == component_spec.name)
+                    .flat_map(|module| {
+                        (1..=module.submodule_path.len()).map(|depth| {
+                            module.submodule_path[..depth]
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<Vec<&str>>()
+                        })
+                    })
+                    .collect();
+                let submodules =
+                    build_submodule_facts(&component_spec.submodules, &active_prefixes, &[], scope);
                 seen_components.insert(component_spec.name.clone());
                 components.push(ComponentFact {
                     name: component_spec.name.clone(),
                     declared_dependencies: Some(declared_dependencies),
                     allowed_dependencies,
+                    submodules,
                 });
             }
         }
@@ -107,6 +122,7 @@ impl ProjectFacts {
                     name: module.component.clone(),
                     declared_dependencies: None,
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 });
             }
         }
@@ -121,19 +137,79 @@ impl ProjectFacts {
     }
 }
 
-/// An architectural component, its direct `depends_on` list (when declared), and its allowed
-/// dependency targets within this graph.
+fn build_submodule_facts(
+    specs: &[SubmoduleSpec],
+    active_prefixes: &HashSet<Vec<&str>>,
+    parent_prefix: &[&str],
+    scope: ProjectGraphScope,
+) -> Vec<ComponentFact> {
+    if specs.is_empty() {
+        return Vec::new();
+    }
+    let included: HashSet<&str> = specs
+        .iter()
+        .filter(|sub| match scope {
+            ProjectGraphScope::FullProject => true,
+            ProjectGraphScope::Subset => {
+                let mut candidate_prefix = parent_prefix.to_vec();
+                candidate_prefix.push(sub.name.as_str());
+                active_prefixes.contains(&candidate_prefix)
+            }
+        })
+        .map(|sub| sub.name.as_str())
+        .collect();
+
+    specs
+        .iter()
+        .filter(|sub| included.contains(sub.name.as_str()))
+        .map(|sub| {
+            let mut next_prefix = parent_prefix.to_vec();
+            next_prefix.push(sub.name.as_str());
+            let declared_dependencies = sub
+                .depends_on
+                .iter()
+                .filter(|dep| included.contains(dep.as_str()))
+                .cloned()
+                .collect();
+            let allowed_dependencies = specs
+                .iter()
+                .map(|candidate| candidate.name.as_str())
+                .filter(|&candidate| {
+                    candidate != sub.name
+                        && included.contains(candidate)
+                        && sub.allows_sibling_dependency(candidate)
+                })
+                .map(str::to_owned)
+                .collect();
+            ComponentFact {
+                name: sub.name.clone(),
+                declared_dependencies: Some(declared_dependencies),
+                allowed_dependencies,
+                submodules: build_submodule_facts(
+                    &sub.submodules,
+                    active_prefixes,
+                    &next_prefix,
+                    scope,
+                ),
+            }
+        })
+        .collect()
+}
+
+/// An architectural component or recursive submodule container, its direct `depends_on` list
+/// (when declared), and its allowed dependency targets within its parent scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::code_lint) struct ComponentFact {
-    /// Component identifier (e.g. `"CodeLintAst"` or `"zoneinfo"`).
+    /// Component or submodule identifier (e.g. `"CodeLintAst"`, `"foundation"`, or `"zoneinfo"`).
     pub(in crate::code_lint) name: String,
-    /// Directly declared dependency component names present in this graph (`Some(...)` when this
-    /// component is explicitly declared in architecture, `None` when inferred or unmapped).
+    /// Directly declared dependency names present in this graph (`Some(...)` when explicitly
+    /// declared in architecture, `None` when inferred or unmapped).
     pub(in crate::code_lint) declared_dependencies: Option<Vec<String>>,
-    /// Active component names in this graph to which [`ArchitectureSpec::allows_dependency`]
-    /// permits references from `name` (honoring `transitive-dependencies` and elided subset
-    /// intermediates).
+    /// Active sibling names in this graph to which architecture permits references from `name`
+    /// (honoring `transitive-dependencies` and elided subset intermediates).
     pub(in crate::code_lint) allowed_dependencies: Vec<String>,
+    /// Recursive submodule DAG declared inside this component or submodule.
+    pub(in crate::code_lint) submodules: Vec<Self>,
 }
 
 /// One module file within [`ProjectFacts`].
@@ -145,6 +221,8 @@ pub(in crate::code_lint) struct ModuleFact {
     pub(in crate::code_lint) path: String,
     /// Owning component name.
     pub(in crate::code_lint) component: String,
+    /// Matched declared submodule segment chain inside `component` (e.g. `["python", "architecture"]`).
+    pub(in crate::code_lint) submodule_path: Vec<String>,
     /// Per-scope facts inside this module (`scopes[0]` is the module scope).
     pub(in crate::code_lint) scopes: Vec<ScopeFacts>,
     /// Intra-file references between module declarations and methods in this module.
@@ -270,4 +348,67 @@ pub(in crate::code_lint::project) fn resolve_unique_module_paths(
         }
     }
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::code_lint::project::foundation::architecture::build_architecture_spec;
+    use crate::code_lint::project::foundation::config::ArchitectureConfig;
+
+    #[test]
+    fn project_facts_subset_filters_submodule_allowed_dependencies_to_collected_siblings() {
+        let config: ArchitectureConfig = toml::from_str(indoc::indoc! {r#"
+            [[components]]
+            name = "Project"
+            roots = ["proj"]
+            submodules = [
+              { name = "foundation" },
+              { name = "python", depends-on = ["foundation"] },
+              { name = "rust", depends-on = ["foundation"] },
+            ]
+        "#})
+        .expect("valid config");
+        let spec = build_architecture_spec(&config, false).expect("valid spec");
+        let py_mod = ModuleFact {
+            module_path: "proj::python".to_owned(),
+            path: "src/proj/python.rs".to_owned(),
+            component: "Project".to_owned(),
+            submodule_path: vec!["python".to_owned()],
+            scopes: Vec::new(),
+            intra_file_refs: Vec::new(),
+        };
+        let rs_mod = ModuleFact {
+            module_path: "proj::rust".to_owned(),
+            path: "src/proj/rust.rs".to_owned(),
+            component: "Project".to_owned(),
+            submodule_path: vec!["rust".to_owned()],
+            scopes: Vec::new(),
+            intra_file_refs: Vec::new(),
+        };
+
+        let subset_facts = ProjectFacts::build(
+            "subset",
+            Some(&spec),
+            vec![py_mod.clone(), rs_mod.clone()],
+            Vec::new(),
+            ProjectGraphScope::Subset,
+        );
+        let full_facts = ProjectFacts::build(
+            "full",
+            Some(&spec),
+            vec![py_mod, rs_mod],
+            Vec::new(),
+            ProjectGraphScope::FullProject,
+        );
+
+        assert_eq!(
+            subset_facts.components[0].submodules[0].allowed_dependencies,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            full_facts.components[0].submodules[1].allowed_dependencies,
+            vec!["foundation".to_owned()]
+        );
+    }
 }

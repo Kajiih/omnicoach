@@ -105,11 +105,19 @@ pub(super) struct DeclarationNode {
 /// Semantic role of a container group in the containment tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum GroupKind {
-    /// A declared or inferred architectural component containing modules.
+    /// A declared or inferred architectural component containing submodules or modules.
     Component {
         /// Explicitly declared dependency component names from `define_architecture!`, when
         /// the project declares an architectural DAG.
         declared_dependencies: Option<Vec<String>>,
+    },
+    /// A declared recursive intra-component submodule container grouping nested submodules and
+    /// modules.
+    Submodule {
+        /// Slash-joined submodule path within its enclosing component (e.g. `"foundation"`).
+        path: String,
+        /// Explicitly declared sibling submodule dependencies in the same parent scope.
+        declared_dependencies: Vec<String>,
     },
     /// A module or file containing owner/shared/unowned groups or declarations.
     Module {
@@ -117,6 +125,9 @@ pub(super) enum GroupKind {
         path: String,
         /// Relative source file path (such as `src/code_lint/rules/callee_before_caller.rs`).
         file: String,
+        /// Explicitly declared sibling module dependencies when this module corresponds to a leaf
+        /// entry in `modules: { ... }` / `submodules`.
+        declared_dependencies: Option<Vec<String>>,
     },
     /// A public entrypoint or public type `root` together with its exclusive private helpers.
     Owner {
@@ -604,6 +615,7 @@ fn validate_ownership_groups(
             GroupKind::Unowned
             | GroupKind::RecursionGroup { .. }
             | GroupKind::Component { .. }
+            | GroupKind::Submodule { .. }
             | GroupKind::Module { .. } => {}
         }
     }

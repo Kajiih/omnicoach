@@ -489,21 +489,25 @@ mod tests {
                     name: "Core".to_owned(),
                     declared_dependencies: Some(Vec::new()),
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 },
                 ComponentFact {
                     name: "Domain".to_owned(),
                     declared_dependencies: Some(vec!["Core".to_owned()]),
                     allowed_dependencies: vec!["Core".to_owned()],
+                    submodules: Vec::new(),
                 },
                 ComponentFact {
                     name: "Api".to_owned(),
                     declared_dependencies: Some(vec!["Domain".to_owned()]),
                     allowed_dependencies: vec!["Domain".to_owned()],
+                    submodules: Vec::new(),
                 },
                 ComponentFact {
                     name: "pkg".to_owned(),
                     declared_dependencies: None,
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 },
             ]
         );
@@ -615,11 +619,13 @@ mod tests {
                     name: "Core".to_owned(),
                     declared_dependencies: Some(Vec::new()),
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 },
                 ComponentFact {
                     name: "Cli".to_owned(),
                     declared_dependencies: Some(Vec::new()),
                     allowed_dependencies: vec!["Core".to_owned()],
+                    submodules: Vec::new(),
                 },
             ]
         );

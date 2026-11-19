@@ -10,7 +10,7 @@ use crate::code_lint::ast::{
     DeclarationScopeKind, IntraFileReference, ItemFacts, RelationKind, ScopeFacts, ScopeItemKind,
     Visibility, levels, strongly_connected_components,
 };
-use crate::code_lint::project::{ModuleFact, ProjectFacts};
+use crate::code_lint::project::{ComponentFact, ModuleFact, ProjectFacts};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -18,11 +18,11 @@ use std::path::Path;
 /// Configurable hierarchy depth for whole-project abstraction graphs (D28, D29).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProjectDepth {
-    /// `Component -> Module` (modules are leaf-like empty groups).
+    /// `Component -> Submodule* -> Module` (modules are leaf-like empty groups).
     ModuleOnly,
-    /// `Component -> Module -> Public declarations` (public surface only).
+    /// `Component -> Submodule* -> Module -> Public declarations` (public surface only).
     PublicSurface,
-    /// `Component -> Module -> Owner/Shared/Unowned -> Declarations -> TypeMembers`.
+    /// `Component -> Submodule* -> Module -> Owner/Shared/Unowned -> Declarations -> TypeMembers`.
     Full,
 }
 
@@ -37,33 +37,12 @@ pub(super) fn build_project_graph(
 ) -> Result<AbstractionGraph, ModelError> {
     let mut accumulated = accumulate_project_modules(project, depth)?;
     append_cross_module_decl_edges(project, &mut accumulated);
-    let comp_deps = build_component_dep_sets(project);
-    let mod_to_comp: BTreeMap<&str, &str> = project
-        .modules
-        .iter()
-        .map(|module| (module.module_path.as_str(), module.component.as_str()))
-        .collect();
+    let hierarchy = build_project_container_hierarchy(project, accumulated.module_groups);
 
-    let mod_summaries = build_module_summary_edges(project, &mod_to_comp, &comp_deps);
-    assign_intra_component_module_levels(
-        &mut accumulated.module_groups,
-        &mod_to_comp,
-        &mod_summaries,
-    );
-
-    let built_components = build_component_groups_and_summaries(
-        project,
-        &accumulated.module_groups,
-        &mod_to_comp,
-        &comp_deps,
-    );
-
-    let mut groups = built_components.groups;
-    groups.extend(accumulated.module_groups);
+    let mut groups = hierarchy.groups;
     groups.extend(accumulated.inner_groups);
 
-    let mut summary_edges = built_components.summary_edges;
-    summary_edges.extend(mod_summaries);
+    let mut summary_edges = hierarchy.summary_edges;
     summary_edges.extend(accumulated.inner_summaries);
     summary_edges.sort();
 
@@ -77,9 +56,23 @@ pub(super) fn build_project_graph(
     })
 }
 
+/// Builds a validated [`AbstractionGraph`] for a single file's primary scope (`scopes[0]`),
+/// returning an empty graph if `scopes` is empty.
+///
+/// # Errors
+///
+/// Returns [`ModelError`] if the resulting graph violates any Layer L1 invariant.
+pub(super) fn build_file_graph(
+    path: &Path,
+    scopes: &[ScopeFacts],
+    intra_file_refs: &[IntraFileReference],
+) -> Result<AbstractionGraph, ModelError> {
+    build_scope_graph(path, scopes, intra_file_refs, 0)
+}
+
 struct AccumulatedProjectModules {
     declarations: Vec<DeclarationNode>,
-    module_groups: Vec<GroupNode>,
+    module_groups: BTreeMap<NodeId, GroupNode>,
     inner_groups: Vec<GroupNode>,
     ordering_edges: Vec<OrderingEdge>,
     reference_edges: Vec<ReferenceEdge>,
@@ -92,9 +85,9 @@ fn accumulate_project_modules(
     project: &ProjectFacts,
     depth: ProjectDepth,
 ) -> Result<AccumulatedProjectModules, ModelError> {
-    let mut acc = AccumulatedProjectModules {
+    let mut accumulated = AccumulatedProjectModules {
         declarations: Vec::new(),
-        module_groups: Vec::new(),
+        module_groups: BTreeMap::new(),
         inner_groups: Vec::new(),
         ordering_edges: Vec::new(),
         reference_edges: Vec::new(),
@@ -108,27 +101,31 @@ fn accumulate_project_modules(
         let children = match depth {
             ProjectDepth::ModuleOnly => Vec::new(),
             ProjectDepth::PublicSurface => {
-                extract_public_surface_module(module_idx, module_fact, &mut acc)?
+                extract_public_surface_module(module_idx, module_fact, &mut accumulated)?
             }
-            ProjectDepth::Full => extract_full_module(module_idx, module_fact, &mut acc)?,
+            ProjectDepth::Full => extract_full_module(module_idx, module_fact, &mut accumulated)?,
         };
-        acc.module_groups.push(GroupNode {
-            id: mod_group_id,
-            label: module_fact.module_path.clone(),
-            kind: GroupKind::Module {
-                path: module_fact.module_path.clone(),
-                file: module_fact.path.clone(),
+        accumulated.module_groups.insert(
+            mod_group_id.clone(),
+            GroupNode {
+                id: mod_group_id,
+                label: module_fact.module_path.clone(),
+                kind: GroupKind::Module {
+                    path: module_fact.module_path.clone(),
+                    file: module_fact.path.clone(),
+                    declared_dependencies: None,
+                },
+                recursion_group: 0,
+                level: 0,
+                children,
             },
-            recursion_group: 0,
-            level: 0,
-            children,
-        });
+        );
     }
 
-    sort_declarations(&mut acc.declarations);
-    acc.ordering_edges.sort();
-    acc.reference_edges.sort();
-    Ok(acc)
+    sort_declarations(&mut accumulated.declarations);
+    accumulated.ordering_edges.sort();
+    accumulated.reference_edges.sort();
+    Ok(accumulated)
 }
 
 fn extract_public_surface_module(
@@ -374,9 +371,21 @@ fn prefix_group_kind(prefix: &str, kind: &GroupKind) -> GroupKind {
         } => GroupKind::Component {
             declared_dependencies: declared_dependencies.clone(),
         },
-        GroupKind::Module { path, file } => GroupKind::Module {
+        GroupKind::Submodule {
+            path,
+            declared_dependencies,
+        } => GroupKind::Submodule {
+            path: path.clone(),
+            declared_dependencies: declared_dependencies.clone(),
+        },
+        GroupKind::Module {
+            path,
+            file,
+            declared_dependencies,
+        } => GroupKind::Module {
             path: path.clone(),
             file: file.clone(),
+            declared_dependencies: declared_dependencies.clone(),
         },
         GroupKind::Owner { root } => GroupKind::Owner {
             root: prefix_node_id(prefix, root),
@@ -440,208 +449,476 @@ fn append_cross_module_decl_edges(project: &ProjectFacts, acc: &mut AccumulatedP
     merge_reference_edges(&mut acc.reference_edges);
 }
 
-struct ComponentDepSets<'a> {
-    direct: BTreeSet<(&'a str, &'a str)>,
-    allowed: BTreeSet<(&'a str, &'a str)>,
-}
-
-fn build_component_dep_sets(project: &ProjectFacts) -> ComponentDepSets<'_> {
-    let mut direct = BTreeSet::new();
-    let mut allowed = BTreeSet::new();
-    for comp in &project.components {
-        if let Some(ref deps) = comp.declared_dependencies {
-            for dep in deps {
-                direct.insert((comp.name.as_str(), dep.as_str()));
-            }
-        }
-        for dep in &comp.allowed_dependencies {
-            allowed.insert((comp.name.as_str(), dep.as_str()));
-        }
-    }
-    ComponentDepSets { direct, allowed }
-}
-
-fn build_module_summary_edges(
-    project: &ProjectFacts,
-    mod_to_comp: &BTreeMap<&str, &str>,
-    comp_deps: &ComponentDepSets<'_>,
-) -> Vec<SummaryEdge> {
-    let mut mod_counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
-    for rel in &project.cross_module_refs {
-        let src = rel.source_module.as_str();
-        let dst = rel.target_module.as_str();
-        if src != dst && mod_to_comp.contains_key(src) && mod_to_comp.contains_key(dst) {
-            *mod_counts.entry((src, dst)).or_insert(0) += 1;
-        }
-    }
-
-    let mut summaries = Vec::new();
-    for ((src_mod, dst_mod), count) in mod_counts {
-        let src_comp = mod_to_comp[src_mod];
-        let dst_comp = mod_to_comp[dst_mod];
-        let reflexion = if !project.has_declared_architecture || src_comp == dst_comp {
-            Some(ReflexionStatus::Inferred)
-        } else if comp_deps.allowed.contains(&(src_comp, dst_comp)) {
-            Some(ReflexionStatus::Convergent)
-        } else {
-            Some(ReflexionStatus::Divergent)
-        };
-        summaries.push(SummaryEdge {
-            higher: NodeId::new(format!("mod:{src_mod}")),
-            lower: NodeId::new(format!("mod:{dst_mod}")),
-            reason: EdgeReason::CrossModule,
-            count,
-            reflexion,
-        });
-    }
-    summaries
-}
-
-fn assign_intra_component_module_levels(
-    module_groups: &mut [GroupNode],
-    mod_to_comp: &BTreeMap<&str, &str>,
-    mod_summaries: &[SummaryEdge],
-) {
-    let mut mods_by_comp: BTreeMap<&str, Vec<NodeId>> = BTreeMap::new();
-    for group in module_groups.iter() {
-        if let GroupKind::Module { path, .. } = &group.kind
-            && let Some(&comp) = mod_to_comp.get(path.as_str())
-        {
-            mods_by_comp.entry(comp).or_default().push(group.id.clone());
-        }
-    }
-
-    let mut level_by_mod_id: BTreeMap<NodeId, (usize, usize)> = BTreeMap::new();
-    for mod_ids in mods_by_comp.values() {
-        let intra_pairs: Vec<(NodeId, NodeId)> = mod_summaries
-            .iter()
-            .filter(|edge| mod_ids.contains(&edge.higher) && mod_ids.contains(&edge.lower))
-            .map(|edge| (edge.higher.clone(), edge.lower.clone()))
-            .collect();
-        level_by_mod_id.extend(compute_scc_and_levels(mod_ids, &intra_pairs));
-    }
-
-    for group in module_groups.iter_mut() {
-        if let Some(&(scc_id, level)) = level_by_mod_id.get(&group.id) {
-            group.recursion_group = scc_id;
-            group.level = level;
-        }
-    }
-    module_groups.sort_by(|left, right| {
-        (Reverse(left.level), &left.id).cmp(&(Reverse(right.level), &right.id))
-    });
-}
-
-struct ComponentGraphParts {
+struct BuiltContainerHierarchy {
     groups: Vec<GroupNode>,
     summary_edges: Vec<SummaryEdge>,
 }
 
-fn build_component_groups_and_summaries(
+fn build_project_container_hierarchy(
     project: &ProjectFacts,
-    module_groups: &[GroupNode],
-    mod_to_comp: &BTreeMap<&str, &str>,
-    comp_deps: &ComponentDepSets<'_>,
-) -> ComponentGraphParts {
-    let declared_by_name: BTreeMap<&str, Vec<String>> = if project.has_declared_architecture {
-        project
+    module_groups: BTreeMap<NodeId, GroupNode>,
+) -> BuiltContainerHierarchy {
+    let raw_module_counts = count_cross_module_references(project, &module_groups);
+    let mut hierarchy = ContainerHierarchyBuilder {
+        project,
+        raw_module_counts: &raw_module_counts,
+        component_groups: BTreeMap::new(),
+        submodule_groups: BTreeMap::new(),
+        module_groups,
+        parent_by_group: BTreeMap::new(),
+        summary_edges: Vec::new(),
+    };
+    let ordered_component_ids = hierarchy.build_all_components();
+    hierarchy.append_cousin_module_summaries();
+    hierarchy.into_parts(&ordered_component_ids)
+}
+
+fn count_cross_module_references<'a>(
+    project: &'a ProjectFacts,
+    module_groups: &BTreeMap<NodeId, GroupNode>,
+) -> BTreeMap<(&'a str, &'a str), usize> {
+    let known_modules: BTreeSet<&str> = project
+        .modules
+        .iter()
+        .filter(|module| {
+            module_groups.contains_key(&NodeId::new(format!("mod:{}", module.module_path)))
+        })
+        .map(|module| module.module_path.as_str())
+        .collect();
+    let mut counts = BTreeMap::new();
+    for reference in &project.cross_module_refs {
+        let source_module = reference.source_module.as_str();
+        let target_module = reference.target_module.as_str();
+        if source_module != target_module
+            && known_modules.contains(source_module)
+            && known_modules.contains(target_module)
+        {
+            *counts.entry((source_module, target_module)).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+struct ContainerHierarchyBuilder<'a> {
+    project: &'a ProjectFacts,
+    raw_module_counts: &'a BTreeMap<(&'a str, &'a str), usize>,
+    component_groups: BTreeMap<NodeId, GroupNode>,
+    submodule_groups: BTreeMap<NodeId, GroupNode>,
+    module_groups: BTreeMap<NodeId, GroupNode>,
+    parent_by_group: BTreeMap<NodeId, NodeId>,
+    summary_edges: Vec<SummaryEdge>,
+}
+
+impl<'a> ContainerHierarchyBuilder<'a> {
+    fn build_all_components(&mut self) -> Vec<NodeId> {
+        let mut component_names: Vec<String> = self
+            .project
             .components
             .iter()
-            .filter_map(|comp| {
-                comp.declared_dependencies
-                    .as_ref()
-                    .map(|deps| (comp.name.as_str(), deps.clone()))
-            })
-            .collect()
-    } else {
-        BTreeMap::new()
-    };
-    let mut comp_names: Vec<String> = project
-        .components
-        .iter()
-        .map(|comp| comp.name.clone())
-        .collect();
-    for &comp in mod_to_comp.values() {
-        if !comp_names.iter().any(|existing| existing == comp) {
-            comp_names.push(comp.to_owned());
+            .map(|component| component.name.clone())
+            .collect();
+        for module in &self.project.modules {
+            if !component_names
+                .iter()
+                .any(|existing| existing == &module.component)
+            {
+                component_names.push(module.component.clone());
+            }
+        }
+        let component_by_name: BTreeMap<&str, &'a ComponentFact> = self
+            .project
+            .components
+            .iter()
+            .map(|component| (component.name.as_str(), component))
+            .collect();
+
+        let mut slots = Vec::with_capacity(component_names.len());
+        let mut slot_by_module = BTreeMap::new();
+        for component_name in &component_names {
+            let component_id = NodeId::new(format!("comp:{component_name}"));
+            let component_fact = component_by_name.get(component_name.as_str()).copied();
+            let declared_submodules =
+                component_fact.map_or(&[][..], |fact| fact.submodules.as_slice());
+            let owned_modules: Vec<&'a ModuleFact> = self
+                .project
+                .modules
+                .iter()
+                .filter(|module| module.component == *component_name)
+                .collect();
+            let scope = ContainerScope {
+                component_name,
+                parent_id: &component_id,
+                prefix: &[],
+                declared_submodules,
+                owned_modules: &owned_modules,
+            };
+            let children = self.build_container_children(&scope);
+            let declared_dependencies = if self.project.has_declared_architecture {
+                component_fact.and_then(|fact| fact.declared_dependencies.clone())
+            } else {
+                None
+            };
+            self.component_groups.insert(
+                component_id.clone(),
+                GroupNode {
+                    id: component_id.clone(),
+                    label: component_name.clone(),
+                    kind: GroupKind::Component {
+                        declared_dependencies,
+                    },
+                    recursion_group: 0,
+                    level: 0,
+                    children,
+                },
+            );
+            let slot_index = slots.len();
+            for module in &owned_modules {
+                slot_by_module.insert(module.module_path.as_str(), slot_index);
+            }
+            slots.push(SiblingSlot {
+                group_id: component_id,
+                slot_name: component_fact
+                    .filter(|fact| fact.declared_dependencies.is_some())
+                    .map(|fact| fact.name.as_str()),
+                declared_dependencies: component_fact
+                    .and_then(|fact| fact.declared_dependencies.as_deref()),
+                allowed_dependencies: component_fact
+                    .map_or(&[], |fact| fact.allowed_dependencies.as_slice()),
+            });
+        }
+
+        self.finalize_sibling_slots(
+            &slots,
+            &slot_by_module,
+            self.project.has_declared_architecture,
+        )
+    }
+
+    fn build_container_children(&mut self, scope: &ContainerScope<'_, 'a>) -> Vec<NodeId> {
+        let mut slots = Vec::new();
+        let mut slot_by_module = BTreeMap::new();
+
+        for submodule_fact in scope.declared_submodules {
+            self.register_declared_submodule_slot(
+                scope,
+                submodule_fact,
+                &mut slots,
+                &mut slot_by_module,
+            );
+        }
+
+        for &module in scope.owned_modules {
+            if !slot_by_module.contains_key(module.module_path.as_str()) {
+                let module_id = NodeId::new(format!("mod:{}", module.module_path));
+                slot_by_module.insert(module.module_path.as_str(), slots.len());
+                slots.push(SiblingSlot {
+                    group_id: module_id,
+                    slot_name: None,
+                    declared_dependencies: None,
+                    allowed_dependencies: &[],
+                });
+            }
+        }
+
+        let sorted_children = self.finalize_sibling_slots(
+            &slots,
+            &slot_by_module,
+            !scope.declared_submodules.is_empty(),
+        );
+        for child_id in &sorted_children {
+            self.parent_by_group
+                .insert(child_id.clone(), scope.parent_id.clone());
+        }
+        sorted_children
+    }
+
+    fn register_declared_submodule_slot(
+        &mut self,
+        scope: &ContainerScope<'_, 'a>,
+        submodule_fact: &'a ComponentFact,
+        slots: &mut Vec<SiblingSlot<'a>>,
+        slot_by_module: &mut BTreeMap<&'a str, usize>,
+    ) {
+        let mut child_prefix = scope.prefix.to_vec();
+        child_prefix.push(submodule_fact.name.clone());
+        let matching_modules: Vec<&'a ModuleFact> = scope
+            .owned_modules
+            .iter()
+            .copied()
+            .filter(|module| module.submodule_path.starts_with(&child_prefix))
+            .collect();
+        let is_single_leaf_module = submodule_fact.submodules.is_empty()
+            && matching_modules.len() == 1
+            && matching_modules[0].submodule_path.len() == child_prefix.len()
+            && matching_modules[0]
+                .module_path
+                .rsplit([':', '.'])
+                .next()
+                .is_some_and(|terminal| terminal == submodule_fact.name);
+
+        if is_single_leaf_module {
+            let leaf_module = matching_modules[0];
+            let module_id = NodeId::new(format!("mod:{}", leaf_module.module_path));
+            if let Some(GroupNode {
+                kind:
+                    GroupKind::Module {
+                        declared_dependencies,
+                        ..
+                    },
+                ..
+            }) = self.module_groups.get_mut(&module_id)
+            {
+                declared_dependencies.clone_from(&submodule_fact.declared_dependencies);
+            }
+            slot_by_module.insert(leaf_module.module_path.as_str(), slots.len());
+            slots.push(SiblingSlot {
+                group_id: module_id,
+                slot_name: Some(submodule_fact.name.as_str()),
+                declared_dependencies: submodule_fact.declared_dependencies.as_deref(),
+                allowed_dependencies: &submodule_fact.allowed_dependencies,
+            });
+            return;
+        }
+
+        let submodule_id = NodeId::new(format!(
+            "sub:{}/{}",
+            scope.component_name,
+            child_prefix.join("/")
+        ));
+        let child_scope = ContainerScope {
+            component_name: scope.component_name,
+            parent_id: &submodule_id,
+            prefix: &child_prefix,
+            declared_submodules: &submodule_fact.submodules,
+            owned_modules: &matching_modules,
+        };
+        let nested_children = self.build_container_children(&child_scope);
+        self.submodule_groups.insert(
+            submodule_id.clone(),
+            GroupNode {
+                id: submodule_id.clone(),
+                label: submodule_fact.name.clone(),
+                kind: GroupKind::Submodule {
+                    path: child_prefix.join("/"),
+                    declared_dependencies: submodule_fact
+                        .declared_dependencies
+                        .clone()
+                        .unwrap_or_default(),
+                },
+                recursion_group: 0,
+                level: 0,
+                children: nested_children,
+            },
+        );
+        let slot_index = slots.len();
+        for &matching in &matching_modules {
+            slot_by_module.insert(matching.module_path.as_str(), slot_index);
+        }
+        slots.push(SiblingSlot {
+            group_id: submodule_id,
+            slot_name: Some(submodule_fact.name.as_str()),
+            declared_dependencies: submodule_fact.declared_dependencies.as_deref(),
+            allowed_dependencies: &submodule_fact.allowed_dependencies,
+        });
+    }
+
+    fn finalize_sibling_slots(
+        &mut self,
+        slots: &[SiblingSlot<'_>],
+        slot_by_module: &BTreeMap<&str, usize>,
+        has_declared_dag: bool,
+    ) -> Vec<NodeId> {
+        let mut actual_counts = BTreeMap::new();
+        for (&(source_module, target_module), &count) in self.raw_module_counts {
+            if let (Some(&source_index), Some(&target_index)) = (
+                slot_by_module.get(source_module),
+                slot_by_module.get(target_module),
+            ) && source_index != target_index
+            {
+                *actual_counts
+                    .entry((source_index, target_index))
+                    .or_insert(0) += count;
+            }
+        }
+
+        let local_summaries =
+            build_sibling_reflexion_edges(slots, has_declared_dag, &mut actual_counts);
+        let slot_ids: Vec<NodeId> = slots.iter().map(|slot| slot.group_id.clone()).collect();
+        let non_divergent_pairs: Vec<(NodeId, NodeId)> = local_summaries
+            .iter()
+            .filter(|edge| edge.reflexion != Some(ReflexionStatus::Divergent))
+            .map(|edge| (edge.higher.clone(), edge.lower.clone()))
+            .collect();
+        let computed_levels = compute_scc_and_levels(&slot_ids, &non_divergent_pairs);
+        for id in &slot_ids {
+            let (scc_id, level) = computed_levels.get(id).copied().unwrap_or((0, 0));
+            if let Some(group) = self.group_mut(id) {
+                group.recursion_group = scc_id;
+                group.level = level;
+            }
+        }
+        self.summary_edges.extend(local_summaries);
+
+        let mut ordered_ids = slot_ids;
+        ordered_ids.sort_by(|left, right| {
+            let left_key = self.group(left).map_or((Reverse(0), u8::MAX), |group| {
+                (Reverse(group.level), group_kind_rank(&group.kind))
+            });
+            let right_key = self.group(right).map_or((Reverse(0), u8::MAX), |group| {
+                (Reverse(group.level), group_kind_rank(&group.kind))
+            });
+            (left_key, left).cmp(&(right_key, right))
+        });
+        ordered_ids
+    }
+
+    fn append_cousin_module_summaries(&mut self) {
+        let module_by_path: BTreeMap<&str, &ModuleFact> = self
+            .project
+            .modules
+            .iter()
+            .map(|module| (module.module_path.as_str(), module))
+            .collect();
+        let component_by_name: BTreeMap<&str, &ComponentFact> = self
+            .project
+            .components
+            .iter()
+            .map(|component| (component.name.as_str(), component))
+            .collect();
+
+        for (&(source_module, target_module), &count) in self.raw_module_counts {
+            let source_id = NodeId::new(format!("mod:{source_module}"));
+            let target_id = NodeId::new(format!("mod:{target_module}"));
+            let source_parent = self.parent_by_group.get(&source_id);
+            let target_parent = self.parent_by_group.get(&target_id);
+            if source_parent == target_parent {
+                continue;
+            }
+            if source_parent
+                .is_some_and(|parent| is_group_ancestor(parent, &target_id, &self.parent_by_group))
+                || target_parent.is_some_and(|parent| {
+                    is_group_ancestor(parent, &source_id, &self.parent_by_group)
+                })
+            {
+                continue;
+            }
+            let status = classify_cousin_module_reflexion(
+                self.project.has_declared_architecture,
+                module_by_path[source_module],
+                module_by_path[target_module],
+                &component_by_name,
+            );
+            self.summary_edges.push(SummaryEdge {
+                higher: source_id,
+                lower: target_id,
+                reason: EdgeReason::CrossModule,
+                count,
+                reflexion: Some(status),
+            });
         }
     }
 
-    let comp_summaries = build_component_reflexion_summaries(project, mod_to_comp, comp_deps);
-
-    let comp_ids: Vec<NodeId> = comp_names
-        .iter()
-        .map(|name| NodeId::new(format!("comp:{name}")))
-        .collect();
-    let non_divergent_pairs: Vec<(NodeId, NodeId)> = comp_summaries
-        .iter()
-        .filter(|edge| edge.reflexion != Some(ReflexionStatus::Divergent))
-        .map(|edge| (edge.higher.clone(), edge.lower.clone()))
-        .collect();
-    let comp_levels = compute_scc_and_levels(&comp_ids, &non_divergent_pairs);
-
-    let mut comp_groups = Vec::new();
-    for comp_name in comp_names {
-        let comp_id = NodeId::new(format!("comp:{comp_name}"));
-        let children: Vec<NodeId> = module_groups
-            .iter()
-            .filter(|group| {
-                matches!(
-                    &group.kind,
-                    GroupKind::Module { path, .. }
-                        if mod_to_comp.get(path.as_str()) == Some(&comp_name.as_str())
-                )
-            })
-            .map(|group| group.id.clone())
-            .collect();
-        let (recursion_group, level) = comp_levels.get(&comp_id).copied().unwrap_or((0, 0));
-        let declared_dependencies = declared_by_name.get(comp_name.as_str()).cloned();
-        comp_groups.push(GroupNode {
-            id: comp_id,
-            label: comp_name,
-            kind: GroupKind::Component {
-                declared_dependencies,
-            },
-            recursion_group,
-            level,
-            children,
+    fn into_parts(mut self, ordered_component_ids: &[NodeId]) -> BuiltContainerHierarchy {
+        let mut groups = Vec::with_capacity(
+            self.component_groups.len() + self.submodule_groups.len() + self.module_groups.len(),
+        );
+        for component_id in ordered_component_ids {
+            if let Some(group) = self.component_groups.remove(component_id) {
+                groups.push(group);
+            }
+        }
+        let mut submodules: Vec<GroupNode> = self.submodule_groups.into_values().collect();
+        submodules.sort_by(|left, right| {
+            (Reverse(left.level), &left.id).cmp(&(Reverse(right.level), &right.id))
         });
-    }
-    comp_groups.sort_by(|left, right| {
-        (Reverse(left.level), &left.id).cmp(&(Reverse(right.level), &right.id))
-    });
+        groups.extend(submodules);
 
-    ComponentGraphParts {
-        groups: comp_groups,
-        summary_edges: comp_summaries,
+        let mut modules: Vec<GroupNode> = self.module_groups.into_values().collect();
+        modules.sort_by(|left, right| {
+            (Reverse(left.level), &left.id).cmp(&(Reverse(right.level), &right.id))
+        });
+        groups.extend(modules);
+
+        BuiltContainerHierarchy {
+            groups,
+            summary_edges: self.summary_edges,
+        }
+    }
+
+    fn group(&self, id: &NodeId) -> Option<&GroupNode> {
+        self.component_groups
+            .get(id)
+            .or_else(|| self.submodule_groups.get(id))
+            .or_else(|| self.module_groups.get(id))
+    }
+
+    fn group_mut(&mut self, id: &NodeId) -> Option<&mut GroupNode> {
+        if self.component_groups.contains_key(id) {
+            return self.component_groups.get_mut(id);
+        }
+        if self.submodule_groups.contains_key(id) {
+            return self.submodule_groups.get_mut(id);
+        }
+        self.module_groups.get_mut(id)
     }
 }
 
-fn build_component_reflexion_summaries(
-    project: &ProjectFacts,
-    mod_to_comp: &BTreeMap<&str, &str>,
-    comp_deps: &ComponentDepSets<'_>,
+struct SiblingSlot<'a> {
+    group_id: NodeId,
+    slot_name: Option<&'a str>,
+    declared_dependencies: Option<&'a [String]>,
+    allowed_dependencies: &'a [String],
+}
+
+struct ContainerScope<'scope, 'project> {
+    component_name: &'scope str,
+    parent_id: &'scope NodeId,
+    prefix: &'scope [String],
+    declared_submodules: &'project [ComponentFact],
+    owned_modules: &'scope [&'project ModuleFact],
+}
+
+fn build_sibling_reflexion_edges(
+    slots: &[SiblingSlot<'_>],
+    has_declared_dag: bool,
+    actual_counts: &mut BTreeMap<(usize, usize), usize>,
 ) -> Vec<SummaryEdge> {
-    let mut actual_comp_counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
-    for rel in &project.cross_module_refs {
-        if let (Some(&src_comp), Some(&dst_comp)) = (
-            mod_to_comp.get(rel.source_module.as_str()),
-            mod_to_comp.get(rel.target_module.as_str()),
-        ) && src_comp != dst_comp
-        {
-            *actual_comp_counts.entry((src_comp, dst_comp)).or_insert(0) += 1;
-        }
+    if !has_declared_dag {
+        return actual_counts
+            .iter()
+            .map(|(&(source_index, target_index), &count)| SummaryEdge {
+                higher: slots[source_index].group_id.clone(),
+                lower: slots[target_index].group_id.clone(),
+                reason: EdgeReason::CrossModule,
+                count,
+                reflexion: Some(ReflexionStatus::Inferred),
+            })
+            .collect();
     }
 
-    let mut comp_summaries = Vec::new();
-    if project.has_declared_architecture {
-        for &(src_comp, dst_comp) in &comp_deps.direct {
-            let count = actual_comp_counts
-                .remove(&(src_comp, dst_comp))
+    let index_by_slot_name: BTreeMap<&str, usize> = slots
+        .iter()
+        .enumerate()
+        .filter_map(|(index, slot)| slot.slot_name.map(|name| (name, index)))
+        .collect();
+    let mut summaries = Vec::new();
+    for (source_index, source_slot) in slots.iter().enumerate() {
+        let Some(declared_deps) = source_slot.declared_dependencies else {
+            continue;
+        };
+        for dep_name in declared_deps {
+            let Some(&target_index) = index_by_slot_name.get(dep_name.as_str()) else {
+                continue;
+            };
+            if source_index == target_index {
+                continue;
+            }
+            let count = actual_counts
+                .remove(&(source_index, target_index))
                 .unwrap_or(0);
-            comp_summaries.push(SummaryEdge {
-                higher: NodeId::new(format!("comp:{src_comp}")),
-                lower: NodeId::new(format!("comp:{dst_comp}")),
+            summaries.push(SummaryEdge {
+                higher: source_slot.group_id.clone(),
+                lower: slots[target_index].group_id.clone(),
                 reason: EdgeReason::CrossModule,
                 count,
                 reflexion: Some(if count > 0 {
@@ -651,46 +928,114 @@ fn build_component_reflexion_summaries(
                 }),
             });
         }
-        for ((src_comp, dst_comp), count) in actual_comp_counts {
-            let status = if comp_deps.allowed.contains(&(src_comp, dst_comp)) {
+    }
+
+    for (&(source_index, target_index), &count) in actual_counts.iter() {
+        let source_slot = &slots[source_index];
+        let target_slot = &slots[target_index];
+        let status = match (source_slot.slot_name, target_slot.slot_name) {
+            (Some(_), Some(target_name)) => {
+                if source_slot
+                    .allowed_dependencies
+                    .iter()
+                    .any(|allowed| allowed == target_name)
+                {
+                    ReflexionStatus::Convergent
+                } else {
+                    ReflexionStatus::Divergent
+                }
+            }
+            _ => ReflexionStatus::Inferred,
+        };
+        summaries.push(SummaryEdge {
+            higher: source_slot.group_id.clone(),
+            lower: target_slot.group_id.clone(),
+            reason: EdgeReason::CrossModule,
+            count,
+            reflexion: Some(status),
+        });
+    }
+    summaries
+}
+
+fn is_group_ancestor(
+    ancestor: &NodeId,
+    node: &NodeId,
+    parent_by_group: &BTreeMap<NodeId, NodeId>,
+) -> bool {
+    let mut cursor = parent_by_group.get(node);
+    while let Some(current) = cursor {
+        if current == ancestor {
+            return true;
+        }
+        cursor = parent_by_group.get(current);
+    }
+    false
+}
+
+fn classify_cousin_module_reflexion(
+    has_declared_architecture: bool,
+    source_module: &ModuleFact,
+    target_module: &ModuleFact,
+    component_by_name: &BTreeMap<&str, &ComponentFact>,
+) -> ReflexionStatus {
+    if !has_declared_architecture {
+        return ReflexionStatus::Inferred;
+    }
+    let Some(&source_component) = component_by_name.get(source_module.component.as_str()) else {
+        return ReflexionStatus::Inferred;
+    };
+    if source_module.component != target_module.component {
+        let Some(&target_component) = component_by_name.get(target_module.component.as_str())
+        else {
+            return ReflexionStatus::Inferred;
+        };
+        if source_component.declared_dependencies.is_none()
+            || target_component.declared_dependencies.is_none()
+        {
+            return ReflexionStatus::Inferred;
+        }
+        return if source_component
+            .allowed_dependencies
+            .iter()
+            .any(|allowed| allowed == &target_module.component)
+        {
+            ReflexionStatus::Convergent
+        } else {
+            ReflexionStatus::Divergent
+        };
+    }
+
+    let mut current_submodules = source_component.submodules.as_slice();
+    for (source_seg, target_seg) in source_module
+        .submodule_path
+        .iter()
+        .zip(&target_module.submodule_path)
+    {
+        if source_seg != target_seg {
+            if current_submodules.is_empty() {
+                return ReflexionStatus::Inferred;
+            }
+            return if current_submodules
+                .iter()
+                .find(|entry| &entry.name == source_seg)
+                .is_some_and(|entry| {
+                    entry
+                        .allowed_dependencies
+                        .iter()
+                        .any(|allowed| allowed == target_seg)
+                }) {
                 ReflexionStatus::Convergent
             } else {
                 ReflexionStatus::Divergent
             };
-            comp_summaries.push(SummaryEdge {
-                higher: NodeId::new(format!("comp:{src_comp}")),
-                lower: NodeId::new(format!("comp:{dst_comp}")),
-                reason: EdgeReason::CrossModule,
-                count,
-                reflexion: Some(status),
-            });
         }
-    } else {
-        for ((src_comp, dst_comp), count) in actual_comp_counts {
-            comp_summaries.push(SummaryEdge {
-                higher: NodeId::new(format!("comp:{src_comp}")),
-                lower: NodeId::new(format!("comp:{dst_comp}")),
-                reason: EdgeReason::CrossModule,
-                count,
-                reflexion: Some(ReflexionStatus::Inferred),
-            });
-        }
+        current_submodules = current_submodules
+            .iter()
+            .find(|entry| &entry.name == source_seg)
+            .map_or(&[], |entry| entry.submodules.as_slice());
     }
-    comp_summaries
-}
-
-/// Builds a validated [`AbstractionGraph`] for a single file's primary scope (`scopes[0]`),
-/// returning an empty graph if `scopes` is empty.
-///
-/// # Errors
-///
-/// Returns [`ModelError`] if the resulting graph violates any Layer L1 invariant.
-pub(super) fn build_file_graph(
-    path: &Path,
-    scopes: &[ScopeFacts],
-    intra_file_refs: &[IntraFileReference],
-) -> Result<AbstractionGraph, ModelError> {
-    build_scope_graph(path, scopes, intra_file_refs, 0)
+    ReflexionStatus::Inferred
 }
 
 fn build_scope_graph(
@@ -1368,12 +1713,13 @@ fn wrap_cycles_in_container(
 const fn group_kind_rank(kind: &GroupKind) -> u8 {
     match kind {
         GroupKind::Component { .. } => 0,
-        GroupKind::Module { .. } => 1,
-        GroupKind::Owner { .. } => 2,
-        GroupKind::Shared { .. } => 3,
-        GroupKind::Unowned => 4,
-        GroupKind::RecursionGroup { .. } => 5,
-        GroupKind::TypeMembers { .. } => 6,
+        GroupKind::Submodule { .. } => 1,
+        GroupKind::Module { .. } => 2,
+        GroupKind::Owner { .. } => 3,
+        GroupKind::Shared { .. } => 4,
+        GroupKind::Unowned => 5,
+        GroupKind::RecursionGroup { .. } => 6,
+        GroupKind::TypeMembers { .. } => 7,
     }
 }
 
@@ -1688,16 +2034,19 @@ mod tests {
                     name: "Core".to_owned(),
                     declared_dependencies: Some(Vec::new()),
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 },
                 ComponentFact {
                     name: "Unused".to_owned(),
                     declared_dependencies: Some(Vec::new()),
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 },
                 ComponentFact {
                     name: "Runner".to_owned(),
                     declared_dependencies: Some(vec!["Core".to_owned(), "Unused".to_owned()]),
                     allowed_dependencies: vec!["Core".to_owned(), "Unused".to_owned()],
+                    submodules: Vec::new(),
                 },
             ],
             modules: vec![
@@ -1705,6 +2054,7 @@ mod tests {
                     module_path: "core".to_owned(),
                     path: "src/core.rs".to_owned(),
                     component: "Core".to_owned(),
+                    submodule_path: Vec::new(),
                     scopes: sample_scopes(),
                     intra_file_refs: Vec::new(),
                 },
@@ -1712,6 +2062,7 @@ mod tests {
                     module_path: "runner".to_owned(),
                     path: "src/runner.rs".to_owned(),
                     component: "Runner".to_owned(),
+                    submodule_path: Vec::new(),
                     scopes: sample_scopes(),
                     intra_file_refs: Vec::new(),
                 },
@@ -1757,11 +2108,13 @@ mod tests {
                     name: "Core".to_owned(),
                     declared_dependencies: None,
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 },
                 ComponentFact {
                     name: "Runner".to_owned(),
                     declared_dependencies: None,
                     allowed_dependencies: Vec::new(),
+                    submodules: Vec::new(),
                 },
             ],
             modules: vec![
@@ -1769,6 +2122,7 @@ mod tests {
                     module_path: "core".to_owned(),
                     path: "src/core.rs".to_owned(),
                     component: "Core".to_owned(),
+                    submodule_path: Vec::new(),
                     scopes: sample_scopes(),
                     intra_file_refs: Vec::new(),
                 },
@@ -1776,6 +2130,7 @@ mod tests {
                     module_path: "runner".to_owned(),
                     path: "src/runner.rs".to_owned(),
                     component: "Runner".to_owned(),
+                    submodule_path: Vec::new(),
                     scopes: sample_scopes(),
                     intra_file_refs: Vec::new(),
                 },
@@ -1857,11 +2212,13 @@ mod tests {
                 name: "Core".to_owned(),
                 declared_dependencies: None,
                 allowed_dependencies: Vec::new(),
+                submodules: Vec::new(),
             }],
             modules: vec![ModuleFact {
                 module_path: "core".to_owned(),
                 path: "src/core.rs".to_owned(),
                 component: "Core".to_owned(),
+                submodule_path: Vec::new(),
                 scopes: vec![scope],
                 intra_file_refs: Vec::new(),
             }],
@@ -1969,11 +2326,13 @@ mod tests {
                 name: "sub".to_owned(),
                 declared_dependencies: None,
                 allowed_dependencies: Vec::new(),
+                submodules: Vec::new(),
             }],
             modules: vec![ModuleFact {
                 module_path: "sub".to_owned(),
                 path: "src/sub.rs".to_owned(),
                 component: "sub".to_owned(),
+                submodule_path: Vec::new(),
                 scopes: scopes.clone(),
                 intra_file_refs: intra_refs.clone(),
             }],
@@ -2020,12 +2379,14 @@ mod tests {
                 name: "Core".to_owned(),
                 declared_dependencies: None,
                 allowed_dependencies: Vec::new(),
+                submodules: Vec::new(),
             }],
             modules: vec![
                 ModuleFact {
                     module_path: "first".to_owned(),
                     path: "src/first.rs".to_owned(),
                     component: "Core".to_owned(),
+                    submodule_path: Vec::new(),
                     scopes: sample_scopes(),
                     intra_file_refs: Vec::new(),
                 },
@@ -2033,6 +2394,7 @@ mod tests {
                     module_path: "second".to_owned(),
                     path: "src/second.rs".to_owned(),
                     component: "Core".to_owned(),
+                    submodule_path: Vec::new(),
                     scopes: sample_scopes(),
                     intra_file_refs: Vec::new(),
                 },
@@ -2094,11 +2456,13 @@ mod tests {
                 name: "sub".to_owned(),
                 declared_dependencies: None,
                 allowed_dependencies: Vec::new(),
+                submodules: Vec::new(),
             }],
             modules: vec![ModuleFact {
                 module_path: "sub".to_owned(),
                 path: "src/sub.rs".to_owned(),
                 component: "sub".to_owned(),
+                submodule_path: Vec::new(),
                 scopes,
                 intra_file_refs: intra_refs,
             }],
@@ -2114,5 +2478,236 @@ mod tests {
             .collect();
 
         assert_eq!(pub_names, ["Local", "External::orphan"]);
+    }
+
+    #[test]
+    fn project_graph_orders_recursive_submodule_containers_and_unmapped_components() {
+        let project = recursive_submodule_fixture_project();
+
+        let graph =
+            build_project_graph(&project, ProjectDepth::ModuleOnly).expect("valid submodule graph");
+        let component_ids: Vec<NodeId> = graph
+            .groups()
+            .iter()
+            .filter(|group| matches!(group.kind, GroupKind::Component { .. }))
+            .map(|group| group.id.clone())
+            .collect();
+        let project_comp = graph
+            .groups()
+            .iter()
+            .find(|group| group.id == NodeId::new("comp:Project"))
+            .expect("Project component");
+
+        assert_eq!(
+            component_ids,
+            vec![NodeId::new("comp:Project"), NodeId::new("comp:Unmapped")]
+        );
+        assert_eq!(
+            project_comp.children,
+            vec![
+                NodeId::new("sub:Project/python"),
+                NodeId::new("sub:Project/rust"),
+                NodeId::new("sub:Project/foundation"),
+                NodeId::new("mod:project"),
+            ]
+        );
+    }
+
+    #[test]
+    fn project_graph_builds_recursive_submodule_reflexion_statuses() {
+        let project = recursive_submodule_fixture_project();
+
+        let graph =
+            build_project_graph(&project, ProjectDepth::ModuleOnly).expect("valid submodule graph");
+
+        assert!(graph.summary_edges().contains(&SummaryEdge {
+            higher: NodeId::new("sub:Project/python"),
+            lower: NodeId::new("sub:Project/foundation"),
+            reason: EdgeReason::CrossModule,
+            count: 1,
+            reflexion: Some(ReflexionStatus::Convergent),
+        }));
+        assert!(graph.summary_edges().contains(&SummaryEdge {
+            higher: NodeId::new("sub:Project/rust"),
+            lower: NodeId::new("sub:Project/foundation"),
+            reason: EdgeReason::CrossModule,
+            count: 0,
+            reflexion: Some(ReflexionStatus::Absent),
+        }));
+        assert!(graph.summary_edges().contains(&SummaryEdge {
+            higher: NodeId::new("sub:Project/rust"),
+            lower: NodeId::new("sub:Project/python"),
+            reason: EdgeReason::CrossModule,
+            count: 1,
+            reflexion: Some(ReflexionStatus::Divergent),
+        }));
+        assert!(graph.summary_edges().contains(&SummaryEdge {
+            higher: NodeId::new("mod:project::foundation::config"),
+            lower: NodeId::new("mod:project::foundation::source"),
+            reason: EdgeReason::CrossModule,
+            count: 1,
+            reflexion: Some(ReflexionStatus::Divergent),
+        }));
+    }
+
+    #[test]
+    fn project_graph_emits_cousin_module_edges_without_sibling_or_ancestor_duplicates() {
+        let project = recursive_submodule_fixture_project();
+
+        let graph =
+            build_project_graph(&project, ProjectDepth::ModuleOnly).expect("valid submodule graph");
+        let sibling_edge_count = graph
+            .summary_edges()
+            .iter()
+            .filter(|edge| {
+                edge.higher == NodeId::new("mod:project::foundation::arch")
+                    && edge.lower == NodeId::new("mod:project::foundation::config")
+            })
+            .count();
+        let has_ancestor_module_edge = graph.summary_edges().iter().any(|edge| {
+            (edge.higher == NodeId::new("mod:project")
+                && edge.lower == NodeId::new("mod:project::foundation::arch"))
+                || (edge.higher == NodeId::new("mod:project::foundation::arch")
+                    && edge.lower == NodeId::new("mod:project"))
+        });
+
+        assert!(graph.summary_edges().contains(&SummaryEdge {
+            higher: NodeId::new("mod:project::python::facts"),
+            lower: NodeId::new("mod:project::foundation::arch"),
+            reason: EdgeReason::CrossModule,
+            count: 1,
+            reflexion: Some(ReflexionStatus::Convergent),
+        }));
+        assert_eq!(sibling_edge_count, 1);
+        assert!(!has_ancestor_module_edge);
+    }
+
+    fn recursive_submodule_fixture_project() -> ProjectFacts {
+        let empty_module =
+            |component: &str, module_path: &str, path: &str, submodule: &[&str]| ModuleFact {
+                module_path: module_path.to_owned(),
+                path: path.to_owned(),
+                component: component.to_owned(),
+                submodule_path: submodule
+                    .iter()
+                    .map(|segment| (*segment).to_owned())
+                    .collect(),
+                scopes: Vec::new(),
+                intra_file_refs: Vec::new(),
+            };
+        let sub_leaf = |name: &str, dependencies: &[&str]| ComponentFact {
+            name: name.to_owned(),
+            declared_dependencies: Some(
+                dependencies
+                    .iter()
+                    .map(|dependency| (*dependency).to_owned())
+                    .collect(),
+            ),
+            allowed_dependencies: dependencies
+                .iter()
+                .map(|dependency| (*dependency).to_owned())
+                .collect(),
+            submodules: Vec::new(),
+        };
+        ProjectFacts {
+            title: "recursive_submodules".to_owned(),
+            has_declared_architecture: true,
+            components: vec![ComponentFact {
+                name: "Project".to_owned(),
+                declared_dependencies: Some(Vec::new()),
+                allowed_dependencies: Vec::new(),
+                submodules: vec![
+                    ComponentFact {
+                        name: "foundation".to_owned(),
+                        declared_dependencies: Some(Vec::new()),
+                        allowed_dependencies: Vec::new(),
+                        submodules: vec![
+                            sub_leaf("config", &[]),
+                            sub_leaf("arch", &["config"]),
+                            sub_leaf("source", &["config"]),
+                        ],
+                    },
+                    sub_leaf("python", &["foundation"]),
+                    sub_leaf("rust", &["foundation"]),
+                ],
+            }],
+            modules: vec![
+                empty_module("Project", "project", "src/project.rs", &[]),
+                empty_module(
+                    "Project",
+                    "project::foundation::config",
+                    "src/project/foundation/config.rs",
+                    &["foundation", "config"],
+                ),
+                empty_module(
+                    "Project",
+                    "project::foundation::arch",
+                    "src/project/foundation/arch.rs",
+                    &["foundation", "arch"],
+                ),
+                empty_module(
+                    "Project",
+                    "project::foundation::source",
+                    "src/project/foundation/source.rs",
+                    &["foundation", "source"],
+                ),
+                empty_module(
+                    "Project",
+                    "project::python::facts",
+                    "src/project/python/facts.rs",
+                    &["python"],
+                ),
+                empty_module(
+                    "Project",
+                    "project::python::index",
+                    "src/project/python/index.rs",
+                    &["python"],
+                ),
+                empty_module(
+                    "Project",
+                    "project::rust::facts",
+                    "src/project/rust/facts.rs",
+                    &["rust"],
+                ),
+                empty_module(
+                    "Project",
+                    "project::rust::index",
+                    "src/project/rust/index.rs",
+                    &["rust"],
+                ),
+                empty_module("Unmapped", "unmapped", "src/unmapped.rs", &[]),
+            ],
+            cross_module_refs: recursive_submodule_fixture_refs(),
+        }
+    }
+
+    fn recursive_submodule_fixture_refs() -> Vec<CrossModuleRefFact> {
+        [
+            ("project", "project::foundation::arch", 1),
+            ("project::foundation::arch", "project", 2),
+            (
+                "project::foundation::arch",
+                "project::foundation::config",
+                3,
+            ),
+            (
+                "project::foundation::config",
+                "project::foundation::source",
+                5,
+            ),
+            ("project::python::facts", "project::foundation::arch", 7),
+            ("project::rust::facts", "project::python::index", 9),
+            ("external::unknown", "project::foundation::arch", 11),
+            ("project::foundation::arch", "external::unknown", 13),
+        ]
+        .into_iter()
+        .map(|(source_module, target_module, line)| CrossModuleRefFact {
+            source_module: source_module.to_owned(),
+            source_symbol: None,
+            target_module: target_module.to_owned(),
+            target_symbol: None,
+            line,
+        })
+        .collect()
     }
 }

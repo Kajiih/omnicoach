@@ -193,6 +193,8 @@ impl ArchitectureSpec {
 pub struct SubmoduleSpec {
     /// Submodule identifier relative to its parent (`"foundation"`, `"source"`).
     pub name: String,
+    /// Direct allowed sibling submodule names in the same parent scope.
+    pub(in crate::code_lint::project) depends_on: Vec<String>,
     /// Precomputed allowed sibling submodule names (honoring `transitive_dependencies`).
     allowed_siblings: HashSet<String>,
     /// Recursive submodule DAG inside this submodule.
@@ -273,6 +275,32 @@ impl ComponentSpec {
             current = &sub.submodules;
         }
         true
+    }
+
+    /// Resolves the matched declared submodule segment chain for `rel_subpath` beneath a root of
+    /// this component (for example `["python", "architecture"]` for `"python::architecture"`).
+    #[must_use]
+    pub(in crate::code_lint::project) fn resolve_submodule_segments(
+        &self,
+        rel_subpath: Option<&str>,
+        separator: &str,
+    ) -> Vec<String> {
+        let Some(subpath) = rel_subpath.filter(|path| !path.is_empty()) else {
+            return Vec::new();
+        };
+        let mut matched = Vec::new();
+        let mut current = self.submodules.as_slice();
+        for segment in subpath.split(separator) {
+            if current.is_empty() {
+                break;
+            }
+            let Some(sub) = current.iter().find(|entry| entry.name == segment) else {
+                break;
+            };
+            matched.push(sub.name.clone());
+            current = &sub.submodules;
+        }
+        matched
     }
 
     /// Evaluates whether a reference from `source_rel` to `target_rel` (both relative to
@@ -649,6 +677,7 @@ fn build_submodule_specs(
         .iter()
         .map(|entry| SubmoduleSpec {
             name: entry.name.clone(),
+            depends_on: entry.depends_on.clone(),
             allowed_siblings: allowed_by_name.remove(&entry.name).unwrap_or_default(),
             submodules: build_submodule_specs(&entry.submodules, transitive_dependencies),
         })
@@ -763,6 +792,37 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec![expected_name]);
+    }
+
+    #[rstest]
+    #[case::root_none(None, &[])]
+    #[case::root_empty(Some(""), &[])]
+    #[case::nested_prefix_with_leaf(Some("foundation::config::leaf"), &["foundation", "config"])]
+    fn resolve_submodule_segments_matches_declared_prefixes(
+        #[case] rel_subpath: Option<&str>,
+        #[case] expected: &[&str],
+    ) {
+        let config: ArchitectureConfig = toml::from_str(indoc::indoc! {r#"
+            [[components]]
+            name = "Project"
+            roots = ["proj"]
+            submodules = [
+              { name = "foundation", submodules = [
+                { name = "source" },
+                { name = "config", depends-on = ["source"] },
+              ] },
+              { name = "python", depends-on = ["foundation"] },
+            ]
+        "#})
+        .expect("valid config");
+        let spec = build_architecture_spec(&config, false).expect("valid spec");
+        let comp = spec.component_spec("Project").expect("Project component");
+        let expected_segments: Vec<String> = expected.iter().map(|seg| (*seg).to_owned()).collect();
+
+        assert_eq!(
+            comp.resolve_submodule_segments(rel_subpath, "::"),
+            expected_segments
+        );
     }
 
     #[rstest]

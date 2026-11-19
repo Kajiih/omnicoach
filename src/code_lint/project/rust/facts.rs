@@ -4,7 +4,7 @@ use super::index::RustIndex;
 use super::layout::RustLayout;
 use super::paths::{
     disambiguated_rust_module_path, is_rust_crate_root, resolve_inherited_component_with_root,
-    resolve_rust_reference_path, rust_module_path,
+    resolve_rust_reference_path, rust_module_path, rust_subpath_under_root,
 };
 use crate::code_lint::ast::rust::{RustFileSummary, summarize_rust_file};
 use crate::code_lint::ast::{
@@ -48,14 +48,10 @@ pub(in crate::code_lint::project) fn collect_rust_project_facts<'a>(
     let cross_module_refs = resolve_rust_cross_module_refs(&entries, index);
     let mut modules = Vec::with_capacity(entries.len());
     for entry in entries {
-        let declared_component = spec
-            .and_then(|resolved| {
-                resolve_inherited_component_with_root(
-                    &entry.module_path,
-                    resolved.component_roots(),
-                )
-            })
-            .map(|inherited| inherited.component.as_str());
+        let inherited = spec.and_then(|resolved| {
+            resolve_inherited_component_with_root(&entry.module_path, resolved.component_roots())
+        });
+        let declared_component = inherited.as_ref().map(|matched| matched.component.as_str());
         if declared_component.is_none()
             && entry.summary.non_namespace_items.is_empty()
             && entry.summary.macro_definitions.is_empty()
@@ -63,6 +59,16 @@ pub(in crate::code_lint::project) fn collect_rust_project_facts<'a>(
         {
             continue;
         }
+        let submodule_path = match (spec, inherited.as_ref()) {
+            (Some(resolved), Some(matched)) => resolved
+                .component_spec(matched.component)
+                .map_or_else(Vec::new, |comp_spec| {
+                    let rel_subpath =
+                        rust_subpath_under_root(&entry.module_path, matched.root_module);
+                    comp_spec.resolve_submodule_segments(rel_subpath, "::")
+                }),
+            _ => Vec::new(),
+        };
         let component = declared_component.map_or_else(
             || {
                 entry
@@ -77,6 +83,7 @@ pub(in crate::code_lint::project) fn collect_rust_project_facts<'a>(
             module_path: entry.module_path,
             path: entry.path,
             component,
+            submodule_path,
             scopes: entry.scopes,
             intra_file_refs: entry.intra_file_refs,
         });

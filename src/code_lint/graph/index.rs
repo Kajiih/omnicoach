@@ -258,7 +258,7 @@ impl<'a> DeclarationAncestry<'a> {
                                 .entry(&declaration.id)
                                 .or_insert(group.label.as_str());
                         }
-                        GroupKind::RecursionGroup { .. } => {}
+                        GroupKind::Submodule { .. } | GroupKind::RecursionGroup { .. } => {}
                     }
                 }
                 cursor = graph.parent_of(parent_id);
@@ -508,10 +508,22 @@ mod tests {
             kind: GroupKind::Module {
                 path: "core".to_owned(),
                 file: "src/core.rs".to_owned(),
+                declared_dependencies: None,
             },
             recursion_group: 0,
             level: 0,
             children: vec![NodeId::new("owner:Tracker")],
+        };
+        let submodule = GroupNode {
+            id: NodeId::new("sub:Core/foundation"),
+            label: "foundation".to_owned(),
+            kind: GroupKind::Submodule {
+                path: "foundation".to_owned(),
+                declared_dependencies: Vec::new(),
+            },
+            recursion_group: 0,
+            level: 0,
+            children: vec![NodeId::new("mod:core")],
         };
         let component = GroupNode {
             id: NodeId::new("comp:Core"),
@@ -521,12 +533,12 @@ mod tests {
             },
             recursion_group: 0,
             level: 0,
-            children: vec![NodeId::new("mod:core")],
+            children: vec![NodeId::new("sub:Core/foundation")],
         };
         AbstractionGraph::new(GraphParts {
             title: "project".to_owned(),
             declarations: vec![tracker, method, helper],
-            groups: vec![component, module, owner, members],
+            groups: vec![component, submodule, module, owner, members],
             ordering_edges: vec![
                 OrderingEdge {
                     higher: NodeId::new("decl:Tracker"),
@@ -631,6 +643,7 @@ mod tests {
                     kind: GroupKind::Module {
                         path: "api".to_owned(),
                         file: "src/api.rs".to_owned(),
+                        declared_dependencies: None,
                     },
                     recursion_group: 0,
                     level: 1,
@@ -642,6 +655,7 @@ mod tests {
                     kind: GroupKind::Module {
                         path: "core".to_owned(),
                         file: "src/core.rs".to_owned(),
+                        declared_dependencies: None,
                     },
                     recursion_group: 0,
                     level: 0,

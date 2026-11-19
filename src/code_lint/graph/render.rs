@@ -16,6 +16,7 @@ const MAX_EMPTY_MODULES_PER_COMPONENT: usize = 2;
 const MAX_MODULES_WITH_EDGES: usize = 20;
 const MAX_MODULE_EDGE_PEERS: usize = 2;
 const MAX_COMPONENT_EDGE_PEERS: usize = 6;
+const BASE_SUBMODULE_HEADING_LEVEL: usize = 3;
 
 /// Supported text output formats for `omnicoach graph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,7 +43,7 @@ pub(super) fn render_graph(graph: &AbstractionGraph, format: OutputFormat) -> St
         };
         let _ = writeln!(
             out,
-            "{comment_prefix}Module edges omitted for {} modules; graph a single component's directory to see them.",
+            "{comment_prefix}Module edges omitted for {} modules; graph a single component or submodule directory to see them.",
             graph_index.module_group_count()
         );
     }
@@ -52,74 +53,47 @@ pub(super) fn render_graph(graph: &AbstractionGraph, format: OutputFormat) -> St
             write_decl(&mut out, declaration, 0, true, format, &graph_index);
         }
     } else {
+        let root_context = GroupRenderContext {
+            depth: 0,
+            submodule_depth: 0,
+            in_module: false,
+            format,
+        };
         for group in graph
             .groups()
             .iter()
             .filter(|group| graph.parent_of(&group.id).is_none())
         {
-            write_group(&mut out, group, 0, false, format, &graph_index);
+            write_group(&mut out, group, root_context, &graph_index);
         }
     }
     out
 }
 
+#[derive(Clone, Copy)]
+struct GroupRenderContext {
+    depth: usize,
+    submodule_depth: usize,
+    in_module: bool,
+    format: OutputFormat,
+}
+
 fn write_group(
     out: &mut String,
     group: &GroupNode,
-    depth: usize,
-    in_module: bool,
-    format: OutputFormat,
+    context: GroupRenderContext,
     graph_index: &GraphIndex<'_>,
 ) {
-    let indent = "  ".repeat(depth);
-    let now_in_module = in_module || matches!(group.kind, GroupKind::Module { .. });
-    match &group.kind {
-        GroupKind::Component {
-            declared_dependencies,
-        } => {
-            let deps = format_declared_dependencies(declared_dependencies.as_deref());
-            let _ = writeln!(
-                out,
-                "\n## Component [L{}] {}{deps}",
-                group.level, group.label
-            );
-        }
-        GroupKind::Module { path, file } => {
-            let file_suffix = if file.is_empty() {
-                String::new()
-            } else {
-                format!(" ({file})")
-            };
-            let leading = if group.children.is_empty() { "" } else { "\n" };
-            let _ = writeln!(
-                out,
-                "{leading}### Module [L{}] {path}{file_suffix}",
-                group.level
-            );
-        }
-        _ => {
-            let kind = format_group_kind(&group.kind, graph_index);
-            match format {
-                OutputFormat::AnnotatedStubs => {
-                    let _ = writeln!(out, "{indent}// === [L{}] {kind} ===", group.level);
-                }
-                OutputFormat::CompactBi => {
-                    let _ = writeln!(out, "{indent}* [L{}] {kind}", group.level);
-                }
-            }
-        }
-    }
+    let now_in_module = context.in_module || matches!(group.kind, GroupKind::Module { .. });
+    write_group_header(out, group, context, graph_index);
 
-    let comment_prefix = match format {
+    let comment_prefix = match context.format {
         OutputFormat::AnnotatedStubs => "// ",
         OutputFormat::CompactBi => "",
     };
-    write_group_edges(out, group, depth, comment_prefix, graph_index);
+    write_group_edges(out, group, context.depth, comment_prefix, graph_index);
 
-    let next_depth = match &group.kind {
-        GroupKind::Component { .. } | GroupKind::Module { .. } => 0,
-        _ => depth + 1,
-    };
+    let next_context = advance_render_context(&group.kind, context, now_in_module);
     let truncate_empty_modules = (omits_module_edges(graph_index)
         || !graph_index.graph().declarations().is_empty())
         && count_empty_module_children(group, graph_index) > MAX_EMPTY_MODULES_PER_COMPONENT + 1;
@@ -127,8 +101,10 @@ fn write_group(
     let mut omitted_modules = 0usize;
     for child_id in &group.children {
         if let Some(child_group) = graph_index.group(child_id) {
-            if matches!(group.kind, GroupKind::Component { .. })
-                && matches!(child_group.kind, GroupKind::Module { .. })
+            if matches!(
+                group.kind,
+                GroupKind::Component { .. } | GroupKind::Submodule { .. }
+            ) && matches!(child_group.kind, GroupKind::Module { .. })
                 && child_group.children.is_empty()
             {
                 empty_modules_seen += 1;
@@ -137,21 +113,14 @@ fn write_group(
                     continue;
                 }
             }
-            write_group(
-                out,
-                child_group,
-                next_depth,
-                now_in_module,
-                format,
-                graph_index,
-            );
+            write_group(out, child_group, next_context, graph_index);
         } else if let Some(declaration) = graph_index.declaration(child_id) {
             write_decl(
                 out,
                 declaration,
-                next_depth,
+                next_context.depth,
                 !now_in_module,
-                format,
+                context.format,
                 graph_index,
             );
         }
@@ -165,6 +134,97 @@ fn write_group(
     }
 }
 
+fn write_group_header(
+    out: &mut String,
+    group: &GroupNode,
+    context: GroupRenderContext,
+    graph_index: &GraphIndex<'_>,
+) {
+    let indent = "  ".repeat(context.depth);
+    match &group.kind {
+        GroupKind::Component {
+            declared_dependencies,
+        } => {
+            let deps = format_declared_dependencies(declared_dependencies.as_deref());
+            let _ = writeln!(
+                out,
+                "\n## Component [L{}] {}{deps}",
+                group.level, group.label
+            );
+        }
+        GroupKind::Submodule {
+            path,
+            declared_dependencies,
+        } => {
+            let hashes = "#".repeat(BASE_SUBMODULE_HEADING_LEVEL + context.submodule_depth);
+            let deps = format_declared_dependencies(Some(declared_dependencies.as_slice()));
+            let leading = if group.children.is_empty() { "" } else { "\n" };
+            let _ = writeln!(
+                out,
+                "{leading}{hashes} Submodule [L{}] {path}{deps}",
+                group.level
+            );
+        }
+        GroupKind::Module {
+            path,
+            file,
+            declared_dependencies,
+        } => {
+            let hashes = "#".repeat(BASE_SUBMODULE_HEADING_LEVEL + context.submodule_depth);
+            let deps = format_declared_dependencies(declared_dependencies.as_deref());
+            let file_suffix = if file.is_empty() {
+                String::new()
+            } else {
+                format!(" ({file})")
+            };
+            let leading = if group.children.is_empty() { "" } else { "\n" };
+            let _ = writeln!(
+                out,
+                "{leading}{hashes} Module [L{}] {path}{deps}{file_suffix}",
+                group.level
+            );
+        }
+        _ => {
+            let kind = format_group_kind(&group.kind, graph_index);
+            match context.format {
+                OutputFormat::AnnotatedStubs => {
+                    let _ = writeln!(out, "{indent}// === [L{}] {kind} ===", group.level);
+                }
+                OutputFormat::CompactBi => {
+                    let _ = writeln!(out, "{indent}* [L{}] {kind}", group.level);
+                }
+            }
+        }
+    }
+}
+
+const fn advance_render_context(
+    kind: &GroupKind,
+    context: GroupRenderContext,
+    now_in_module: bool,
+) -> GroupRenderContext {
+    match kind {
+        GroupKind::Component { .. } | GroupKind::Module { .. } => GroupRenderContext {
+            depth: 0,
+            submodule_depth: context.submodule_depth,
+            in_module: now_in_module,
+            format: context.format,
+        },
+        GroupKind::Submodule { .. } => GroupRenderContext {
+            depth: 0,
+            submodule_depth: context.submodule_depth + 1,
+            in_module: now_in_module,
+            format: context.format,
+        },
+        _ => GroupRenderContext {
+            depth: context.depth + 1,
+            submodule_depth: context.submodule_depth,
+            in_module: now_in_module,
+            format: context.format,
+        },
+    }
+}
+
 fn format_declared_dependencies(declared: Option<&[String]>) -> String {
     declared.map_or_else(String::new, |deps| {
         format!(" (depends_on=[{}])", deps.join(", "))
@@ -174,6 +234,7 @@ fn format_declared_dependencies(declared: Option<&[String]>) -> String {
 fn format_group_kind(kind: &GroupKind, graph_index: &GraphIndex<'_>) -> String {
     match kind {
         GroupKind::Component { .. } => "component".to_owned(),
+        GroupKind::Submodule { path, .. } => format!("submodule:{path}"),
         GroupKind::Module { path, .. } => format!("module:{path}"),
         GroupKind::Owner { root } => {
             let owner_name = graph_index
@@ -214,7 +275,9 @@ fn write_group_edges(
         return;
     }
     let edge_indent = match &group.kind {
-        GroupKind::Component { .. } | GroupKind::Module { .. } => String::new(),
+        GroupKind::Component { .. } | GroupKind::Submodule { .. } | GroupKind::Module { .. } => {
+            String::new()
+        }
         _ => "  ".repeat(depth + 1),
     };
     let out_edges = graph_index.group_out_edges(&group.id);
@@ -262,7 +325,7 @@ fn format_summary_edges(
 fn format_group_edge_list(edges: &[String], kind: &GroupKind) -> String {
     let max_peers = match kind {
         GroupKind::Module { .. } => Some(MAX_MODULE_EDGE_PEERS),
-        GroupKind::Component { .. } => Some(MAX_COMPONENT_EDGE_PEERS),
+        GroupKind::Component { .. } | GroupKind::Submodule { .. } => Some(MAX_COMPONENT_EDGE_PEERS),
         _ => None,
     };
     if let Some(limit) = max_peers
@@ -277,7 +340,10 @@ fn format_group_edge_list(edges: &[String], kind: &GroupKind) -> String {
 }
 
 fn count_empty_module_children(group: &GroupNode, graph_index: &GraphIndex<'_>) -> usize {
-    if !matches!(group.kind, GroupKind::Component { .. }) {
+    if !matches!(
+        group.kind,
+        GroupKind::Component { .. } | GroupKind::Submodule { .. }
+    ) {
         return 0;
     }
     group
@@ -543,6 +609,7 @@ mod tests {
             kind: GroupKind::Module {
                 path: "runner".to_owned(),
                 file: "src/runner.rs".to_owned(),
+                declared_dependencies: None,
             },
             recursion_group: 0,
             level: 0,
@@ -657,6 +724,7 @@ mod tests {
         let mod_kind = GroupKind::Module {
             path: "m".to_owned(),
             file: "src/m.rs".to_owned(),
+            declared_dependencies: None,
         };
         assert_eq!(
             format_group_edge_list(&edges_three, &mod_kind),
@@ -730,6 +798,7 @@ mod tests {
                 kind: GroupKind::Module {
                     path: format!("unit_{index}"),
                     file: format!("src/unit_{index}.rs"),
+                    declared_dependencies: None,
                 },
                 recursion_group: 0,
                 level: 0,

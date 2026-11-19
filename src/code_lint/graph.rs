@@ -195,16 +195,60 @@ mod tests {
             "expected declared CodeLintProject component in:\n{rendered}"
         );
         assert!(
-            rendered.contains("### Module [L0] code_lint::project::foundation::config"),
-            "expected L0 config module to render untruncated in:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("### Module [L1] code_lint::project::foundation::source"),
-            "expected L1 source module to render untruncated in:\n{rendered}"
+            rendered.contains("### Submodule [L0] foundation (depends_on=[])"),
+            "expected declared foundation submodule container in:\n{rendered}"
         );
         assert!(
             !rendered.contains("CommandLintVcs"),
             "expected unrelated components to be omitted in:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn subdirectory_graph_renders_leaf_module_declared_dependencies_and_levels() {
+        let options = GraphOptions {
+            paths: vec![
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_lint/project/foundation"),
+            ],
+            ..GraphOptions::default()
+        };
+        let rendered = generate_graph(&options, &ProjectConfig::default()).unwrap();
+        assert!(
+            rendered.contains(
+                "#### Module [L0] code_lint::project::foundation::config (depends_on=[])"
+            ),
+            "expected L0 config module with declared dependencies in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "#### Module [L1] code_lint::project::foundation::source (depends_on=[config])"
+            ),
+            "expected L1 source module with declared dependencies in:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn component_directory_graph_renders_recursive_submodule_dag_and_reflexion_edges() {
+        let options = GraphOptions {
+            paths: vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src/code_lint/project")],
+            ..GraphOptions::default()
+        };
+        let rendered = generate_graph(&options, &ProjectConfig::default()).unwrap();
+        assert!(
+            rendered.contains("### Submodule [L2] context (depends_on=[foundation, python, rust])"),
+            "expected L2 context submodule in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("### Submodule [L1] python (depends_on=[foundation])"),
+            "expected L1 python submodule in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("### Submodule [L1] rust (depends_on=[foundation])"),
+            "expected L1 rust submodule in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("convergent]"),
+            "expected convergent intra-component Reflexion edges in:\n{rendered}"
         );
     }
 

@@ -19,10 +19,8 @@ pub(in crate::code_lint::project) use self::config::{
     ArchitectureComponentConfig, ArchitectureSubmoduleConfig, ProjectTomlError, WorkspaceAnchor,
     normalize_relative_path,
 };
-#[cfg(test)]
-pub(in crate::code_lint) use self::facts::ComponentFact;
 pub(in crate::code_lint) use self::facts::{
-    CrossModuleRefFact, ModuleFact, ProjectFacts, ProjectSourceFile,
+    ComponentFact, CrossModuleRefFact, ModuleFact, ProjectFacts, ProjectSourceFile,
 };
 pub(in crate::code_lint::project) use self::facts::{
     KnownModulePrefix, ProjectGraphScope, ResolvedModuleTarget, SplitModulePath,

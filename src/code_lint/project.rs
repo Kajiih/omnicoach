@@ -13,13 +13,13 @@ pub(super) use self::context::{
     DiscoveredProjectSources, derive_project_title, discover_project_sources,
     resolve_effective_paths,
 };
+#[cfg(test)]
+pub(super) use self::foundation::CrossModuleRefFact;
 pub(crate) use self::foundation::{
     ArchitectureConfig, compile_glob, is_rooted_path, lexical_normalize, resolve_against_cwd,
 };
-#[cfg(test)]
-pub(super) use self::foundation::{ComponentFact, CrossModuleRefFact};
 pub(super) use self::foundation::{
-    InvalidArchitectureComponentKind, ModuleFact, OverlayFileSource, ProjectFacts,
+    ComponentFact, InvalidArchitectureComponentKind, ModuleFact, OverlayFileSource, ProjectFacts,
     ProjectSourceFile,
 };
 pub(crate) use self::python::PythonModuleContext;

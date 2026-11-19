@@ -1,6 +1,8 @@
 //! Multi-file Python project fact extraction and cross-module symbol resolution.
 
-use super::architecture::{resolve_python_component, routes_to_python_component};
+use super::architecture::{
+    python_subpath_under_root, resolve_python_component, routes_to_python_component,
+};
 use super::index::PythonIndex;
 use super::layout::PythonLayout;
 use super::paths::{
@@ -57,8 +59,10 @@ pub(in crate::code_lint::project) fn collect_python_project_facts(
     let mut modules = Vec::with_capacity(entries.len());
 
     for entry in entries {
-        let declared_component = spec
-            .and_then(|resolved| resolve_python_component(&entry.module_path, resolved))
+        let matched_component =
+            spec.and_then(|resolved| resolve_python_component(&entry.module_path, resolved));
+        let declared_component = matched_component
+            .as_ref()
             .map(|matched| matched.component_name);
         let is_unmapped_pure_router = declared_component.is_none()
             && entry.is_package_init
@@ -66,6 +70,17 @@ pub(in crate::code_lint::project) fn collect_python_project_facts(
             && spec
                 .is_some_and(|resolved| routes_to_python_component(&entry.module_path, resolved));
         if !is_unmapped_pure_router {
+            let submodule_path = match (spec, matched_component.as_ref()) {
+                (Some(resolved), Some(matched)) => resolved
+                    .component_spec(matched.component_name)
+                    .map_or_else(Vec::new, |comp_spec| {
+                        comp_spec.resolve_submodule_segments(
+                            python_subpath_under_root(&entry.module_path, matched.matched_root),
+                            ".",
+                        )
+                    }),
+                _ => Vec::new(),
+            };
             let component = declared_component.map_or_else(
                 || python_component_name(&entry.module_path, title),
                 str::to_owned,
@@ -74,6 +89,7 @@ pub(in crate::code_lint::project) fn collect_python_project_facts(
                 module_path: entry.module_path,
                 path: entry.path,
                 component,
+                submodule_path,
                 scopes: entry.scopes,
                 intra_file_refs: entry.intra_file_refs,
             });
