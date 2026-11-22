@@ -1,7 +1,8 @@
 //! Validation checks for the `jj edit` command.
 
-use crate::command_lint::command::{InterceptedCommand, JJ_CLI_SCHEMA, ParsedCommand};
+use crate::command_lint::command::{InterceptedCommand, ParsedCommand};
 use crate::command_lint::contract::{CommandEnv, CommandRule};
+use crate::command_lint::vcs::JJ_CLI_SCHEMA;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Reference, RuleDoc,

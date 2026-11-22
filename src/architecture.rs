@@ -194,13 +194,16 @@ define_architecture! {
     }),
 
     // --- Command Safety Domain (`command_lint`) ---
-    /// The jj client: repository state queries for command rules (`command_lint::vcs`).
-    CommandLintVcs      => [],
     /// The intercepted command parser: shell input to commands and their arguments (`command_lint::command`).
     CommandLintCommand  => [Diagnostic] (owns_external: ["brush_parser"]) (modules: {
-        revset => [],
         shell => [],
         cli_args => [shell],
+    }),
+    /// Jujutsu CLI schemas, revset boundedness, and repository state queries (`command_lint::vcs`).
+    CommandLintVcs      => [CommandLintCommand] (modules: {
+        revset => [],
+        cli => [],
+        client => [],
     }),
     /// The command rule contract: a declaration and a check over a parsed command (`command_lint::contract`).
     CommandLintContract => [CommandLintCommand, CommandLintVcs, RuleDeclaration],

@@ -1,10 +1,10 @@
 //! Validation checks for unbounded `jj log` revision walks.
 
-use crate::command_lint::command::{
-    InterceptedCommand, JJ_CLI_SCHEMA, ParsedCommand, intersect_revset_with_mutable,
-    is_bounded_jj_revset,
-};
+use crate::command_lint::command::{InterceptedCommand, ParsedCommand};
 use crate::command_lint::contract::{CommandEnv, CommandRule};
+use crate::command_lint::vcs::{
+    JJ_CLI_SCHEMA, intersect_revset_with_mutable, is_bounded_jj_revset,
+};
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Reference, RuleDoc,

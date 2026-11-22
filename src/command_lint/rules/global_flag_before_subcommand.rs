@@ -1,7 +1,10 @@
 //! Validation checks for global CLI flags placed before a subcommand.
 
-use crate::command_lint::command::{ParsedCommand, extract_leading_global_flags};
+use crate::command_lint::command::{
+    ParsedCommand, SubcommandCliSchema, extract_leading_global_flags,
+};
 use crate::command_lint::contract::{CommandEnv, CommandRule};
+use crate::command_lint::vcs::JJ_SUBCOMMAND_CLI_SCHEMA;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Reference, RuleDoc,
@@ -62,6 +65,36 @@ pub const RULE: CommandRule = CommandRule {
     check: check_command,
 };
 
+/// Registered `clap`-based subcommand CLIs (`jj`, `cargo`, `uv`) whose global flags can be moved
+/// after the subcommand. Non-`clap` subcommand CLIs such as `git` (`git -C <dir> status`,
+/// `git --no-pager log`) reject top-level flags after the subcommand and must not be added here.
+const SUBCOMMAND_CLI_SCHEMAS: &[SubcommandCliSchema] = &[
+    JJ_SUBCOMMAND_CLI_SCHEMA,
+    SubcommandCliSchema {
+        program_name: "cargo",
+        global_options_with_values: &["-C", "--color", "--config", "-Z"],
+        standalone_flags: &["-h", "--help", "-V", "--version", "--list", "--explain"],
+        allows_plus_toolchain: true,
+    },
+    SubcommandCliSchema {
+        program_name: "uv",
+        global_options_with_values: &[
+            "-C",
+            "--color",
+            "--directory",
+            "--project",
+            "--config-file",
+            "--cache-dir",
+            "--python",
+            "--python-preference",
+            "--python-fetch",
+            "--allow-insecure-host",
+        ],
+        standalone_flags: &["-h", "--help", "-V", "--version"],
+        allows_plus_toolchain: false,
+    },
+];
+
 fn check_command(
     rule: &CommandRule,
     parsed: &ParsedCommand,
@@ -72,7 +105,7 @@ fn check_command(
         .commands()
         .iter()
         .filter_map(|cmd| {
-            let leading = extract_leading_global_flags(cmd)?;
+            let leading = extract_leading_global_flags(cmd, SUBCOMMAND_CLI_SCHEMAS)?;
             let command_slice = &source[cmd.span.start..cmd.span.end];
             let replacement = leading.reorder_subcommand_first(cmd, source);
             Some(rule.diagnostic_at(
@@ -106,6 +139,10 @@ crate::test_utils::command_rule_test!(
             standalone_version_flag => "cargo --version",
             standalone_cargo_list => "cargo --list",
             standalone_cargo_explain => "cargo --explain E0308",
+            standalone_cargo_explain_equals => "cargo --color=never --explain=E0308",
+            standalone_cargo_short_version_cluster => "cargo -qV test",
+            cargo_z_script_spaced => "cargo +nightly -Z script foo.rs",
+            cargo_z_script_glued => "cargo +nightly -Zscript foo.rs",
             flags_without_subcommand => "jj -R /tmp/ws --no-pager",
             double_dash_terminator => "jj --no-pager -- log",
         ],
@@ -113,6 +150,7 @@ crate::test_utils::command_rule_test!(
             jj_leading_boolean_flag => "jj --no-pager log -n 5",
             jj_leading_short_option_with_value => "jj -R /tmp/ws status",
             jj_leading_glued_short_option => "jj -R. diff",
+            jj_leading_glued_repo_and_config => "jj -R. --config ui.paginate=never diff",
             jj_leading_long_equals_option => "jj --repository=/tmp/ws bookmark list",
             jj_multiple_leading_flags => "jj --no-pager --ignore-working-copy -R . log -n 5",
             jj_interspersed_redirect => "jj --no-pager 2>/dev/null log -n 5",
@@ -123,6 +161,7 @@ crate::test_utils::command_rule_test!(
             uv_leading_boolean_flag => "uv --offline sync",
             uv_leading_option_with_value => "uv --directory /tmp/app run pytest",
             uv_leading_short_directory_option => "uv -C /tmp/app run pytest",
+            uv_leading_allow_insecure_host => "uv --allow-insecure-host example.com run pytest",
             inside_pipeline => "jj --no-pager log -n 5 | head" => "jj --no-pager log -n 5",
             inside_command_substitution => r#"echo "$(cargo --quiet check)""# => "cargo --quiet check",
         ],

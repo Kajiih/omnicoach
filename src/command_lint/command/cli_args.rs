@@ -7,42 +7,6 @@ use std::slice::Iter;
 use super::shell::{CommandArg, InterceptedCommand};
 use crate::diagnostic::SourceSpan;
 
-macro_rules! jj_global_options_with_values {
-    ($($extra:literal,)*) => {
-        &[
-            $($extra,)*
-            "-R",
-            "--repository",
-            "--at-operation",
-            "--at-op",
-            "--color",
-            "--config",
-            "--config-toml",
-            "--config-file",
-        ]
-    };
-}
-
-const JJ_GLOBAL_OPTIONS_WITH_VALUES: &[&str] = jj_global_options_with_values!();
-
-/// CLI schema definition for Jujutsu (`jj`) commands.
-pub const JJ_CLI_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    program_name: "jj",
-    options_with_values: jj_global_options_with_values!(
-        "-r",
-        "--revision",
-        "--revisions",
-        "-n",
-        "--limit",
-        "-T",
-        "--template",
-        "--tool",
-        "--context",
-        "-m",
-        "--message",
-    ),
-};
-
 /// Schema defining a program's command-line interface options layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramCliSchema {
@@ -50,6 +14,25 @@ pub struct ProgramCliSchema {
     pub program_name: &'static str,
     /// Option flags that consume a value (e.g. `["-R", "--repository"]`).
     pub options_with_values: &'static [&'static str],
+}
+
+/// Leading-flag layout for a `clap`-style subcommand CLI where global flags (`Arg::global(true)`)
+/// are accepted both before and after `<SUBCOMMAND>`.
+///
+/// On a valid `clap` subcommand invocation, only global flags and standalone top-level flags are
+/// accepted before `<SUBCOMMAND>`, so every non-standalone flag preceding the subcommand is a
+/// global flag that can move after it. Only value-consuming global options need to be listed in
+/// `global_options_with_values` so their value token is not mistaken for the subcommand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubcommandCliSchema {
+    /// Binary base name matched against [`InterceptedCommand::program_base_name`].
+    pub program_name: &'static str,
+    /// Global options that consume a following value argument.
+    pub global_options_with_values: &'static [&'static str],
+    /// Top-level flags that run without a subcommand (such as `"-h"`, `"--help"`, `"--version"`).
+    pub standalone_flags: &'static [&'static str],
+    /// Whether an initial `+toolchain` selector token (such as `cargo +nightly`) may precede flags.
+    pub allows_plus_toolchain: bool,
 }
 
 /// Parsed command-line positional arguments and option flags.
@@ -137,10 +120,13 @@ impl LeadingGlobalFlags {
 }
 
 /// Extracts leading global flags placed before a subcommand on `clap`-style subcommand CLIs
-/// (`jj`, `cargo`, `uv`).
+/// matched against `schemas`.
 #[must_use]
-pub fn extract_leading_global_flags(command: &InterceptedCommand) -> Option<LeadingGlobalFlags> {
-    let schema = SUBCOMMAND_CLI_SCHEMAS
+pub fn extract_leading_global_flags(
+    command: &InterceptedCommand,
+    schemas: &[SubcommandCliSchema],
+) -> Option<LeadingGlobalFlags> {
+    let schema = schemas
         .iter()
         .find(|candidate| candidate.program_name == command.program_base_name())?;
     let arguments = &command.arguments;
@@ -274,55 +260,6 @@ impl<'a> ArgParser<'a> {
     }
 }
 
-/// Leading-flag layout for a `clap`-style subcommand CLI where global flags (`Arg::global(true)`)
-/// are accepted both before and after `<SUBCOMMAND>`.
-///
-/// On a valid `clap` subcommand invocation, only global flags and standalone top-level flags are
-/// accepted before `<SUBCOMMAND>`, so every non-standalone flag preceding the subcommand is a
-/// global flag that can move after it. Only value-consuming global options need to be listed in
-/// `global_options_with_values` so their value token is not mistaken for the subcommand.
-struct SubcommandCliSchema {
-    program_name: &'static str,
-    global_options_with_values: &'static [&'static str],
-    standalone_flags: &'static [&'static str],
-    allows_plus_toolchain: bool,
-}
-
-/// Registered `clap`-based subcommand CLIs (`jj`, `cargo`, `uv`) whose global flags can be moved
-/// after the subcommand. Non-`clap` subcommand CLIs such as `git` (`git -C <dir> status`,
-/// `git --no-pager log`) reject top-level flags after the subcommand and must not be added here.
-const SUBCOMMAND_CLI_SCHEMAS: &[SubcommandCliSchema] = &[
-    SubcommandCliSchema {
-        program_name: "jj",
-        global_options_with_values: JJ_GLOBAL_OPTIONS_WITH_VALUES,
-        standalone_flags: &["-h", "--help", "-V", "--version"],
-        allows_plus_toolchain: false,
-    },
-    SubcommandCliSchema {
-        program_name: "cargo",
-        global_options_with_values: &["-C", "--color", "--config", "-Z"],
-        standalone_flags: &["-h", "--help", "-V", "--version", "--list", "--explain"],
-        allows_plus_toolchain: true,
-    },
-    SubcommandCliSchema {
-        program_name: "uv",
-        global_options_with_values: &[
-            "-C",
-            "--color",
-            "--directory",
-            "--project",
-            "--config-file",
-            "--cache-dir",
-            "--python",
-            "--python-preference",
-            "--python-fetch",
-            "--allow-insecure-host",
-        ],
-        standalone_flags: &["-h", "--help", "-V", "--version"],
-        allows_plus_toolchain: false,
-    },
-];
-
 fn find_subcommand_after_leading_flags(
     arguments: &[CommandArg],
     prefix_start: usize,
@@ -398,64 +335,93 @@ mod tests {
     use super::super::shell::ParsedCommand;
     use super::*;
 
+    const TEST_PROGRAM_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+        program_name: "tool",
+        options_with_values: &[
+            "-C",
+            "--directory",
+            "--config",
+            "-r",
+            "--revision",
+            "--revisions",
+            "-n",
+            "--limit",
+        ],
+    };
+
+    const TEST_SUBCOMMAND_SCHEMAS: &[SubcommandCliSchema] = &[
+        SubcommandCliSchema {
+            program_name: "tool",
+            global_options_with_values: &["-C", "--directory", "--config"],
+            standalone_flags: &["-h", "--help", "-V", "--version"],
+            allows_plus_toolchain: false,
+        },
+        SubcommandCliSchema {
+            program_name: "cargo",
+            global_options_with_values: &["-C", "--color", "--config", "-Z"],
+            standalone_flags: &["-h", "--help", "-V", "--version", "--list", "--explain"],
+            allows_plus_toolchain: true,
+        },
+    ];
+
     #[test]
     fn test_parse_args_basic() {
-        let cmd = InterceptedCommand::parse_all("jj edit -R . --config myconf @-").remove(0);
+        let cmd = InterceptedCommand::parse_all("tool check -C . --config myconf target").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "jj",
-            options_with_values: &["-R", "--repository", "--config"],
+            program_name: "tool",
+            options_with_values: &["-C", "--directory", "--config"],
         };
         let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["edit", "@-"]);
-        assert_eq!(args.get_option("-R"), Some("."));
+        assert_eq!(args.positionals, vec!["check", "target"]);
+        assert_eq!(args.get_option("-C"), Some("."));
         assert_eq!(args.get_option("--config"), Some("myconf"));
-        assert!(args.has_subcommand_sequence(&["edit"]));
+        assert!(args.has_subcommand_sequence(&["check"]));
     }
 
     #[test]
     fn test_parse_args_boolean_long_flag_and_stdin_dash() {
-        let cmd = InterceptedCommand::parse_all("jj --no-pager edit -").remove(0);
+        let cmd = InterceptedCommand::parse_all("tool --quiet check -").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "jj",
-            options_with_values: &["-R"],
+            program_name: "tool",
+            options_with_values: &["-C"],
         };
         let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["edit", "-"]);
-        assert!(args.has_flag("--no-pager"));
+        assert_eq!(args.positionals, vec!["check", "-"]);
+        assert!(args.has_flag("--quiet"));
     }
 
     #[test]
     fn test_parse_args_equals_syntax() {
-        let cmd = InterceptedCommand::parse_all("jj edit --repository=. @-").remove(0);
+        let cmd = InterceptedCommand::parse_all("tool check --directory=. target").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "jj",
-            options_with_values: &["-R", "--repository"],
+            program_name: "tool",
+            options_with_values: &["-C", "--directory"],
         };
         let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["edit", "@-"]);
-        assert_eq!(args.get_option("--repository"), Some("."));
+        assert_eq!(args.positionals, vec!["check", "target"]);
+        assert_eq!(args.get_option("--directory"), Some("."));
     }
 
     #[test]
     fn test_parse_args_posix_clustering() {
-        let cmd = InterceptedCommand::parse_all("jj edit -am").remove(0);
+        let cmd = InterceptedCommand::parse_all("tool check -am").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "jj",
+            program_name: "tool",
             options_with_values: &[],
         };
         let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["edit"]);
+        assert_eq!(args.positionals, vec!["check"]);
         assert!(args.has_flag("-a"));
         assert!(args.has_flag("-m"));
     }
 
     #[test]
     fn test_parse_args_posix_glued_value_and_short_equals() {
-        let cmd = InterceptedCommand::parse_all("jj edit -R. -r=kpqxywon").remove(0);
-        let args = cmd.parse_args(&JJ_CLI_SCHEMA);
-        assert_eq!(args.positionals, vec!["edit"]);
-        assert_eq!(args.get_option("-R"), Some("."));
-        assert_eq!(args.get_option("-r"), Some("kpqxywon"));
+        let cmd = InterceptedCommand::parse_all("tool check -C. -r=abc123").remove(0);
+        let args = cmd.parse_args(&TEST_PROGRAM_SCHEMA);
+        assert_eq!(args.positionals, vec!["check"]);
+        assert_eq!(args.get_option("-C"), Some("."));
+        assert_eq!(args.get_option("-r"), Some("abc123"));
     }
 
     #[test]
@@ -487,22 +453,22 @@ mod tests {
     #[test]
     fn test_parse_args_consumes_dash_prefixed_option_values() {
         let cmd =
-            InterceptedCommand::parse_all("jj describe -m -wip --message -second @-").remove(0);
+            InterceptedCommand::parse_all("tool note -m -wip --message -second target").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "jj",
+            program_name: "tool",
             options_with_values: &["-m", "--message"],
         };
         let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["describe", "@-"]);
+        assert_eq!(args.positionals, vec!["note", "target"]);
         assert_eq!(args.get_option("-m"), Some("-wip"));
         assert_eq!(args.get_option("--message"), Some("-second"));
     }
 
     #[test]
     fn test_option_values_returns_all_occurrences_in_order() {
-        let parsed = ParsedCommand::new("jj log -r a --revision b -rc --revisions=d -r=e");
+        let parsed = ParsedCommand::new("tool list -r a --revision b -rc --revisions=d -r=e");
         let cmd = &parsed.commands()[0];
-        let args = cmd.parse_args(&JJ_CLI_SCHEMA);
+        let args = cmd.parse_args(&TEST_PROGRAM_SCHEMA);
         assert_eq!(args.option_values("-r"), &["a", "c", "e"]);
         assert_eq!(args.option_values("--revision"), &["b"]);
         assert_eq!(args.option_values("--revisions"), &["d"]);
@@ -510,21 +476,21 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::jj_no_pager(
-        "jj --no-pager log -n 5",
-        Some(("--no-pager", "log", "jj log --no-pager -n 5"))
+    #[case::leading_boolean_flag(
+        "tool --quiet list -n 5",
+        Some(("--quiet", "list", "tool list --quiet -n 5"))
     )]
-    #[case::jj_repo_with_value(
-        "jj -R /tmp/ws status",
-        Some(("-R", "status", "jj status -R /tmp/ws"))
+    #[case::short_option_with_value(
+        "tool -C /tmp/ws status",
+        Some(("-C", "status", "tool status -C /tmp/ws"))
     )]
-    #[case::jj_glued_repo_and_config(
-        "jj -R. --config ui.paginate=never diff",
-        Some(("-R.", "diff", "jj diff -R. --config ui.paginate=never"))
+    #[case::glued_short_option_and_config(
+        "tool -C. --config ui.color=never diff",
+        Some(("-C.", "diff", "tool diff -C. --config ui.color=never"))
     )]
-    #[case::jj_interspersed_redirect(
-        "jj --no-pager 2>/dev/null log -n 5",
-        Some(("--no-pager", "log", "jj 2>/dev/null log --no-pager -n 5"))
+    #[case::interspersed_redirect(
+        "tool --quiet 2>/dev/null list -n 5",
+        Some(("--quiet", "list", "tool 2>/dev/null list --quiet -n 5"))
     )]
     #[case::cargo_locked(
         "cargo --locked test --lib",
@@ -538,55 +504,43 @@ mod tests {
         "cargo -vC /tmp/crate check",
         Some(("-vC", "check", "cargo check -vC /tmp/crate"))
     )]
-    #[case::uv_directory_option(
-        "uv --directory /tmp/app run pytest",
-        Some(("--directory", "run", "uv run --directory /tmp/app pytest"))
-    )]
-    #[case::uv_short_directory_option(
-        "uv -C /tmp/app run pytest",
-        Some(("-C", "run", "uv run -C /tmp/app pytest"))
-    )]
-    #[case::uv_allow_insecure_host_option(
-        "uv --allow-insecure-host example.com run pytest",
-        Some((
-            "--allow-insecure-host",
-            "run",
-            "uv run --allow-insecure-host example.com pytest"
-        ))
+    #[case::long_option_with_value(
+        "tool --directory /tmp/app run target",
+        Some(("--directory", "run", "tool run --directory /tmp/app target"))
     )]
     #[case::cargo_hyphenated_subcommand(
         "cargo --locked verify-project",
         Some(("--locked", "verify-project", "cargo verify-project --locked"))
     )]
-    #[case::subcommand_first_allowed("jj log --no-pager -n 5", None)]
+    #[case::subcommand_first_allowed("tool list --quiet -n 5", None)]
     #[case::cargo_plus_toolchain_then_subcommand_allowed("cargo +nightly test --locked", None)]
     #[case::cargo_bare_plus_ignored("cargo + --locked test", None)]
-    #[case::jj_plus_arg_not_treated_as_toolchain("jj +nightly --no-pager log", None)]
+    #[case::non_toolchain_plus_arg_not_treated_as_toolchain("tool +nightly --quiet list", None)]
     #[case::cargo_misplaced_plus_toolchain_after_flag_ignored("cargo --locked +nightly test", None)]
     #[case::git_top_level_flag_ignored("git -C /tmp/repo status", None)]
-    #[case::standalone_version_allowed("jj --version", None)]
-    #[case::standalone_help_before_subcommand_allowed("jj --help log", None)]
-    #[case::standalone_help_with_leading_flag_allowed("jj --no-pager --help", None)]
+    #[case::standalone_version_allowed("tool --version", None)]
+    #[case::standalone_help_before_subcommand_allowed("tool --help list", None)]
+    #[case::standalone_help_with_leading_flag_allowed("tool --quiet --help", None)]
     #[case::standalone_short_version_cluster_before_subcommand_allowed("cargo -qV test", None)]
     #[case::cargo_explain_allowed("cargo --explain E0308", None)]
     #[case::cargo_explain_equals_allowed("cargo --color=never --explain=E0308", None)]
     #[case::cargo_z_script_spaced_allowed("cargo +nightly -Z script foo.rs", None)]
     #[case::cargo_z_script_glued_allowed("cargo +nightly -Zscript foo.rs", None)]
-    #[case::empty_quoted_positional_allowed("jj --no-pager ''", None)]
-    #[case::flags_only_no_subcommand_allowed("jj -R /tmp/ws --no-pager", None)]
-    #[case::dangling_option_value_at_end_allowed("jj -R", None)]
-    #[case::dangling_long_option_before_double_dash_allowed("jj --repository -- log", None)]
-    #[case::dangling_short_option_before_double_dash_allowed("jj -R -- log", None)]
-    #[case::double_dash_before_positional_allowed("jj --no-pager -- log", None)]
-    #[case::single_dash_positional_allowed("jj --no-pager -", None)]
-    #[case::variable_expansion_after_flag_allowed("jj --no-pager $ARGS", None)]
+    #[case::empty_quoted_positional_allowed("tool --quiet ''", None)]
+    #[case::flags_only_no_subcommand_allowed("tool -C /tmp/ws --quiet", None)]
+    #[case::dangling_option_value_at_end_allowed("tool -C", None)]
+    #[case::dangling_long_option_before_double_dash_allowed("tool --directory -- list", None)]
+    #[case::dangling_short_option_before_double_dash_allowed("tool -C -- list", None)]
+    #[case::double_dash_before_positional_allowed("tool --quiet -- list", None)]
+    #[case::single_dash_positional_allowed("tool --quiet -", None)]
+    #[case::variable_expansion_after_flag_allowed("tool --quiet $ARGS", None)]
     fn test_extract_leading_global_flags(
         #[case] script: &str,
         #[case] expected: Option<(&str, &str, &str)>,
     ) {
         let parsed = ParsedCommand::new(script);
         let cmd = &parsed.commands()[0];
-        let actual = extract_leading_global_flags(cmd);
+        let actual = extract_leading_global_flags(cmd, TEST_SUBCOMMAND_SCHEMAS);
         let reordered = actual
             .as_ref()
             .map(|found| found.reorder_subcommand_first(cmd, parsed.source()));
