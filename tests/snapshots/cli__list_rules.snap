@@ -31,6 +31,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `global-flag-before-subcommand` (command): Flags global CLI flags placed before the subcommand.
 - `identical-positional-types` (python): Flags Python functions whose positional parameters share a type annotation.
 - `inline-public-attribute-annotation` (python): Flags public Python instance attributes annotated inline inside methods instead of in the class body.
+- `interactive-jj-command` (command): Flags Jujutsu commands that open an interactive text, diff, or merge editor.
 - `invalid-architecture-component` (rust): Flags Rust `architecture_component!` declarations that do not establish a valid component root.
 - `logic-in-tests` (python, rust): Flags control-flow statements and conditional expressions inside test functions.
 - `missing-suppression-reason` (python, rust): Requires every suppression directive to give a reason.

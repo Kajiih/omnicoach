@@ -56,19 +56,45 @@ const UNBOUNDED_RANGE_LOWER_BOUNDS: &[&str] = &["root", "none"];
 /// `reachable(srcs, domain)` over a bounded domain, or intersections (`&`) and differences (`~`)
 /// constrained by a bounded set such as `mutable()`.
 #[must_use]
-pub fn is_bounded_jj_revset(input: &str) -> bool {
+pub(super) fn is_bounded_jj_revset(input: &str) -> bool {
     parse_revset(input).is_some_and(|expression| expression.is_bounded())
 }
 
 /// Formats `input` intersected with `mutable()`, wrapping `input` in parentheses when it
 /// contains a top-level union (`|`) so `& mutable()` constrains every union branch.
 #[must_use]
-pub fn intersect_revset_with_mutable(input: &str) -> String {
+pub(super) fn intersect_revset_with_mutable(input: &str) -> String {
     let trimmed = input.trim();
     if matches!(parse_revset(trimmed), Some(RevsetExpr::Union(_, _))) {
         format!("({trimmed}) & mutable()")
     } else {
         format!("{trimmed} & mutable()")
+    }
+}
+
+/// Joins `revisions` as a parenthesized top-level Jujutsu revset union (`(a) | (b)`).
+#[must_use]
+pub(super) fn join_revset_union(revisions: &[&str]) -> String {
+    revisions
+        .iter()
+        .map(|rev| format!("({rev})"))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// Formats the parent revset `<revision>-`, wrapping compound or range expressions (such as
+/// `main..@` or `heads(main..@)`) in parentheses so postfix `-` binds to the whole expression.
+#[must_use]
+pub(super) fn format_parent_revset(revision: &str) -> String {
+    let is_simple_symbol = !revision.is_empty()
+        && !revision.contains("..")
+        && revision
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'@' | b'-' | b'_' | b'.'));
+    if is_simple_symbol {
+        format!("{revision}-")
+    } else {
+        format!("({revision})-")
     }
 }
 
@@ -443,5 +469,19 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(intersect_revset_with_mutable(input), expected);
+    }
+
+    #[rstest]
+    #[case::working_copy("@", "@-")]
+    #[case::underscore_symbol("empty_src", "empty_src-")]
+    #[case::dotted_tag("v1.0", "v1.0-")]
+    #[case::range_expression("main..@", "(main..@)-")]
+    #[case::open_range_expression("..@", "(..@)-")]
+    #[case::function_call("heads(main..@)", "(heads(main..@))-")]
+    fn format_parent_revset_preserves_operator_precedence(
+        #[case] revision: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(format_parent_revset(revision), expected);
     }
 }

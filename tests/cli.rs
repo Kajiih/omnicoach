@@ -1016,6 +1016,33 @@ fn test_closed_stdout_pipe_on_code_preserves_exit_code_with_empty_stderr(
     assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
 }
 
+#[test]
+fn test_command_lint_interactive_jj_squash_on_real_jj_repo() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_dir = temp_repo.path();
+    fs::write(repo_dir.join("file.txt"), "v1\n").unwrap();
+    run_jj_in(repo_dir, &["commit", "-m", "feat: parent commit"]);
+    fs::write(repo_dir.join("file.txt"), "v2\n").unwrap();
+
+    let undescribed_child_squash = run_cli(&["command", "--cmd", "jj squash"], Some(repo_dir));
+    run_jj_in(repo_dir, &["describe", "-m", "feat: child commit"]);
+    let interactive_squash = run_cli(&["command", "--cmd", "jj squash"], Some(repo_dir));
+    let non_interactive_squash = run_cli(&["command", "--cmd", "jj squash -u"], Some(repo_dir));
+
+    assert!(
+        undescribed_child_squash.contains("--- exit code ---\n0\n"),
+        "{undescribed_child_squash}"
+    );
+    assert!(
+        interactive_squash.contains("[interactive-jj-command]"),
+        "{interactive_squash}"
+    );
+    assert!(
+        non_interactive_squash.contains("--- exit code ---\n0\n"),
+        "{non_interactive_squash}"
+    );
+}
+
 fn run_with_closed_stdout_pipe(args: &[&str]) -> (Option<i32>, String) {
     use std::process::Stdio;
 
@@ -1034,4 +1061,26 @@ fn run_with_closed_stdout_pipe(args: &[&str]) -> (Option<i32>, String) {
         output.status.code(),
         String::from_utf8(output.stderr).unwrap(),
     )
+}
+
+fn run_jj_in(directory: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("jj")
+        .args(args)
+        .args([
+            "--config",
+            "user.name=\"Test User\"",
+            "--config",
+            "user.email=\"test@example.com\"",
+        ])
+        .env("XDG_CONFIG_HOME", isolated_xdg_config_home())
+        .stdin(std::process::Stdio::null())
+        .current_dir(directory)
+        .output()
+        .expect("run jj");
+    assert!(
+        output.status.success(),
+        "jj {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
 }
