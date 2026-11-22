@@ -59,6 +59,7 @@ expression: "output.replace(BIN_NAME, \"<binary>\")"
 - `reexported-public-item` (rust): Flags `pub use` re-exports of items outside a private child module and `#[macro_export]` outside the crate root.
 - `repeated-index-access` (python, rust): Flags a value read at several literal positions instead of being unpacked once.
 - `repeated-literal` (python, rust): Flags a string or number literal repeated inline in one file instead of being named once.
+- `shared-workspace-rewrite` (command): Flags Jujutsu history-rewriting commands that mutate a commit another workspace builds on.
 - `sibling-module-dependency` (python, rust): Flags references between peer submodules inside an isolated architecture component.
 - `single-letter-name` (python, rust): Flags names made of a single letter.
 - `sleep-in-tests` (python, rust): Flags fixed-duration sleeps in tests.

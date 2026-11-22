@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use super::revset::{
-    format_parent_revset, intersect_revset_with_mutable, is_bounded_jj_revset, join_revset_union,
+    format_parent_revset, format_revset_terms, format_single_or_union,
+    intersect_revset_with_mutable, is_bounded_jj_revset, join_revset_union,
 };
 use crate::command_lint::command::{
     InterceptedCommand, LastOptionValue, ParsedArgs, ProgramCliSchema, SubcommandCliSchema,
@@ -34,8 +35,13 @@ const FLAG_INSERT_BEFORE_LONG: &str = "--insert-before";
 const FLAG_BEFORE_LONG: &str = "--before";
 const FLAG_CHANGES_IN_SHORT: &str = "-c";
 const FLAG_CHANGES_IN_LONG: &str = "--changes-in";
+const FLAG_SOURCE_SHORT: &str = "-s";
+const FLAG_SOURCE_LONG: &str = "--source";
+const FLAG_BRANCH_SHORT: &str = "-b";
+const FLAG_BRANCH_LONG: &str = "--branch";
 const FLAG_MESSAGE_SHORT: &str = "-m";
 const FLAG_MESSAGE_LONG: &str = "--message";
+const FLAG_AUTHOR_LONG: &str = "--author";
 const FLAG_STDIN: &str = "--stdin";
 const FLAG_NO_EDIT: &str = "--no-edit";
 const FLAG_EDITOR: &str = "--editor";
@@ -55,6 +61,7 @@ const FLAG_HELP_LONG: &str = "--help";
 const FLAG_VERSION_SHORT: &str = "-V";
 const FLAG_VERSION_LONG: &str = "--version";
 const WORKING_COPY_REV: &str = "@";
+const MUTABLE_ANCESTORS_OF_WORKING_COPY: &str = "::@ & mutable()";
 
 const SUGGEST_DESCRIBE: &str = "jj describe -m '<message>'";
 const SUGGEST_COMMIT: &str = "jj commit -m '<message>'";
@@ -131,7 +138,7 @@ const DESCRIBE_SCHEMA: ProgramCliSchema = ProgramCliSchema {
         FLAG_REVS_LONG,
         FLAG_MESSAGE_SHORT,
         FLAG_MESSAGE_LONG,
-        "--author",
+        FLAG_AUTHOR_LONG,
     ),
 };
 
@@ -221,6 +228,64 @@ const ABSORB_SCHEMA: ProgramCliSchema = ProgramCliSchema {
         FLAG_INTO_LONG,
         FLAG_TO_LONG,
         FLAG_TOOL,
+    ),
+};
+
+const ABANDON_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+    options_with_values: jj_options_with_values!(FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG,),
+};
+
+const REBASE_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+    options_with_values: jj_options_with_values!(
+        FLAG_BRANCH_SHORT,
+        FLAG_BRANCH_LONG,
+        FLAG_SOURCE_SHORT,
+        FLAG_SOURCE_LONG,
+        FLAG_REV_SHORT,
+        FLAG_REV_LONG,
+        FLAG_REVS_LONG,
+        FLAG_ONTO_SHORT,
+        FLAG_ONTO_LONG,
+        FLAG_DEST_SHORT,
+        FLAG_DEST_LONG,
+        FLAG_AFTER_SHORT,
+        FLAG_INSERT_AFTER_LONG,
+        FLAG_AFTER_LONG,
+        FLAG_BEFORE_SHORT,
+        FLAG_INSERT_BEFORE_LONG,
+        FLAG_BEFORE_LONG,
+    ),
+};
+
+const FIX_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+    options_with_values: jj_options_with_values!(FLAG_SOURCE_SHORT, FLAG_SOURCE_LONG,),
+};
+
+const NEW_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+    options_with_values: jj_options_with_values!(
+        FLAG_REV_SHORT,
+        FLAG_ONTO_SHORT,
+        FLAG_DEST_SHORT,
+        FLAG_MESSAGE_SHORT,
+        FLAG_MESSAGE_LONG,
+        FLAG_AFTER_SHORT,
+        FLAG_INSERT_AFTER_LONG,
+        FLAG_AFTER_LONG,
+        FLAG_BEFORE_SHORT,
+        FLAG_INSERT_BEFORE_LONG,
+        FLAG_BEFORE_LONG,
+    ),
+};
+
+const METAEDIT_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+    options_with_values: jj_options_with_values!(
+        FLAG_REV_SHORT,
+        FLAG_REV_LONG,
+        FLAG_REVS_LONG,
+        FLAG_MESSAGE_SHORT,
+        FLAG_MESSAGE_LONG,
+        FLAG_AUTHOR_LONG,
+        "--author-timestamp",
     ),
 };
 
@@ -374,6 +439,29 @@ impl JjInvocation {
         }
     }
 
+    /// Returns the candidate revset rewritten by this `jj` command, or `None` when the subcommand
+    /// does not rewrite existing history.
+    #[must_use]
+    pub fn rewritten_revset(&self) -> Option<String> {
+        match self.subcommand {
+            JjSubcommand::Edit => self.edit_target_revision().map(str::to_owned),
+            JjSubcommand::Commit => Some(WORKING_COPY_REV.to_owned()),
+            JjSubcommand::Describe | JjSubcommand::Abandon | JjSubcommand::Metaedit => {
+                Some(self.explicit_or_positional_revisions())
+            }
+            JjSubcommand::Diffedit => Some(self.diffedit_rewritten_revset()),
+            JjSubcommand::Resolve => self.resolve_rewritten_revset(),
+            JjSubcommand::New => self.new_rewritten_revset(),
+            JjSubcommand::Squash => Some(self.squash_rewritten_revset()),
+            JjSubcommand::Split => Some(self.split_rewritten_revset()),
+            JjSubcommand::Restore => Some(self.restore_rewritten_revset()),
+            JjSubcommand::Absorb => Some(self.absorb_rewritten_revset()),
+            JjSubcommand::Fix => Some(self.fix_rewritten_revset()),
+            JjSubcommand::Rebase => Some(self.rebase_rewritten_revset()),
+            JjSubcommand::Log | JjSubcommand::Other => None,
+        }
+    }
+
     fn squash_combined_description_interactivity(&self) -> Option<JjInteractivity> {
         if self.has_message_flag()
             || self.args.has_flag(FLAG_USE_DEST_SHORT)
@@ -428,6 +516,197 @@ impl JjInvocation {
             revset: format!("({source}) | ({parent})"),
             replacement: SUGGEST_SQUASH_USE_DEST,
         })
+    }
+
+    fn explicit_or_positional_revisions(&self) -> String {
+        let mut revisions =
+            self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG]);
+        revisions.extend(self.args.positionals.iter().skip(1).map(String::as_str));
+        format_single_or_union(&revisions, WORKING_COPY_REV)
+    }
+
+    fn diffedit_rewritten_revset(&self) -> String {
+        let to_values = self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_TO_LONG]);
+        if !to_values.is_empty() {
+            return format_single_or_union(&to_values, WORKING_COPY_REV);
+        }
+        let rev_values = self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG]);
+        format_single_or_union(&rev_values, WORKING_COPY_REV)
+    }
+
+    fn resolve_rewritten_revset(&self) -> Option<String> {
+        if self.args.has_flag(FLAG_LIST_SHORT) || self.args.has_flag(FLAG_LIST_LONG) {
+            return None;
+        }
+        let rev_values = self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG]);
+        Some(format_single_or_union(&rev_values, WORKING_COPY_REV))
+    }
+
+    fn new_rewritten_revset(&self) -> Option<String> {
+        let mut terms = Vec::new();
+        self.extend_insert_location_terms(&mut terms);
+        (!terms.is_empty()).then(|| format_revset_terms(&terms))
+    }
+
+    fn squash_rewritten_revset(&self) -> String {
+        let from_values = self.collect_option_values(&[FLAG_FROM_SHORT, FLAG_FROM_LONG]);
+        if self.has_squash_new_commit_location() {
+            let mut terms: Vec<String> = if from_values.is_empty() {
+                vec![WORKING_COPY_REV.to_owned()]
+            } else {
+                from_values.into_iter().map(str::to_owned).collect()
+            };
+            self.extend_insert_location_terms(&mut terms);
+            return format_revset_terms(&terms);
+        }
+
+        let into_values =
+            self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_INTO_LONG, FLAG_TO_LONG]);
+        if !from_values.is_empty() || !into_values.is_empty() {
+            let sources = if from_values.is_empty() {
+                vec![WORKING_COPY_REV]
+            } else {
+                from_values
+            };
+            let destinations = if into_values.is_empty() {
+                vec![WORKING_COPY_REV]
+            } else {
+                into_values
+            };
+            let mut combined = sources;
+            combined.extend(destinations);
+            return join_revset_union(&combined);
+        }
+
+        let source = self
+            .args
+            .get_option(FLAG_REV_SHORT)
+            .or_else(|| self.args.get_option(FLAG_REV_LONG))
+            .unwrap_or(WORKING_COPY_REV);
+        let parent = format_parent_revset(source);
+        format!("({source}) | ({parent})")
+    }
+
+    fn split_rewritten_revset(&self) -> String {
+        let rev = self
+            .args
+            .get_option(FLAG_REV_SHORT)
+            .or_else(|| self.args.get_option(FLAG_REV_LONG))
+            .unwrap_or(WORKING_COPY_REV);
+        let mut terms = vec![rev.to_owned()];
+        self.extend_insert_location_terms(&mut terms);
+        format_revset_terms(&terms)
+    }
+
+    fn restore_rewritten_revset(&self) -> String {
+        let changes_in = self.collect_option_values(&[FLAG_CHANGES_IN_SHORT, FLAG_CHANGES_IN_LONG]);
+        if !changes_in.is_empty() {
+            return format_single_or_union(&changes_in, WORKING_COPY_REV);
+        }
+        let into = self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_INTO_LONG, FLAG_TO_LONG]);
+        format_single_or_union(&into, WORKING_COPY_REV)
+    }
+
+    fn absorb_rewritten_revset(&self) -> String {
+        let from = self
+            .args
+            .get_option(FLAG_FROM_SHORT)
+            .or_else(|| self.args.get_option(FLAG_FROM_LONG))
+            .unwrap_or(WORKING_COPY_REV);
+        let into = self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_INTO_LONG, FLAG_TO_LONG]);
+        if from == WORKING_COPY_REV && into.is_empty() {
+            MUTABLE_ANCESTORS_OF_WORKING_COPY.to_owned()
+        } else if into.is_empty() {
+            format!("::({from}) & mutable()")
+        } else {
+            let target = format_single_or_union(&into, WORKING_COPY_REV);
+            format!("::({from}) & ({target}) & mutable()")
+        }
+    }
+
+    fn fix_rewritten_revset(&self) -> String {
+        let sources = self.collect_option_values(&[FLAG_SOURCE_SHORT, FLAG_SOURCE_LONG]);
+        if sources.is_empty() {
+            "reachable(@, mutable())".to_owned()
+        } else {
+            format_single_or_union(&sources, WORKING_COPY_REV)
+        }
+    }
+
+    fn rebase_rewritten_revset(&self) -> String {
+        let sources = self.collect_option_values(&[FLAG_SOURCE_SHORT, FLAG_SOURCE_LONG]);
+        let revisions =
+            self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG]);
+        let mut branches = self.collect_option_values(&[FLAG_BRANCH_SHORT, FLAG_BRANCH_LONG]);
+        if sources.is_empty() && revisions.is_empty() && branches.is_empty() {
+            branches.push(WORKING_COPY_REV);
+        }
+
+        let mut terms: Vec<String> = sources
+            .into_iter()
+            .chain(revisions)
+            .map(str::to_owned)
+            .collect();
+
+        if !branches.is_empty() {
+            let branch_union = format_single_or_union(&branches, WORKING_COPY_REV);
+            if let Some(new_parents) = self.rebase_new_parent_revset() {
+                terms.push(format!("(({new_parents})..({branch_union})) & mutable()"));
+            } else {
+                terms.push(format!("::({branch_union}) & mutable()"));
+            }
+        }
+
+        self.extend_insert_location_terms(&mut terms);
+        format_revset_terms(&terms)
+    }
+
+    /// Computes the `new_parent_ids` revset matching Jujutsu's `compute_commit_location`:
+    /// `-o`/`-d` takes precedence, then `-A` (even when paired with `-B`), then `({before})-`.
+    fn rebase_new_parent_revset(&self) -> Option<String> {
+        let onto = self.collect_option_values(&[
+            FLAG_ONTO_SHORT,
+            FLAG_ONTO_LONG,
+            FLAG_DEST_SHORT,
+            FLAG_DEST_LONG,
+        ]);
+        if !onto.is_empty() {
+            return Some(format_single_or_union(&onto, WORKING_COPY_REV));
+        }
+        let after = self.collect_option_values(&[
+            FLAG_AFTER_SHORT,
+            FLAG_INSERT_AFTER_LONG,
+            FLAG_AFTER_LONG,
+        ]);
+        if !after.is_empty() {
+            return Some(format_single_or_union(&after, WORKING_COPY_REV));
+        }
+        let before = self.collect_option_values(&[
+            FLAG_BEFORE_SHORT,
+            FLAG_INSERT_BEFORE_LONG,
+            FLAG_BEFORE_LONG,
+        ]);
+        (!before.is_empty())
+            .then(|| format_parent_revset(&format_single_or_union(&before, WORKING_COPY_REV)))
+    }
+
+    fn extend_insert_location_terms(&self, terms: &mut Vec<String>) {
+        let before_values = self.collect_option_values(&[
+            FLAG_BEFORE_SHORT,
+            FLAG_INSERT_BEFORE_LONG,
+            FLAG_BEFORE_LONG,
+        ]);
+        if !before_values.is_empty() {
+            for before in before_values {
+                terms.push(before.to_owned());
+            }
+            return;
+        }
+        for after in
+            self.collect_option_values(&[FLAG_AFTER_SHORT, FLAG_INSERT_AFTER_LONG, FLAG_AFTER_LONG])
+        {
+            terms.push(format!("({after})+ & mutable()"));
+        }
     }
 
     fn editor_free_suggestion(&self) -> Option<&'static str> {
@@ -535,6 +814,11 @@ enum JjSubcommand {
     Resolve,
     Restore,
     Absorb,
+    Abandon,
+    Rebase,
+    Fix,
+    New,
+    Metaedit,
     Other,
 }
 
@@ -551,6 +835,11 @@ impl JjSubcommand {
             "resolve" => Self::Resolve,
             "restore" => Self::Restore,
             "absorb" => Self::Absorb,
+            "abandon" => Self::Abandon,
+            "rebase" => Self::Rebase,
+            "fix" => Self::Fix,
+            "new" => Self::New,
+            "metaedit" => Self::Metaedit,
             _ => Self::Other,
         }
     }
@@ -567,6 +856,11 @@ impl JjSubcommand {
             Self::Resolve => &RESOLVE_SCHEMA,
             Self::Restore => &RESTORE_SCHEMA,
             Self::Absorb => &ABSORB_SCHEMA,
+            Self::Abandon => &ABANDON_SCHEMA,
+            Self::Rebase => &REBASE_SCHEMA,
+            Self::Fix => &FIX_SCHEMA,
+            Self::New => &NEW_SCHEMA,
+            Self::Metaedit => &METAEDIT_SCHEMA,
             Self::Other => &GLOBAL_ONLY_SCHEMA,
         }
     }
@@ -808,6 +1102,71 @@ mod tests {
         let command = InterceptedCommand::parse_all(raw).remove(0);
         let invocation = parse_jj_invocation(&command).expect("valid jj invocation");
         assert_eq!(invocation.interactivity(), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::edit("jj edit kpqxywon", Some("kpqxywon"))]
+    #[case::commit("jj commit -m feat", Some("@"))]
+    #[case::describe_default("jj describe -m feat", Some("@"))]
+    #[case::describe_multi("jj desc -r a b -m feat", Some("(a) | (b)"))]
+    #[case::metaedit("jj metaedit -r kpqxywon --update-author", Some("kpqxywon"))]
+    #[case::abandon("jj abandon kpqxywon", Some("kpqxywon"))]
+    #[case::diffedit_default("jj diffedit", Some("@"))]
+    #[case::diffedit_to("jj diffedit --to kpqxywon", Some("kpqxywon"))]
+    #[case::resolve_ours("jj resolve --tool :ours -r kpqxywon", Some("kpqxywon"))]
+    #[case::resolve_list_exempt("jj resolve --list -r kpqxywon", None)]
+    #[case::new_plain_exempt("jj new main", None)]
+    #[case::new_insert_after("jj new -A main -m 'fixup!'", Some("(main)+ & mutable()"))]
+    #[case::new_insert_before("jj new -B target -m 'feat: prep'", Some("target"))]
+    #[case::new_insert_between("jj new -A main -B target", Some("target"))]
+    #[case::squash_default("jj squash -u", Some("(@) | (@-)"))]
+    #[case::squash_revision("jj squash -r kpqxywon", Some("(kpqxywon) | (kpqxywon-)"))]
+    #[case::squash_from_default_dest("jj squash -f @-", Some("(@-) | (@)"))]
+    #[case::squash_into("jj squash -u --into @--", Some("(@) | (@--)"))]
+    #[case::squash_before_default_source("jj squash -B main -m feat", Some("(@) | (main)"))]
+    #[case::squash_between_does_not_expand_after(
+        "jj squash -f @ -A main -B target -m feat",
+        Some("(@) | (target)")
+    )]
+    #[case::split_default("jj split -m part1 src/a.rs", Some("@"))]
+    #[case::split_after(
+        "jj split -r @- -A main -m part1 src/a.rs",
+        Some("(@-) | ((main)+ & mutable())")
+    )]
+    #[case::restore_default("jj restore src/a.rs", Some("@"))]
+    #[case::restore_into("jj restore --into @- src/a.rs", Some("@-"))]
+    #[case::restore_changes_in("jj restore -c kpqxywon", Some("kpqxywon"))]
+    #[case::absorb_default("jj absorb", Some("::@ & mutable()"))]
+    #[case::absorb_custom_from("jj absorb -f @-", Some("::(@-) & mutable()"))]
+    #[case::absorb_custom_into(
+        "jj absorb -f @- -t main..@",
+        Some("::(@-) & (main..@) & mutable()")
+    )]
+    #[case::fix_default("jj fix", Some("reachable(@, mutable())"))]
+    #[case::fix_source("jj fix -s @-", Some("@-"))]
+    #[case::rebase_source("jj rebase -s feat -o main", Some("feat"))]
+    #[case::rebase_branch_default("jj rebase -o main", Some("((main)..(@)) & mutable()"))]
+    #[case::rebase_insert_after(
+        "jj rebase -r feat -A main",
+        Some("(feat) | ((main)+ & mutable())")
+    )]
+    #[case::rebase_insert_between_revision(
+        "jj rebase -r feat -A main -B target",
+        Some("(feat) | (target)")
+    )]
+    #[case::rebase_insert_between_branch(
+        "jj rebase -b @ -A main -B target",
+        Some("(((main)..(@)) & mutable()) | (target)")
+    )]
+    #[case::rebase_insert_before_branch(
+        "jj rebase -b @ -B target",
+        Some("(((target-)..(@)) & mutable()) | (target)")
+    )]
+    #[case::read_only_log("jj log", None)]
+    fn test_rewritten_revset(#[case] raw: &str, #[case] expected: Option<&str>) {
+        let command = InterceptedCommand::parse_all(raw).remove(0);
+        let invocation = parse_jj_invocation(&command).expect("valid jj invocation");
+        assert_eq!(invocation.rewritten_revset().as_deref(), expected);
     }
 
     #[rstest::rstest]

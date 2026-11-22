@@ -82,6 +82,32 @@ pub(super) fn join_revset_union(revisions: &[&str]) -> String {
         .join(" | ")
 }
 
+/// Formats `revisions` as `default_rev` when empty, as the bare term when singular, or as a
+/// parenthesized union (`(a) | (b)`) when multiple revisions are given.
+#[must_use]
+pub(super) fn format_single_or_union(revisions: &[&str], default_rev: &str) -> String {
+    match revisions {
+        [] => default_rev.to_owned(),
+        [single] => (*single).to_owned(),
+        many => join_revset_union(many),
+    }
+}
+
+/// Formats `terms` as an empty string when empty, as the bare term when singular, or as a
+/// parenthesized union (`(a) | (b)`) when multiple terms are given.
+#[must_use]
+pub(super) fn format_revset_terms(terms: &[String]) -> String {
+    match terms {
+        [] => String::new(),
+        [single] => single.clone(),
+        many => many
+            .iter()
+            .map(|term| format!("({term})"))
+            .collect::<Vec<_>>()
+            .join(" | "),
+    }
+}
+
 /// Formats the parent revset `<revision>-`, wrapping compound or range expressions (such as
 /// `main..@` or `heads(main..@)`) in parentheses so postfix `-` binds to the whole expression.
 #[must_use]
@@ -483,5 +509,28 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(format_parent_revset(revision), expected);
+    }
+
+    #[rstest]
+    #[case::empty(&[], "@")]
+    #[case::single(&["feat"], "feat")]
+    #[case::multiple(&["a", "b"], "(a) | (b)")]
+    fn format_single_or_union_handles_cardinality(
+        #[case] revisions: &[&str],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(format_single_or_union(revisions, "@"), expected);
+    }
+
+    #[rstest]
+    #[case::empty(&[], "")]
+    #[case::single(&["feat"], "feat")]
+    #[case::multiple(&["a", "b"], "(a) | (b)")]
+    fn format_revset_terms_avoids_redundant_parens_on_single_term(
+        #[case] terms: &[&str],
+        #[case] expected: &str,
+    ) {
+        let owned: Vec<String> = terms.iter().map(|term| (*term).to_owned()).collect();
+        assert_eq!(format_revset_terms(&owned), expected);
     }
 }

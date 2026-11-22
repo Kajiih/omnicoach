@@ -1043,6 +1043,103 @@ fn test_command_lint_interactive_jj_squash_on_real_jj_repo() {
     );
 }
 
+#[test]
+fn test_command_lint_multi_workspace_shared_rewrite_cd_and_repo_flag() {
+    let fixture = setup_multi_workspace_jj_repo();
+    let shared_base_cmd = format!(
+        "jj describe -r {} -m 'feat: rewrite shared'",
+        fixture.shared_base_id
+    );
+    let cd_shared_cmd = format!("cd main_ws && {shared_base_cmd}");
+    let repo_flag_cmd = format!(
+        "jj describe -R main_ws -r {} -m 'feat: rewrite shared'",
+        fixture.shared_base_id
+    );
+
+    let private_out = run_cli(
+        &["command", "--cmd", "jj describe -m 'feat: private leaf'"],
+        Some(&fixture.main_ws),
+    );
+    let shared_out = run_cli(
+        &["command", "--cmd", &shared_base_cmd],
+        Some(&fixture.main_ws),
+    );
+    let cd_out = run_cli(
+        &["command", "--cmd", &cd_shared_cmd],
+        Some(fixture.parent_dir.path()),
+    );
+    let repo_flag_out = run_cli(
+        &["command", "--cmd", &repo_flag_cmd],
+        Some(fixture.parent_dir.path()),
+    );
+
+    assert!(
+        private_out.contains("--- exit code ---\n0\n"),
+        "{private_out}"
+    );
+    assert!(
+        shared_out.contains("[shared-workspace-rewrite]"),
+        "{shared_out}"
+    );
+    assert!(cd_out.contains("[shared-workspace-rewrite]"), "{cd_out}");
+    assert!(
+        repo_flag_out.contains("[shared-workspace-rewrite]"),
+        "{repo_flag_out}"
+    );
+}
+
+#[test]
+fn test_hook_top_level_cwd_blocks_shared_workspace_rewrite() {
+    let fixture = setup_multi_workspace_jj_repo();
+    let shared_base_cmd = format!(
+        "jj describe -r {} -m 'feat: rewrite shared'",
+        fixture.shared_base_id
+    );
+    let shared_payload = serde_json::json!({
+        "workspacePaths": [fixture.parent_dir.path(), &fixture.main_ws],
+        "cwd": &fixture.main_ws,
+        "toolCall": {
+            "name": "run_command",
+            "args": {
+                "CommandLine": shared_base_cmd
+            }
+        }
+    })
+    .to_string();
+    let private_payload = serde_json::json!({
+        "workspacePaths": [fixture.parent_dir.path(), &fixture.main_ws],
+        "cwd": &fixture.main_ws,
+        "toolCall": {
+            "name": "run_command",
+            "args": {
+                "CommandLine": "jj describe -m 'feat: private leaf'"
+            }
+        }
+    })
+    .to_string();
+
+    let shared_stdout = run_hook_stdin(
+        "pre-tool-use",
+        &shared_payload,
+        Some(fixture.parent_dir.path()),
+    );
+    let private_stdout = run_hook_stdin(
+        "pre-tool-use",
+        &private_payload,
+        Some(fixture.parent_dir.path()),
+    );
+
+    assert_eq!(private_stdout.trim(), "");
+    assert!(
+        shared_stdout.contains(r#"{"decision":"deny","reason":"#),
+        "{shared_stdout}"
+    );
+    assert!(
+        shared_stdout.contains("shared-workspace-rewrite"),
+        "{shared_stdout}"
+    );
+}
+
 fn run_with_closed_stdout_pipe(args: &[&str]) -> (Option<i32>, String) {
     use std::process::Stdio;
 
@@ -1061,6 +1158,45 @@ fn run_with_closed_stdout_pipe(args: &[&str]) -> (Option<i32>, String) {
         output.status.code(),
         String::from_utf8(output.stderr).unwrap(),
     )
+}
+
+struct MultiWorkspaceFixture {
+    parent_dir: tempfile::TempDir,
+    main_ws: std::path::PathBuf,
+    shared_base_id: String,
+}
+
+fn setup_multi_workspace_jj_repo() -> MultiWorkspaceFixture {
+    let parent_dir = tempfile::tempdir().unwrap();
+    let main_ws = parent_dir.path().join("main_ws");
+    let secondary_ws = parent_dir.path().join("secondary_ws");
+    fs::create_dir_all(&main_ws).unwrap();
+
+    run_jj_in(&main_ws, &["git", "init"]);
+    fs::write(main_ws.join("shared.txt"), "base\n").unwrap();
+    run_jj_in(&main_ws, &["commit", "-m", "feat: shared base"]);
+    let shared_base_id = run_jj_in(
+        &main_ws,
+        &["log", "--no-graph", "-r", "@-", "-T", "change_id.short(8)"],
+    )
+    .trim()
+    .to_owned();
+    run_jj_in(
+        &main_ws,
+        &[
+            "workspace",
+            "add",
+            secondary_ws.to_str().unwrap(),
+            "-r",
+            "@-",
+        ],
+    );
+
+    MultiWorkspaceFixture {
+        parent_dir,
+        main_ws,
+        shared_base_id,
+    }
 }
 
 fn run_jj_in(directory: &std::path::Path, args: &[&str]) -> String {
