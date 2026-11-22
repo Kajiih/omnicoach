@@ -1,8 +1,8 @@
 //! Validation checks for the `jj edit` command.
 
-use crate::command_lint::command::{InterceptedCommand, ParsedCommand};
+use crate::command_lint::command::ParsedCommand;
 use crate::command_lint::contract::{CommandEnv, CommandRule};
-use crate::command_lint::vcs::JJ_CLI_SCHEMA;
+use crate::command_lint::vcs::parse_jj_invocation;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Reference, RuleDoc,
@@ -67,65 +67,42 @@ fn check_command(
         .commands()
         .iter()
         .filter_map(|cmd| {
-            let revision = extract_jj_edit_revision(cmd)?;
+            let invocation = parse_jj_invocation(cmd)?;
+            let revision = invocation.edit_target_revision()?;
             // TODO(roadmap): Propagate or report VCS client query errors rather than silently returning empty diagnostics.
-            let commit_info = env.jj().get_commit_info(&revision).ok()?;
+            let commits = env
+                .query_jj_revisions(cmd, invocation.repository(), revision)
+                .ok()?;
+            let [commit_info] = commits.as_slice() else {
+                return None;
+            };
             (!commit_info.conflict && !commit_info.description.trim().is_empty())
-                .then(|| rule.diagnostic_at(parsed, cmd.span, &[("revision", &revision)]))
+                .then(|| rule.diagnostic_at(parsed, cmd.span, &[("revision", revision)]))
         })
         .collect()
-}
-
-/// Extracts the target revision from a `jj edit` command, defaulting to `"@"` when omitted.
-///
-/// Understands global options (such as `-R .` or `--ignore-working-copy`) and the `-r` /
-/// `--revision` option accepted by `jj edit`.
-#[must_use]
-fn extract_jj_edit_revision(cmd: &InterceptedCommand) -> Option<String> {
-    if cmd.program_base_name() != JJ_CLI_SCHEMA.program_name {
-        return None;
-    }
-    let args = cmd.parse_args(&JJ_CLI_SCHEMA);
-    if !args.has_subcommand_sequence(&["edit"])
-        || args.has_flag("-h")
-        || args.has_flag("--help")
-        || args.has_flag("-V")
-        || args.has_flag("--version")
-    {
-        return None;
-    }
-    Some(
-        args.get_option("-r")
-            .or_else(|| args.get_option("--revision"))
-            .or_else(|| args.positionals.get(1).map(String::as_str))
-            .unwrap_or("@")
-            .to_string(),
-    )
 }
 
 #[cfg(test)]
 crate::test_utils::command_rule_test!(
     RULE,
     jj: [
-        "@" => crate::command_lint::vcs::CommitInfo {
+        "@" => crate::command_lint::vcs::CommitSummary {
             description: "Described working copy".to_string(),
-            conflict: false,
+            ..crate::command_lint::vcs::CommitSummary::default()
         },
-        "kpqxywon" => crate::command_lint::vcs::CommitInfo {
+        "kpqxywon" => crate::command_lint::vcs::CommitSummary {
             description: "feat: add user authentication".to_string(),
-            conflict: false,
+            ..crate::command_lint::vcs::CommitSummary::default()
         },
-        "a456" => crate::command_lint::vcs::CommitInfo {
-            description: String::new(),
-            conflict: false,
-        },
-        "ws_only" => crate::command_lint::vcs::CommitInfo {
+        "a456" => crate::command_lint::vcs::CommitSummary::default(),
+        "ws_only" => crate::command_lint::vcs::CommitSummary {
             description: "   \n  ".to_string(),
-            conflict: false,
+            ..crate::command_lint::vcs::CommitSummary::default()
         },
-        "c789" => crate::command_lint::vcs::CommitInfo {
+        "c789" => crate::command_lint::vcs::CommitSummary {
             description: "Conflicted commit".to_string(),
             conflict: true,
+            ..crate::command_lint::vcs::CommitSummary::default()
         },
     ],
     {

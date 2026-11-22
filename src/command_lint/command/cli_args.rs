@@ -10,8 +10,6 @@ use crate::diagnostic::SourceSpan;
 /// Schema defining a program's command-line interface options layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramCliSchema {
-    /// The name of the binary/program (e.g. `"jj"`, `"git"`).
-    pub program_name: &'static str,
     /// Option flags that consume a value (e.g. `["-R", "--repository"]`).
     pub options_with_values: &'static [&'static str],
 }
@@ -35,12 +33,81 @@ pub struct SubcommandCliSchema {
     pub allows_plus_toolchain: bool,
 }
 
+impl SubcommandCliSchema {
+    /// Finds the index of the first subcommand token at or after `start_index`, skipping leading
+    /// global options defined in `self`. Returns `None` on standalone flags, `--`, or no subcommand.
+    #[must_use]
+    pub fn find_subcommand_index(
+        &self,
+        arguments: &[CommandArg],
+        start_index: usize,
+    ) -> Option<usize> {
+        let mut iter = arguments.iter().enumerate().skip(start_index);
+        while let Some((index, argument)) = iter.next() {
+            let text = argument.text.as_str();
+            if text == "--" || text == "-" {
+                return None;
+            }
+            let flag_name = text.split_once('=').map_or(text, |(name, _)| name);
+            if self.standalone_flags.contains(&flag_name) {
+                return None;
+            }
+
+            if text.starts_with("--") {
+                if self.global_options_with_values.contains(&text) && iter.next()?.1.text == "--" {
+                    return None;
+                }
+                continue;
+            }
+
+            if text.starts_with('-') {
+                match classify_short_cluster(text, self) {
+                    ShortClusterStep::StandaloneExit => return None,
+                    ShortClusterStep::SingleToken => {}
+                    ShortClusterStep::ConsumesNextValue => {
+                        if iter.next()?.1.text == "--" {
+                            return None;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            return (!argument.has_expansion
+                && !text.is_empty()
+                && text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+            .then_some(index);
+        }
+        None
+    }
+}
+
+/// Result of looking up the last CLI occurrence of one or more option flag aliases.
+// TODO: Isn't there a more ricr/standar way to do things like memoization?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LastOptionValue<'a> {
+    /// None of the queried flag aliases appeared in the command arguments.
+    Absent,
+    /// A queried flag appeared without a value operand (for example, dangling before `--` or EOF).
+    MissingValue,
+    /// The last matching flag carried a value token and its shell-expansion marker.
+    Value {
+        /// Unquoted option value text.
+        text: &'a str,
+        /// `true` if the value token contained shell expansions (`$VAR`, `$(...)`, `~`).
+        has_expansion: bool,
+    },
+}
+
 /// Parsed command-line positional arguments and option flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedArgs {
     /// Positional arguments in order (e.g. `["edit", "@-"]`), excluding options and their values.
     pub positionals: Vec<String>,
     options: HashMap<String, Vec<String>>,
+    occurrences: Vec<OptionOccurrence>,
 }
 
 impl ParsedArgs {
@@ -71,12 +138,27 @@ impl ParsedArgs {
         self.options.get(option).map_or(&[], Vec::as_slice)
     }
 
-    /// Returns `true` if the positional arguments start with `sequence`.
+    /// Returns the last occurrence across `flags` in command-line order, preserving missing-value
+    /// and shell-expansion state.
     #[must_use]
-    pub fn has_subcommand_sequence(&self, sequence: &[&str]) -> bool {
-        self.positionals
-            .get(..sequence.len())
-            .is_some_and(|prefix| prefix == sequence)
+    pub fn last_option_value(&self, flags: &[&str]) -> LastOptionValue<'_> {
+        let Some(occurrence) = self
+            .occurrences
+            .iter()
+            .rev()
+            .find(|entry| flags.contains(&entry.flag.as_str()))
+        else {
+            return LastOptionValue::Absent;
+        };
+        occurrence
+            .value
+            .as_ref()
+            .map_or(LastOptionValue::MissingValue, |value| {
+                LastOptionValue::Value {
+                    text: &value.text,
+                    has_expansion: value.has_expansion,
+                }
+            })
     }
 }
 
@@ -138,7 +220,7 @@ pub fn extract_leading_global_flags(
                     .is_some_and(|rest| !rest.is_empty())
             }),
     );
-    let subcommand_index = find_subcommand_after_leading_flags(arguments, prefix_start, schema)?;
+    let subcommand_index = schema.find_subcommand_index(arguments, prefix_start)?;
     if subcommand_index == prefix_start {
         return None;
     }
@@ -160,6 +242,7 @@ struct ArgParser<'a> {
     options_with_values: &'a [&'a str],
     positionals: Vec<String>,
     options: HashMap<String, Vec<String>>,
+    occurrences: Vec<OptionOccurrence>,
 }
 
 impl<'a> ArgParser<'a> {
@@ -169,6 +252,7 @@ impl<'a> ArgParser<'a> {
             options_with_values,
             positionals: Vec::new(),
             options: HashMap::new(),
+            occurrences: Vec::new(),
         }
     }
 
@@ -188,9 +272,9 @@ impl<'a> ArgParser<'a> {
             }
 
             if text.starts_with("--") {
-                self.parse_long_option(text);
+                self.parse_long_option(argument);
             } else if text.starts_with('-') && text.len() > 1 {
-                self.parse_short_option_cluster(text);
+                self.parse_short_option_cluster(argument);
             } else {
                 self.positionals.push(argument.text.clone());
             }
@@ -199,38 +283,43 @@ impl<'a> ArgParser<'a> {
         ParsedArgs {
             positionals: self.positionals,
             options: self.options,
+            occurrences: self.occurrences,
         }
     }
 
-    fn parse_long_option(&mut self, argument: &str) {
-        if let Some((flag, option_value)) = argument.split_once('=') {
+    fn parse_long_option(&mut self, argument: &CommandArg) {
+        let text = argument.text.as_str();
+        if let Some((flag, option_value)) = text.split_once('=') {
             if self.options_with_values.contains(&flag) {
-                self.options
-                    .entry(flag.to_string())
-                    .or_default()
-                    .push(option_value.to_string());
+                self.record_option_value(
+                    flag.to_string(),
+                    option_value.to_string(),
+                    argument.has_expansion,
+                );
             } else {
-                self.options.entry(argument.to_string()).or_default();
+                self.record_flag(text.to_string());
             }
-        } else if self.options_with_values.contains(&argument)
+        } else if self.options_with_values.contains(&text)
             && self
                 .arguments_iter
                 .peek()
                 .is_some_and(|next_arg| next_arg.text != "--")
         {
             if let Some(option_value) = self.arguments_iter.next() {
-                self.options
-                    .entry(argument.to_string())
-                    .or_default()
-                    .push(option_value.text.clone());
+                self.record_option_value(
+                    text.to_string(),
+                    option_value.text.clone(),
+                    option_value.has_expansion,
+                );
             }
         } else {
-            self.options.entry(argument.to_string()).or_default();
+            self.record_flag(text.to_string());
         }
     }
 
-    fn parse_short_option_cluster(&mut self, argument: &str) {
-        let mut char_indices = argument.char_indices().skip(1).peekable();
+    fn parse_short_option_cluster(&mut self, argument: &CommandArg) {
+        let text = argument.text.as_str();
+        let mut char_indices = text.char_indices().skip(1).peekable();
 
         while let Some((byte_offset, character)) = char_indices.next() {
             let flag = format!("-{character}");
@@ -238,9 +327,9 @@ impl<'a> ArgParser<'a> {
 
             if is_option_with_value {
                 if char_indices.peek().is_some() {
-                    let rest = &argument[byte_offset + character.len_utf8()..];
+                    let rest = &text[byte_offset + character.len_utf8()..];
                     let attached_value = rest.strip_prefix('=').unwrap_or(rest).to_string();
-                    self.options.entry(flag).or_default().push(attached_value);
+                    self.record_option_value(flag, attached_value, argument.has_expansion);
                     break;
                 }
                 let next_is_value = self
@@ -248,62 +337,49 @@ impl<'a> ArgParser<'a> {
                     .peek()
                     .is_some_and(|next_arg| next_arg.text != "--");
                 if next_is_value && let Some(option_value) = self.arguments_iter.next() {
-                    self.options
-                        .entry(flag)
-                        .or_default()
-                        .push(option_value.text.clone());
+                    self.record_option_value(
+                        flag,
+                        option_value.text.clone(),
+                        option_value.has_expansion,
+                    );
                     break;
                 }
             }
-            self.options.entry(flag).or_default();
+            self.record_flag(flag);
         }
+    }
+
+    fn record_flag(&mut self, flag: String) {
+        self.options.entry(flag.clone()).or_default();
+        self.occurrences
+            .push(OptionOccurrence { flag, value: None });
+    }
+
+    fn record_option_value(&mut self, flag: String, text: String, has_expansion: bool) {
+        self.options
+            .entry(flag.clone())
+            .or_default()
+            .push(text.clone());
+        self.occurrences.push(OptionOccurrence {
+            flag,
+            value: Some(OptionValue {
+                text,
+                has_expansion,
+            }),
+        });
     }
 }
 
-fn find_subcommand_after_leading_flags(
-    arguments: &[CommandArg],
-    prefix_start: usize,
-    schema: &SubcommandCliSchema,
-) -> Option<usize> {
-    let mut iter = arguments.iter().enumerate().skip(prefix_start);
-    while let Some((index, argument)) = iter.next() {
-        let text = argument.text.as_str();
-        if text == "--" || text == "-" {
-            return None;
-        }
-        let flag_name = text.split_once('=').map_or(text, |(name, _)| name);
-        if schema.standalone_flags.contains(&flag_name) {
-            return None;
-        }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OptionOccurrence {
+    flag: String,
+    value: Option<OptionValue>,
+}
 
-        if text.starts_with("--") {
-            if schema.global_options_with_values.contains(&text) && iter.next()?.1.text == "--" {
-                return None;
-            }
-            continue;
-        }
-
-        if text.starts_with('-') {
-            match classify_short_cluster(text, schema) {
-                ShortClusterStep::StandaloneExit => return None,
-                ShortClusterStep::SingleToken => {}
-                ShortClusterStep::ConsumesNextValue => {
-                    if iter.next()?.1.text == "--" {
-                        return None;
-                    }
-                }
-            }
-            continue;
-        }
-
-        return (!argument.has_expansion
-            && !text.is_empty()
-            && text
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
-        .then_some(index);
-    }
-    None
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OptionValue {
+    text: String,
+    has_expansion: bool,
 }
 
 enum ShortClusterStep {
@@ -336,7 +412,6 @@ mod tests {
     use super::*;
 
     const TEST_PROGRAM_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-        program_name: "tool",
         options_with_values: &[
             "-C",
             "--directory",
@@ -368,21 +443,18 @@ mod tests {
     fn test_parse_args_basic() {
         let cmd = InterceptedCommand::parse_all("tool check -C . --config myconf target").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "tool",
             options_with_values: &["-C", "--directory", "--config"],
         };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["check", "target"]);
         assert_eq!(args.get_option("-C"), Some("."));
         assert_eq!(args.get_option("--config"), Some("myconf"));
-        assert!(args.has_subcommand_sequence(&["check"]));
     }
 
     #[test]
     fn test_parse_args_boolean_long_flag_and_stdin_dash() {
         let cmd = InterceptedCommand::parse_all("tool --quiet check -").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "tool",
             options_with_values: &["-C"],
         };
         let args = cmd.parse_args(&schema);
@@ -394,7 +466,6 @@ mod tests {
     fn test_parse_args_equals_syntax() {
         let cmd = InterceptedCommand::parse_all("tool check --directory=. target").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "tool",
             options_with_values: &["-C", "--directory"],
         };
         let args = cmd.parse_args(&schema);
@@ -406,7 +477,6 @@ mod tests {
     fn test_parse_args_posix_clustering() {
         let cmd = InterceptedCommand::parse_all("tool check -am").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "tool",
             options_with_values: &[],
         };
         let args = cmd.parse_args(&schema);
@@ -428,7 +498,6 @@ mod tests {
     fn test_parse_args_posix_cluster_with_value() {
         let cmd = InterceptedCommand::parse_all("git commit -am msg").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "git",
             options_with_values: &["-m"],
         };
         let args = cmd.parse_args(&schema);
@@ -441,7 +510,6 @@ mod tests {
     fn test_parse_args_posix_terminator() {
         let cmd = InterceptedCommand::parse_all("git log -- -R").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "git",
             options_with_values: &["-R"],
         };
         let args_term = cmd.parse_args(&schema);
@@ -455,13 +523,43 @@ mod tests {
         let cmd =
             InterceptedCommand::parse_all("tool note -m -wip --message -second target").remove(0);
         let schema = ProgramCliSchema {
-            program_name: "tool",
             options_with_values: &["-m", "--message"],
         };
         let args = cmd.parse_args(&schema);
         assert_eq!(args.positionals, vec!["note", "target"]);
         assert_eq!(args.get_option("-m"), Some("-wip"));
         assert_eq!(args.get_option("--message"), Some("-second"));
+    }
+
+    #[rstest::rstest]
+    #[case::absent("tool list", LastOptionValue::Absent)]
+    #[case::short_after_long_wins(
+        "tool --directory /first list -C /second",
+        LastOptionValue::Value { text: "/second", has_expansion: false }
+    )]
+    #[case::long_after_short_wins(
+        "tool -C /first list --directory=/second",
+        LastOptionValue::Value { text: "/second", has_expansion: false }
+    )]
+    #[case::expanded_value_marked(
+        r#"tool list -C "$WS""#,
+        LastOptionValue::Value { text: "$WS", has_expansion: true }
+    )]
+    #[case::tilde_value_marked(
+        "tool list -C ~/ws",
+        LastOptionValue::Value { text: "~/ws", has_expansion: true }
+    )]
+    #[case::dangling_flag_before_terminator(
+        "tool list -C -- target",
+        LastOptionValue::MissingValue
+    )]
+    fn test_last_option_value_tracks_cli_order_and_expansion(
+        #[case] script: &str,
+        #[case] expected: LastOptionValue<'_>,
+    ) {
+        let cmd = InterceptedCommand::parse_all(script).remove(0);
+        let args = cmd.parse_args(&TEST_PROGRAM_SCHEMA);
+        assert_eq!(args.last_option_value(&["-C", "--directory"]), expected);
     }
 
     #[test]

@@ -1,10 +1,8 @@
 //! Validation checks for unbounded `jj log` revision walks.
 
-use crate::command_lint::command::{InterceptedCommand, ParsedCommand};
+use crate::command_lint::command::ParsedCommand;
 use crate::command_lint::contract::{CommandEnv, CommandRule};
-use crate::command_lint::vcs::{
-    JJ_CLI_SCHEMA, intersect_revset_with_mutable, is_bounded_jj_revset,
-};
+use crate::command_lint::vcs::parse_jj_invocation;
 use crate::diagnostic::{Diagnostic, RuleName, ViolationTemplate, violation_template};
 use crate::rule_declaration::{
     Classification, CommandExample, Consensus, Declaration, ImpactedQuality, Reference, RuleDoc,
@@ -78,7 +76,7 @@ fn check_command(
         .commands()
         .iter()
         .filter_map(|cmd| {
-            let replacement = suggest_bounded_jj_log(cmd)?;
+            let replacement = parse_jj_invocation(cmd)?.suggest_bounded_log()?;
             let command_slice = &source[cmd.span.start..cmd.span.end];
             Some(rule.diagnostic_at(
                 parsed,
@@ -87,43 +85,6 @@ fn check_command(
             ))
         })
         .collect()
-}
-
-fn suggest_bounded_jj_log(cmd: &InterceptedCommand) -> Option<String> {
-    if cmd.program_base_name() != JJ_CLI_SCHEMA.program_name {
-        return None;
-    }
-    let args = cmd.parse_args(&JJ_CLI_SCHEMA);
-    if !args.has_subcommand_sequence(&["log"]) {
-        return None;
-    }
-    if args.has_flag("-h")
-        || args.has_flag("--help")
-        || args.has_flag("-V")
-        || args.has_flag("--version")
-        || args.has_flag("-n")
-        || args.has_flag("--limit")
-    {
-        return None;
-    }
-
-    let mut revisions = ["-r", "--revision", "--revisions"]
-        .into_iter()
-        .flat_map(|flag| args.option_values(flag))
-        .map(String::as_str)
-        .peekable();
-
-    if revisions.peek().is_none() {
-        if args.positionals.len() <= 1 {
-            return None;
-        }
-        let trailing_paths = args.positionals[1..].join(" ");
-        return Some(format!("jj log -r 'mutable()' {trailing_paths}"));
-    }
-
-    let first_unbounded = revisions.find(|revset| !is_bounded_jj_revset(revset))?;
-    let bounded_revset = intersect_revset_with_mutable(first_unbounded);
-    Some(format!("jj log -r '{bounded_revset}'"))
 }
 
 #[cfg(test)]
@@ -190,6 +151,7 @@ crate::test_utils::command_rule_test!(
             long_revisions_equals_flag => "jj log --revisions=::@",
             multiple_revision_flags_one_unbounded => "jj log -r @ -r ::main",
             positional_fileset_without_revset => "jj log src/lib.rs",
+            summary_flag_with_positional_fileset => "jj log -s src/lib.rs",
             path_qualified_jj_binary => "/usr/bin/jj log -r ::@",
             inside_pipeline => "jj log -r ::@ | head -n 5" => "jj log -r ::@",
             inside_command_substitution => r#"echo "$(jj log -r 'all()')""# => "jj log -r 'all()'",

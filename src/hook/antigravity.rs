@@ -86,7 +86,7 @@ fn parse_pre_tool_use(json_text: &str) -> Result<PreToolUseInput, AntigravityPro
         tool_call: PreToolUseEvent {
             workspace_paths,
             agent_owned_dir: artifact_directory_path,
-            payload: parse_tool_payload(raw.tool_call),
+            payload: parse_tool_payload(raw.tool_call, raw.cwd),
         },
     })
 }
@@ -150,6 +150,8 @@ struct RawPreToolUse {
     #[serde(default)]
     artifact_directory_path: Option<String>,
     #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
     tool_call: Option<RawToolCall>,
 }
 
@@ -167,13 +169,16 @@ struct RawPreInvocation {
     artifact_directory_path: Option<String>,
 }
 
-fn parse_tool_payload(tool_call: Option<RawToolCall>) -> ToolCallPayload {
+fn parse_tool_payload(
+    tool_call: Option<RawToolCall>,
+    fallback_cwd: Option<String>,
+) -> ToolCallPayload {
     let Some(call) = tool_call else {
         return ToolCallPayload::Other;
     };
 
     match call.name.as_str() {
-        "run_command" => parse_run_command_args(&call.args, &call.name),
+        "run_command" => parse_run_command_args(&call.args, fallback_cwd, &call.name),
         "write_file" => parse_write_file_args(&call.args, &call.name),
         "write_to_file" => parse_write_to_file_args(&call.args, &call.name),
         "edit_file" => parse_edit_file_args(&call.args, &call.name),
@@ -184,13 +189,24 @@ fn parse_tool_payload(tool_call: Option<RawToolCall>) -> ToolCallPayload {
     }
 }
 
-fn parse_run_command_args(args: &serde_json::Value, tool_name: &str) -> ToolCallPayload {
+fn parse_run_command_args(
+    args: &serde_json::Value,
+    fallback_cwd: Option<String>,
+    tool_name: &str,
+) -> ToolCallPayload {
     let Some(parsed) = deserialize_tool_args::<RunCommandArgs>(args, tool_name) else {
         return ToolCallPayload::Other;
     };
+    let explicit_cwd = non_empty_trimmed(parsed.cwd).map(PathBuf::from);
+    let top_level_cwd = non_empty_trimmed(fallback_cwd).map(PathBuf::from);
+    let resolved_cwd = match (explicit_cwd, top_level_cwd) {
+        (Some(explicit), Some(base)) => Some(base.join(explicit)),
+        (Some(explicit), None) => Some(explicit),
+        (None, base) => base,
+    };
     ToolCallPayload::RunCommand {
         command_line: parsed.command_line,
-        cwd: non_empty_trimmed(parsed.cwd).map(PathBuf::from),
+        cwd: resolved_cwd,
     }
 }
 
@@ -476,6 +492,39 @@ mod tests {
                     },
                 },
                 warning_queue: Some(WarningQueue::in_dir(Path::new("/tmp/brain/scratch"))),
+            }
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::explicit_absolute_cwd_overrides_top_level(
+        r#"{"workspacePaths":["/ws1","/ws2"],"cwd":"/ws2","toolCall":{"name":"run_command","args":{"CommandLine":"jj status","Cwd":"/ws1"}}}"#,
+        Some("/ws1")
+    )]
+    #[case::relative_args_cwd_joins_top_level_cwd(
+        r#"{"workspacePaths":["/ws1","/ws2"],"cwd":"/ws2","toolCall":{"name":"run_command","args":{"CommandLine":"jj status","Cwd":"sub/pkg"}}}"#,
+        Some("/ws2/sub/pkg")
+    )]
+    #[case::omitted_args_cwd_falls_back_to_top_level(
+        r#"{"workspacePaths":["/ws1","/ws2"],"cwd":"/ws2","toolCall":{"name":"run_command","args":{"CommandLine":"jj status"}}}"#,
+        Some("/ws2")
+    )]
+    #[case::blank_args_cwd_falls_back_to_top_level(
+        r#"{"workspacePaths":["/ws1","/ws2"],"cwd":"/ws2","toolCall":{"name":"run_command","args":{"CommandLine":"jj status","Cwd":"   "}}}"#,
+        Some("/ws2")
+    )]
+    fn parse_pre_tool_use_run_command_cwd_precedence(
+        #[case] json_text: &str,
+        #[case] expected_cwd: Option<&str>,
+    ) {
+        assert_eq!(
+            parse_pre_tool_use(json_text)
+                .expect("parse succeeds")
+                .tool_call
+                .payload,
+            ToolCallPayload::RunCommand {
+                command_line: "jj status".to_owned(),
+                cwd: expected_cwd.map(PathBuf::from),
             }
         );
     }

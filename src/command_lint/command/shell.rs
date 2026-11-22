@@ -1,7 +1,7 @@
 //! Shell command-line AST and word-expansion parser (`brush_parser` on host and WASI targets;
 //! zero-import stub on `wasm32-unknown-unknown`).
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use crate::diagnostic::{SourceLocation, SourceSpan, VCS_CONTEXT_NAME};
 
@@ -20,7 +20,13 @@ impl ParsedCommand {
     #[must_use]
     pub fn new(raw_command: &str) -> Self {
         let mut commands = Vec::new();
-        let has_syntax_error = !parse_script_into(raw_command, 0, &mut Vec::new(), &mut commands);
+        let has_syntax_error = !parse_script_into(
+            raw_command,
+            0,
+            &mut Vec::new(),
+            &WorkingDirState::Known(PathBuf::new()),
+            &mut commands,
+        );
         Self {
             source: raw_command.to_string(),
             has_syntax_error,
@@ -69,6 +75,8 @@ pub struct InterceptedCommand {
     pub redirects: Vec<CommandRedirect>,
     /// Enclosing shell scopes from outermost to innermost.
     pub enclosing_scopes: Vec<ShellScope>,
+    /// Working directory state accumulated from preceding in-scope `cd` builtins.
+    working_dir: WorkingDirState,
 }
 
 impl InterceptedCommand {
@@ -91,6 +99,42 @@ impl InterceptedCommand {
             .file_name()
             .and_then(|file_name| file_name.to_str())
             .unwrap_or(&self.program.text)
+    }
+
+    /// Resolves this command's effective working directory from `base_dir`, applying any
+    /// preceding in-scope `cd` builtins and an optional explicit `override_dir` (such as `jj -R`),
+    /// normalized lexically.
+    ///
+    /// Returns `None` when a preceding dynamic or environment-dependent `cd` left the effective
+    /// working directory statically unknown (unless `override_dir` is rooted), or when
+    /// `override_dir` is empty.
+    #[must_use]
+    pub(crate) fn resolve_working_dir(
+        &self,
+        base_dir: &Path,
+        override_dir: Option<&Path>,
+    ) -> Option<PathBuf> {
+        if let Some(target) = override_dir {
+            if target.as_os_str().is_empty() {
+                return None;
+            }
+            if is_rooted_path(target) {
+                return Some(normalize_path_lexically(target));
+            }
+        }
+        let WorkingDirState::Known(offset) = &self.working_dir else {
+            return None;
+        };
+        let after_cd = if offset.as_os_str().is_empty() {
+            base_dir.to_path_buf()
+        } else {
+            join_anchored_path(base_dir, offset)
+        };
+        let combined = match override_dir {
+            Some(target) => join_anchored_path(&after_cd, target),
+            None => after_cd,
+        };
+        Some(normalize_path_lexically(&combined))
     }
 }
 
@@ -202,6 +246,28 @@ pub enum ShellScope {
     ProcessSubstitution,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum WorkingDirState {
+    Known(PathBuf),
+    Unknown,
+}
+
+impl WorkingDirState {
+    pub(super) fn apply_static_cd(&mut self, target: &Path) {
+        if is_rooted_path(target) {
+            *self = Self::Known(target.to_path_buf());
+        } else if let Self::Known(current) = self {
+            *current = join_anchored_path(current, target);
+        }
+    }
+
+    pub(super) fn merge(&mut self, other: &Self) {
+        if self != other {
+            *self = Self::Unknown;
+        }
+    }
+}
+
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use self::brush_backend::parse_script_into;
 
@@ -212,9 +278,48 @@ const fn parse_script_into(
     _source: &str,
     _base_byte_offset: usize,
     _scopes: &mut Vec<ShellScope>,
+    _initial_cwd: &WorkingDirState,
     _out: &mut Vec<InterceptedCommand>,
 ) -> bool {
     false
+}
+
+fn join_anchored_path(base: &Path, child: &Path) -> PathBuf {
+    if is_rooted_path(child) {
+        child.to_path_buf()
+    } else {
+        base.join(child)
+    }
+}
+
+fn is_rooted_path(path: &Path) -> bool {
+    path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_)))
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match components.last() {
+                Some(Component::Normal(_)) => {
+                    components.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                Some(Component::ParentDir | Component::CurDir) | None => {
+                    components.push(component);
+                }
+            },
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                components.push(component);
+            }
+        }
+    }
+    if components.is_empty() {
+        PathBuf::from(".")
+    } else {
+        components.iter().collect()
+    }
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
@@ -569,5 +674,191 @@ mod tests {
             parsed.commands().last().unwrap().enclosing_scopes,
             vec![ShellScope::ChainedList]
         );
+    }
+
+    #[rstest::rstest]
+    #[case::chained_cd(
+        "cd ../ws2 && jj status",
+        None,
+        &[Some("/base/ws2")]
+    )]
+    #[case::cd_flags_and_double_dash(
+        "cd -LP -- sub/dir && jj status",
+        None,
+        &[Some("/base/ws1/sub/dir")]
+    )]
+    #[case::builtin_cd(
+        "builtin cd ../ws2 && jj status",
+        None,
+        &[Some("/base/ws2")]
+    )]
+    #[case::command_cd(
+        "command cd ../ws2 && jj status",
+        None,
+        &[Some("/base/ws2")]
+    )]
+    #[case::brace_group_persists_cd(
+        "{ cd ../ws2 && jj status; } && jj status",
+        None,
+        &[Some("/base/ws2"), Some("/base/ws2")]
+    )]
+    #[case::subshell_isolation(
+        "(cd ../ws2 && jj status) && (cd ../ws3 && jj status) && jj status",
+        None,
+        &[Some("/base/ws2"), Some("/base/ws3"), Some("/base/ws1")]
+    )]
+    #[case::pipeline_stage_isolation(
+        "cd ../ws2 | jj status",
+        None,
+        &[Some("/base/ws1")]
+    )]
+    #[case::background_isolation(
+        "cd ../ws2 & jj status",
+        None,
+        &[Some("/base/ws1")]
+    )]
+    #[case::coproc_isolation(
+        "coproc cd ../ws2; jj status",
+        None,
+        &[Some("/base/ws1")]
+    )]
+    #[case::function_definition_isolation(
+        "go_ws2() { cd ../ws2; }; jj status",
+        None,
+        &[Some("/base/ws1")]
+    )]
+    #[case::or_branch_does_not_inherit_failed_cd(
+        "cd ../ws2 || jj status",
+        None,
+        &[Some("/base/ws1")]
+    )]
+    #[case::cd_or_exit_preserves_target_dir(
+        "cd ../ws2 || exit 1; jj status",
+        None,
+        &[Some("/base/ws2")]
+    )]
+    #[case::or_cd_invalidates_following_and_dir(
+        "false || cd ../ws2 && jj status",
+        None,
+        &[None]
+    )]
+    #[case::chained_or_cd_invalidates_following_dir(
+        "cd sub1 || cd sub2; jj status",
+        None,
+        &[None]
+    )]
+    #[case::negated_cd_does_not_leak(
+        "! cd ../ws2 && jj status",
+        None,
+        &[Some("/base/ws1")]
+    )]
+    #[case::if_condition_and_diverging_branches_invalidate_after_fi(
+        "if cd ../ws2; then jj status; else jj status; fi && jj status",
+        None,
+        &[Some("/base/ws2"), Some("/base/ws1"), None]
+    )]
+    #[case::if_without_else_cd_invalidates_after_fi(
+        "if [ -d ../ws2 ]; then cd ../ws2; fi && jj status",
+        None,
+        &[None]
+    )]
+    #[case::if_unanimous_branches_preserve_target_dir(
+        "if true; then cd ../ws2; else cd ../ws2; fi && jj status",
+        None,
+        &[Some("/base/ws2")]
+    )]
+    #[case::case_arm_cd_invalidates_after_esac(
+        "case $x in a) cd ../ws2 && jj status ;; b) jj status ;; esac && jj status",
+        None,
+        &[Some("/base/ws2"), Some("/base/ws1"), None]
+    )]
+    #[case::loop_body_cd_invalidates_after_done(
+        "for d in a b; do cd ../ws2 && jj status; done && jj status",
+        None,
+        &[Some("/base/ws2"), None]
+    )]
+    #[case::dynamic_loop_cd_invalidates_after_done(
+        r#"for d in a b; do cd "$d"; done && jj status"#,
+        None,
+        &[None]
+    )]
+    #[case::command_substitution_inherits_outer_and_isolates_inner(
+        r#"cd sub && echo "$(cd ../other && jj status)" && jj status"#,
+        None,
+        &[Some("/base/ws1/other"), Some("/base/ws1/sub")]
+    )]
+    #[case::process_substitution_isolates_cd(
+        "diff <(cd ../ws2 && jj status) <(jj status)",
+        None,
+        &[Some("/base/ws2"), Some("/base/ws1")]
+    )]
+    #[case::cd_dash_after_static_cd_is_unknown(
+        "cd ../ws2 && cd - && jj status",
+        None,
+        &[None]
+    )]
+    #[case::dynamic_cd_after_static_cd_is_unknown(
+        r#"cd ../ws2 && cd "$DYNAMIC" && jj status"#,
+        None,
+        &[None]
+    )]
+    #[case::bare_cd_is_unknown(
+        "cd ../ws2 && cd && jj status",
+        None,
+        &[None]
+    )]
+    #[case::tilde_cd_is_unknown(
+        "cd ~/other && jj status",
+        None,
+        &[None]
+    )]
+    #[case::pushd_is_unknown(
+        "pushd ../ws2 && jj status",
+        None,
+        &[None]
+    )]
+    #[case::absolute_cd_recovers_from_unknown(
+        r#"cd "$DYNAMIC" && cd /abs/ws && jj status"#,
+        None,
+        &[Some("/abs/ws")]
+    )]
+    #[case::absolute_override_recovers_from_unknown(
+        r#"cd "$DYNAMIC" && jj status"#,
+        Some("/abs/ws"),
+        &[Some("/abs/ws")]
+    )]
+    #[case::empty_override_is_unknown(
+        "cd sub && jj status",
+        Some(""),
+        &[None]
+    )]
+    #[case::override_relative_to_cd(
+        "cd sub && jj status",
+        Some("../../ws2"),
+        &[Some("/base/ws2")]
+    )]
+    #[case::override_absolute_replaces_cd(
+        "cd sub && jj status",
+        Some("/abs/ws"),
+        &[Some("/abs/ws")]
+    )]
+    fn test_resolve_working_dir_across_cd_and_subshells(
+        #[case] script: &str,
+        #[case] override_dir: Option<&str>,
+        #[case] expected_dirs: &[Option<&str>],
+    ) {
+        let parsed = ParsedCommand::new(script);
+        let base = Path::new("/base/ws1");
+        let actual: Vec<Option<PathBuf>> = parsed
+            .commands()
+            .iter()
+            .filter(|cmd| cmd.program_name() == "jj")
+            .map(|cmd| cmd.resolve_working_dir(base, override_dir.map(Path::new)))
+            .collect();
+        let expected: Vec<Option<PathBuf>> = expected_dirs
+            .iter()
+            .map(|entry| entry.map(PathBuf::from))
+            .collect();
+        assert_eq!(actual, expected, "script: `{script}`");
     }
 }

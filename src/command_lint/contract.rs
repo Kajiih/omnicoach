@@ -2,27 +2,63 @@
 
 architecture_component!(CommandLintContract);
 
-use crate::command_lint::command::ParsedCommand;
-use crate::command_lint::vcs::JjClient;
+use std::path::PathBuf;
+
+use crate::command_lint::command::{InterceptedCommand, ParsedCommand};
+use crate::command_lint::vcs::{CachedJjSession, CommitSummary, JjClient, JjRepository};
 use crate::diagnostic::{Diagnostic, SourceSpan};
 use crate::rule_declaration::{CommandExample, Declaration};
 
 /// External execution environment available to command lint rules beyond the parsed shell AST.
 pub struct CommandEnv<'a> {
-    jj_client: &'a dyn JjClient,
+    jj_session: CachedJjSession<'a>,
+    base_working_dir: PathBuf,
 }
 
 impl<'a> CommandEnv<'a> {
-    /// Creates a command environment backed by `jj_client`.
+    /// Creates a command environment rooted at `"."` backed by `jj_client`.
+    #[cfg(test)]
     #[must_use]
-    pub const fn new(jj_client: &'a dyn JjClient) -> Self {
-        Self { jj_client }
+    pub(crate) fn new(jj_client: &'a dyn JjClient) -> Self {
+        Self::with_working_dir(jj_client, PathBuf::from("."))
     }
 
-    /// Returns the Jujutsu repository query client.
+    /// Creates a command environment rooted at `base_working_dir` backed by `jj_client`.
     #[must_use]
-    pub fn jj(&self) -> &dyn JjClient {
-        self.jj_client
+    pub(crate) fn with_working_dir(
+        jj_client: &'a dyn JjClient,
+        base_working_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            jj_session: CachedJjSession::new(jj_client),
+            base_working_dir: base_working_dir.into(),
+        }
+    }
+
+    /// Evaluates `revset` against the effective repository directory for `command` (accounting for
+    /// in-scope `cd` builtins and any explicit `jj -R` / `--repository` `repository` override).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target directory is statically unresolvable or if the underlying
+    /// [`JjClient`] fails to evaluate `revset`.
+    pub(crate) fn query_jj_revisions(
+        &self,
+        command: &InterceptedCommand,
+        repository: &JjRepository,
+        revset: &str,
+    ) -> Result<Vec<CommitSummary>, String> {
+        let override_dir = match repository {
+            JjRepository::Inherited => None,
+            JjRepository::Static(path) => Some(path.as_path()),
+            JjRepository::Unresolvable => {
+                return Err("cannot resolve dynamic repository override".to_owned());
+            }
+        };
+        let repo_dir = command
+            .resolve_working_dir(&self.base_working_dir, override_dir)
+            .ok_or_else(|| "cannot resolve command working directory".to_owned())?;
+        self.jj_session.query_revisions(&repo_dir, revset)
     }
 }
 

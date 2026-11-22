@@ -6,7 +6,8 @@ mod cli_args;
 mod shell;
 
 pub(super) use self::cli_args::{
-    ProgramCliSchema, SubcommandCliSchema, extract_leading_global_flags,
+    LastOptionValue, ParsedArgs, ProgramCliSchema, SubcommandCliSchema,
+    extract_leading_global_flags,
 };
 pub use self::shell::{
     CommandArg, CommandRedirect, EnvAssignment, InterceptedCommand, ParsedCommand, RedirectKind,

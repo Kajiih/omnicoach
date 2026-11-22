@@ -232,34 +232,115 @@ pub fn format_diagnostics_for_test(diagnostics: &[Diagnostic]) -> String {
     output
 }
 
+const UNKNOWN_REVISION_PREFIX: &str = "unknown revision";
+
 /// In-memory [`JjClient`] fake for [`command_rule_test!`].
 #[derive(Debug, Default)]
 pub struct FakeJjClient {
-    commits: std::collections::HashMap<String, crate::command_lint::vcs::CommitInfo>,
+    commits: std::collections::HashMap<String, Vec<crate::command_lint::vcs::CommitSummary>>,
 }
 
 impl FakeJjClient {
-    /// Creates a [`FakeJjClient`] populated with `entries`.
+    /// Creates a [`FakeJjClient`] populated with `entries`, grouping repeated keys in order.
     #[must_use]
-    pub fn from_entries(entries: &[(&str, crate::command_lint::vcs::CommitInfo)]) -> Self {
-        Self {
-            commits: entries
-                .iter()
-                .map(|(revision, info)| ((*revision).to_string(), info.clone()))
-                .collect(),
+    pub fn from_entries(entries: &[(&str, crate::command_lint::vcs::CommitSummary)]) -> Self {
+        let mut commits: std::collections::HashMap<
+            String,
+            Vec<crate::command_lint::vcs::CommitSummary>,
+        > = std::collections::HashMap::new();
+        for (revision, summary) in entries {
+            commits
+                .entry((*revision).to_owned())
+                .or_default()
+                .push(summary.clone());
         }
+        Self { commits }
+    }
+
+    fn resolve_top_level_union(
+        &self,
+        revset: &str,
+    ) -> Result<Vec<crate::command_lint::vcs::CommitSummary>, String> {
+        let mut branches = Vec::new();
+        let mut depth = 0usize;
+        let mut branch_start = 0usize;
+        for (index, byte) in revset.bytes().enumerate() {
+            match byte {
+                b'(' => depth += 1,
+                b')' => depth = depth.saturating_sub(1),
+                b'|' if depth == 0 => {
+                    branches.push(&revset[branch_start..index]);
+                    branch_start = index + 1;
+                }
+                _ => {}
+            }
+        }
+        if branches.is_empty() {
+            return Err(format!("{UNKNOWN_REVISION_PREFIX}: {revset}"));
+        }
+        branches.push(&revset[branch_start..]);
+
+        let mut combined = Vec::new();
+        let mut seen_branches = HashSet::new();
+        for raw_branch in branches {
+            let trimmed = Self::strip_outer_parens(raw_branch.trim());
+            if !seen_branches.insert(trimmed) {
+                continue;
+            }
+            let items = self
+                .commits
+                .get(trimmed)
+                .ok_or_else(|| format!("{UNKNOWN_REVISION_PREFIX}: {revset}"))?;
+            combined.extend(items.iter().cloned());
+        }
+        Ok(combined)
+    }
+
+    fn strip_outer_parens(text: &str) -> &str {
+        let mut current = text.trim();
+        while let Some(inner) = current
+            .strip_prefix('(')
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            let mut depth = 0usize;
+            let mut balanced = true;
+            for byte in inner.bytes() {
+                match byte {
+                    b'(' => depth += 1,
+                    b')' => {
+                        if depth == 0 {
+                            balanced = false;
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    _ => {}
+                }
+            }
+            if !balanced || depth != 0 {
+                break;
+            }
+            current = inner.trim();
+        }
+        current
     }
 }
 
 impl JjClient for FakeJjClient {
-    fn get_commit_info(
+    fn query_revisions(
         &self,
-        revision: &str,
-    ) -> Result<crate::command_lint::vcs::CommitInfo, String> {
-        self.commits
-            .get(revision)
-            .cloned()
-            .ok_or_else(|| format!("unknown revision: {revision}"))
+        _repo_dir: &Path,
+        revset: &str,
+    ) -> Result<Vec<crate::command_lint::vcs::CommitSummary>, String> {
+        let normalized = Self::strip_outer_parens(revset);
+        if let Some(items) = self
+            .commits
+            .get(revset)
+            .or_else(|| self.commits.get(normalized))
+        {
+            return Ok(items.clone());
+        }
+        self.resolve_top_level_union(normalized)
     }
 }
 
@@ -1481,7 +1562,7 @@ pub(crate) use rule_test;
 /// Declarative test-suite generator for [`CommandRule`]s.
 ///
 /// Supports both purely syntactic command rules (omitting `jj: [...]`) and repository-aware
-/// command rules (providing `jj: [ "rev" => CommitInfo { ... }, ... ]`).
+/// command rules (providing `jj: [ "rev" => CommitSummary { ... }, ... ]`).
 macro_rules! command_rule_test {
     ($rule:ident, { $($body:tt)* } $(,)?) => {
         $crate::test_utils::command_rule_test!($rule, jj: [], { $($body)* });
@@ -1706,5 +1787,59 @@ mod tests {
     ) {
         let error = with_distinct_literals(code, Language::Python).unwrap_err();
         assert!(error.contains(reason), "unexpected reason: {error}");
+    }
+
+    #[rstest::rstest]
+    #[case::direct_key("a", &["a1", "a2"])]
+    #[case::single_term_parenthesized("((a))", &["a1", "a2"])]
+    #[case::top_level_union_preserves_order_and_deduplicates("((a)) | (b) | (a)", &["a1", "a2", "b1"])]
+    fn test_fake_jj_client_resolves_parenthesized_and_union_revsets(
+        #[case] revset: &str,
+        #[case] expected_ids: &[&str],
+    ) {
+        let client = FakeJjClient::from_entries(&[
+            (
+                "a",
+                crate::command_lint::vcs::CommitSummary {
+                    change_id: "a1".to_owned(),
+                    ..crate::command_lint::vcs::CommitSummary::default()
+                },
+            ),
+            (
+                "a",
+                crate::command_lint::vcs::CommitSummary {
+                    change_id: "a2".to_owned(),
+                    ..crate::command_lint::vcs::CommitSummary::default()
+                },
+            ),
+            (
+                "b",
+                crate::command_lint::vcs::CommitSummary {
+                    change_id: "b1".to_owned(),
+                    ..crate::command_lint::vcs::CommitSummary::default()
+                },
+            ),
+        ]);
+
+        let ids: Vec<String> = client
+            .query_revisions(Path::new("."), revset)
+            .expect("revset resolves")
+            .into_iter()
+            .map(|summary| summary.change_id)
+            .collect();
+        assert_eq!(ids, expected_ids);
+    }
+
+    #[test]
+    fn test_fake_jj_client_errors_when_union_branch_is_missing() {
+        let client = FakeJjClient::from_entries(&[(
+            "a",
+            crate::command_lint::vcs::CommitSummary::default(),
+        )]);
+        assert!(
+            client
+                .query_revisions(Path::new("."), "(a) | (missing)")
+                .is_err()
+        );
     }
 }

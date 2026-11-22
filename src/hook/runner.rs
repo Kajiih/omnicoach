@@ -10,15 +10,12 @@ use super::virtual_edit::{VirtualFile, apply_virtual_edit};
 use super::warning_queue::QueuedWarning;
 use crate::code_lint::project::{is_rooted_path, lexical_normalize};
 use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
-use crate::command_lint::runner::run_command_lint_with_client;
-use crate::command_lint::vcs::{JjCliClient, JjClient};
+use crate::command_lint::runner::run_command_lint_in_dir;
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Language, RuleName};
 use crate::rule_selection::{
     ConfigOverrides, discover_project_root, load_command_config_from_root, load_config_from_root,
 };
-
-type JjClientFactory<'a> = &'a dyn Fn(&Path) -> Box<dyn JjClient>;
 
 /// Outcome of evaluating a tool call before it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,12 +30,12 @@ pub(super) struct ToolCallOutcome {
 
 /// Evaluates a tool call against the repository on disk.
 pub(super) fn evaluate_pre_tool_use(event: &PreToolUseEvent) -> ToolCallOutcome {
-    evaluate_pre_tool_use_with(event, &|directory| Box::new(JjCliClient::in_dir(directory)))
+    evaluate_pre_tool_use_with_runner(event, run_command_lint_in_dir)
 }
 
-fn evaluate_pre_tool_use_with(
+fn evaluate_pre_tool_use_with_runner(
     event: &PreToolUseEvent,
-    jj_client_for: JjClientFactory<'_>,
+    run_lint: impl FnOnce(&str, &Config, &Path) -> Vec<Diagnostic>,
 ) -> ToolCallOutcome {
     match &event.payload {
         ToolCallPayload::RunCommand { command_line, cwd } => ToolCallOutcome {
@@ -46,7 +43,7 @@ fn evaluate_pre_tool_use_with(
                 command_line,
                 cwd.as_deref(),
                 &event.workspace_paths,
-                jj_client_for,
+                run_lint,
             ),
             warnings: Vec::new(),
         },
@@ -65,7 +62,7 @@ fn check_command(
     command_line: &str,
     cwd: Option<&Path>,
     workspace_paths: &[PathBuf],
-    jj_client_for: JjClientFactory<'_>,
+    run_lint: impl FnOnce(&str, &Config, &Path) -> Vec<Diagnostic>,
 ) -> PreToolDecision {
     let working_directory =
         resolve_in_workspace(cwd.unwrap_or_else(|| Path::new("")), workspace_paths);
@@ -73,9 +70,8 @@ fn check_command(
     let Some(config) = load_hook_config(&project_root, load_command_config_from_root) else {
         return PreToolDecision::NoObjection;
     };
-    let client = jj_client_for(&working_directory);
 
-    let diagnostics = run_command_lint_with_client(command_line, &config, client.as_ref());
+    let diagnostics = run_lint(command_line, &config, &working_directory);
     if diagnostics.is_empty() {
         PreToolDecision::NoObjection
     } else {
@@ -326,8 +322,20 @@ fn load_hook_config<E: std::fmt::Display>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
-    use crate::command_lint::vcs::CommitInfo;
+    use crate::command_lint::runner::run_command_lint_in_dir_with;
+    use crate::command_lint::vcs::{CommitSummary, JjClient};
+
+    fn evaluate_pre_tool_use_with(
+        event: &PreToolUseEvent,
+        jj_client: &dyn JjClient,
+    ) -> ToolCallOutcome {
+        evaluate_pre_tool_use_with_runner(event, |cmd, config, working_dir| {
+            run_command_lint_in_dir_with(cmd, config, working_dir, jj_client)
+        })
+    }
 
     struct FakeVcsClient {
         description: String,
@@ -335,11 +343,31 @@ mod tests {
     }
 
     impl JjClient for FakeVcsClient {
-        fn get_commit_info(&self, _revision: &str) -> Result<CommitInfo, String> {
-            Ok(CommitInfo {
+        fn query_revisions(
+            &self,
+            _repo_dir: &Path,
+            _revset: &str,
+        ) -> Result<Vec<CommitSummary>, String> {
+            Ok(vec![CommitSummary {
                 description: self.description.clone(),
                 conflict: self.conflict,
-            })
+                ..CommitSummary::default()
+            }])
+        }
+    }
+
+    struct RecordingVcsClient {
+        queried_dirs: RefCell<Vec<PathBuf>>,
+    }
+
+    impl JjClient for RecordingVcsClient {
+        fn query_revisions(
+            &self,
+            repo_dir: &Path,
+            _revset: &str,
+        ) -> Result<Vec<CommitSummary>, String> {
+            self.queried_dirs.borrow_mut().push(repo_dir.to_path_buf());
+            Ok(vec![CommitSummary::default()])
         }
     }
 
@@ -354,12 +382,13 @@ mod tests {
                 cwd: None,
             },
         };
-        let outcome = evaluate_pre_tool_use_with(&event, &|_| {
-            Box::new(FakeVcsClient {
+        let outcome = evaluate_pre_tool_use_with(
+            &event,
+            &FakeVcsClient {
                 description: String::new(),
                 conflict: false,
-            })
-        });
+            },
+        );
         assert_eq!(outcome.decision, PreToolDecision::NoObjection);
     }
 
@@ -374,13 +403,45 @@ mod tests {
                 cwd: None,
             },
         };
-        let outcome = evaluate_pre_tool_use_with(&event, &|_| {
-            Box::new(FakeVcsClient {
+        let outcome = evaluate_pre_tool_use_with(
+            &event,
+            &FakeVcsClient {
                 description: "feat: described commit".to_owned(),
                 conflict: false,
-            })
-        });
+            },
+        );
         assert!(matches!(outcome.decision, PreToolDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn evaluate_pre_tool_use_resolves_multi_workspace_cwd_cd_and_repo_flag() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ws1 = temp_dir.path().join("ws1");
+        let ws2 = temp_dir.path().join("ws2");
+        let ws3 = temp_dir.path().join("ws3");
+        std::fs::create_dir_all(&ws1).unwrap();
+        std::fs::create_dir_all(&ws2).unwrap();
+        std::fs::create_dir_all(&ws3).unwrap();
+
+        let event = PreToolUseEvent {
+            workspace_paths: vec![ws1, ws2.clone()],
+            agent_owned_dir: None,
+            payload: ToolCallPayload::RunCommand {
+                command_line: "(cd ../ws3 && jj edit a) && jj edit -R ../ws1 b && jj edit c"
+                    .to_owned(),
+                cwd: Some(ws2.clone()),
+            },
+        };
+        let recorder = RecordingVcsClient {
+            queried_dirs: RefCell::new(Vec::new()),
+        };
+        let outcome = evaluate_pre_tool_use_with(&event, &recorder);
+
+        assert_eq!(outcome.decision, PreToolDecision::NoObjection);
+        assert_eq!(
+            recorder.queried_dirs.into_inner(),
+            vec![ws3, temp_dir.path().join("ws1"), ws2]
+        );
     }
 
     #[test]
@@ -394,12 +455,13 @@ mod tests {
                 edit: FileEdit::Overwrite("pub fn test_fn() {}\n".to_owned()),
             },
         };
-        let outcome = evaluate_pre_tool_use_with(&event, &|_| {
-            Box::new(FakeVcsClient {
+        let outcome = evaluate_pre_tool_use_with(
+            &event,
+            &FakeVcsClient {
                 description: "feat: described working copy".to_owned(),
                 conflict: false,
-            })
-        });
+            },
+        );
         assert_eq!(outcome.decision, PreToolDecision::NoObjection);
     }
 
@@ -419,12 +481,13 @@ mod tests {
                 cwd: None,
             },
         };
-        let outcome = evaluate_pre_tool_use_with(&event, &|_| {
-            Box::new(FakeVcsClient {
+        let outcome = evaluate_pre_tool_use_with(
+            &event,
+            &FakeVcsClient {
                 description: "feat: described commit".to_owned(),
                 conflict: false,
-            })
-        });
+            },
+        );
         assert_eq!(outcome.decision, PreToolDecision::NoObjection);
     }
 
@@ -452,12 +515,13 @@ mod tests {
                 edit: FileEdit::Overwrite(bad_code.to_owned()),
             },
         };
-        let outcome = evaluate_pre_tool_use_with(&event, &|_| {
-            Box::new(FakeVcsClient {
+        let outcome = evaluate_pre_tool_use_with(
+            &event,
+            &FakeVcsClient {
                 description: String::new(),
                 conflict: false,
-            })
-        });
+            },
+        );
         assert_eq!(outcome.warnings, Vec::<QueuedWarning>::new());
     }
 

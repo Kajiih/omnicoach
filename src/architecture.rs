@@ -199,10 +199,10 @@ define_architecture! {
         shell => [],
         cli_args => [shell],
     }),
-    /// Jujutsu CLI schemas, revset boundedness, and repository state queries (`command_lint::vcs`).
+    /// Jujutsu CLI parsing, revset boundedness, and repository state queries (`command_lint::vcs`).
     CommandLintVcs      => [CommandLintCommand] (modules: {
         revset => [],
-        cli => [],
+        cli => [revset],
         client => [],
     }),
     /// The command rule contract: a declaration and a check over a parsed command (`command_lint::contract`).
@@ -220,7 +220,7 @@ define_architecture! {
 
     // --- Agent Lifecycle Hooks (`hook`) ---
     /// Agent-neutral tool-call evaluation, per-agent protocol adapters, deferred warning queue, and in-memory virtual file patching (`hook`).
-    Hook                => [CodeLintRunner, CommandLintRunner, CommandLintVcs, RuleSelection, RuleCatalog, Diagnostic] (modules: {
+    Hook                => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, Diagnostic] (modules: {
         event => [],
         warning_queue => [],
         virtual_edit => [event],
