@@ -2,7 +2,8 @@
 
 use super::attributes::attribute_terminal_name;
 use super::names::{
-    SELF_KEYWORD, compact_path_text, is_path_segment_token_kind, macro_call_terminal_name,
+    DEFINE_ARCHITECTURE_MACRO, SELF_KEYWORD, compact_path_text, is_path_segment_token_kind,
+    macro_call_terminal_name,
 };
 use super::test_analysis::has_outer_test_attribute;
 use super::tree::extract_macro_arguments;
@@ -17,7 +18,6 @@ use ra_ap_syntax::{AstNode as _, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTo
 use std::collections::HashSet;
 
 const ARCHITECTURE_COMPONENT_MACRO: &str = "architecture_component";
-const DEFINE_ARCHITECTURE_MACRO: &str = "define_architecture";
 const MODULES_CLAUSE: &str = "modules";
 const OWNS_EXTERNAL_CLAUSE: &str = "owns_external";
 const SELF_PREFIX: &str = "self::";

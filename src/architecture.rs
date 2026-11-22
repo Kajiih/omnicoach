@@ -211,7 +211,6 @@ define_architecture! {
 
     // --- Rule Selection ---
     /// Taxonomy queries, config selector resolution and rule option validation (`rule_selection`).
-    // omni:ignore [repeated-literal] -- define_architecture! CST extractor requires literal external crate names
     RuleSelection       => [Diff, RuleDeclaration, CodeLintRules, CodeLintSuppression, CommandLintRules, Config] (owns_external: ["tagonomy"]),
     /// Rule list and single-rule Markdown rendering for discovery commands (`rule_catalog`).
     RuleCatalog         => [RuleSelection, RuleDeclaration],

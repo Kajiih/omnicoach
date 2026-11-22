@@ -47,8 +47,8 @@ pub const RULE: CodeRule<CountOption> = CodeRule {
                 Literals the language requires (such as `Literal[...]` values, `TypeVar` names,
                 dictionary keys declared by an in-file `TypedDict` class, or Rust attributes),
                 interpolated Python f-strings (outside their `{...}` expressions), arguments of
-                formatting and assertion macros (`format!`, `assert_eq!`) and Rust `#[cfg(test)]`
-                code are not checked."#},
+                formatting and assertion macros (`format!`, `assert_eq!`), external crate names in
+                `define_architecture!` and Rust `#[cfg(test)]` code are not checked."#},
             why_is_this_bad: indoc::indoc! {r#"
                 A literal copied across a file is a value without a name: the reader must guess what
                 `"primary-db"` or `30` stands for, and changing it means finding every copy. Missing
@@ -448,6 +448,12 @@ crate::test_utils::rule_test!(
                     fn f(count: u32) {
                         assert!(count > 0, "invalid count");
                         assert!(count < 9, "invalid count");
+                    }
+                "#,
+                crate_owned_by_several_architecture_components => r#"
+                    define_architecture! {
+                        Model => [] (owns_external: ["serde"]),
+                        Api => [Model] (owns_external: ["serde"]),
                     }
                 "#,
                 tuple_field_positions_are_not_literals => r#"

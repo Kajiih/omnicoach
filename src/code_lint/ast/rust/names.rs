@@ -11,6 +11,9 @@ pub(super) const SELF_KEYWORD: &str = "self";
 pub(super) const SELF_TYPE_KEYWORD: &str = "Self";
 /// Keyword identifier `"super"` in Rust module paths.
 pub(super) const SUPER_KEYWORD: &str = "super";
+/// Name of the macro that declares a project's architecture components, read from source by the
+/// architecture checker.
+pub(super) const DEFINE_ARCHITECTURE_MACRO: &str = "define_architecture";
 
 /// Extracts the terminal macro identifier from a [`ast::MacroCall`] node.
 pub(super) fn macro_call_terminal_name(macro_call: &ast::MacroCall) -> String {

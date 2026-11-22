@@ -1,6 +1,8 @@
 //! Literal occurrence and value extraction for Rust (`ra_ap_syntax`).
 
-use super::names::{macro_call_terminal_name, resolve_preceding_macro_path};
+use super::names::{
+    DEFINE_ARCHITECTURE_MACRO, macro_call_terminal_name, resolve_preceding_macro_path,
+};
 use crate::code_lint::ast::literals::{
     LiteralOccurrence, LiteralRole, LiteralValue, parse_float_literal, parse_integer_literal,
 };
@@ -16,8 +18,11 @@ const FLOAT_SUFFIX_32: &str = "f32";
 const FLOAT_SUFFIX_64: &str = "f64";
 
 /// Macros whose literal arguments the language or API requires as written: format strings,
-/// assertion and logging messages, and compile-time inputs. Matched on the last path segment.
+/// assertion and logging messages, compile-time inputs, and the external crate names of
+/// `define_architecture!`, which the architecture checker reads from source as literals. Matched
+/// on the last path segment.
 const LITERAL_REQUIRED_MACROS: &[&str] = &[
+    DEFINE_ARCHITECTURE_MACRO,
     "format",
     "print",
     "println",
