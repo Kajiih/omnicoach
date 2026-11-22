@@ -31,7 +31,7 @@ members = [".", "crates/omnicoach-py", "crates/tagonomy", "playground"]
 default-members = [".", "crates/tagonomy"]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "Lightweight, high-signal static analysis and command linter for Python and Rust"
 repository = "https://github.com/Kajiih/omnicoach"
