@@ -1140,6 +1140,73 @@ fn test_hook_top_level_cwd_blocks_shared_workspace_rewrite() {
     );
 }
 
+#[test]
+fn test_command_lint_divergent_push_on_real_jj_repo() {
+    let temp_repo = setup_temp_jj_repo();
+    let repo_dir = temp_repo.path();
+    fs::write(repo_dir.join("file.txt"), "v1\n").unwrap();
+    run_jj_in(repo_dir, &["commit", "-m", "feat: parent commit"]);
+    let parent_change_id = run_jj_in(
+        repo_dir,
+        &["log", "--no-graph", "-r", "@-", "-T", "change_id.short(8)"],
+    )
+    .trim()
+    .to_owned();
+    fs::write(repo_dir.join("file.txt"), "v2\n").unwrap();
+    run_jj_in(repo_dir, &["describe", "-m", "feat: child commit"]);
+    run_jj_in(repo_dir, &["bookmark", "create", "feat", "-r", "@"]);
+
+    let clean_push = run_cli(&["command", "--cmd", "jj git push"], Some(repo_dir));
+
+    run_jj_in(
+        repo_dir,
+        &[
+            "describe",
+            "-r",
+            &parent_change_id,
+            "-m",
+            "feat: parent edit a",
+        ],
+    );
+    run_jj_in(
+        repo_dir,
+        &[
+            "describe",
+            "--at-op=@-",
+            "-r",
+            &parent_change_id,
+            "-m",
+            "feat: parent edit b",
+        ],
+    );
+    let divergent_push = run_cli(&["command", "--cmd", "jj git push"], Some(repo_dir));
+    let bookmark_union_push = run_cli(
+        &["command", "--cmd", "jj git push -b 'feat | other'"],
+        Some(repo_dir),
+    );
+    let dry_run_push = run_cli(
+        &["command", "--cmd", "jj git push --dry-run"],
+        Some(repo_dir),
+    );
+
+    assert!(
+        clean_push.contains("--- exit code ---\n0\n"),
+        "{clean_push}"
+    );
+    assert!(
+        divergent_push.contains("[divergent-jj-push]"),
+        "{divergent_push}"
+    );
+    assert!(
+        bookmark_union_push.contains("[divergent-jj-push]"),
+        "{bookmark_union_push}"
+    );
+    assert!(
+        dry_run_push.contains("--- exit code ---\n0\n"),
+        "{dry_run_push}"
+    );
+}
+
 fn run_with_closed_stdout_pipe(args: &[&str]) -> (Option<i32>, String) {
     use std::process::Stdio;
 

@@ -124,6 +124,14 @@ pub(super) fn format_parent_revset(revision: &str) -> String {
     }
 }
 
+/// Wraps a `jj git push --bookmark` string pattern in `bookmarks(...)`, returning `None`
+/// when `pattern` is empty or whitespace-only.
+#[must_use]
+pub(super) fn format_bookmark_revset(pattern: &str) -> Option<String> {
+    let trimmed = pattern.trim();
+    (!trimmed.is_empty()).then(|| format!("bookmarks({trimmed})"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RevsetExpr<'a> {
     Symbol,
@@ -532,5 +540,20 @@ mod tests {
     ) {
         let owned: Vec<String> = terms.iter().map(|term| (*term).to_owned()).collect();
         assert_eq!(format_revset_terms(&owned), expected);
+    }
+
+    #[rstest]
+    #[case::glob("feat-*", Some("bookmarks(feat-*)"))]
+    #[case::exact_prefix("exact:main", Some("bookmarks(exact:main)"))]
+    #[case::union_expression("a | b", Some("bookmarks(a | b)"))]
+    #[case::negation_expression("~main", Some("bookmarks(~main)"))]
+    #[case::trims_whitespace("  feat/sub  ", Some("bookmarks(feat/sub)"))]
+    #[case::empty("", None)]
+    #[case::whitespace_only("   ", None)]
+    fn format_bookmark_revset_preserves_string_expressions(
+        #[case] pattern: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(format_bookmark_revset(pattern).as_deref(), expected);
     }
 }

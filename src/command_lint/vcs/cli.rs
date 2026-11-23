@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use super::revset::{
-    format_parent_revset, format_revset_terms, format_single_or_union,
+    format_bookmark_revset, format_parent_revset, format_revset_terms, format_single_or_union,
     intersect_revset_with_mutable, is_bounded_jj_revset, join_revset_union,
 };
 use crate::command_lint::command::{
@@ -13,6 +13,8 @@ use crate::command_lint::command::{
 // TODO: Should we add some abstraction for these? 
 // TODO: at least something like an enum or maybe something better designed that we can generalize to other tools too?
 const JJ_PROGRAM: &str = "jj";
+const SUBCOMMAND_GIT: &str = "git";
+const SUBCOMMAND_PUSH: &str = "push";
 const FLAG_REPO_SHORT: &str = "-R";
 const FLAG_REPO_LONG: &str = "--repository";
 const FLAG_REV_SHORT: &str = "-r";
@@ -39,6 +41,20 @@ const FLAG_SOURCE_SHORT: &str = "-s";
 const FLAG_SOURCE_LONG: &str = "--source";
 const FLAG_BRANCH_SHORT: &str = "-b";
 const FLAG_BRANCH_LONG: &str = "--branch";
+const FLAG_BOOKMARK_SHORT: &str = "-b";
+const FLAG_BOOKMARK_LONG: &str = "--bookmark";
+const FLAG_CHANGE_SHORT: &str = "-c";
+const FLAG_CHANGE_LONG: &str = "--change";
+const FLAG_NAMED_LONG: &str = "--named";
+const FLAG_TAG_SHORT: &str = "-t";
+const FLAG_TAG_LONG: &str = "--tag";
+const FLAG_REMOTE_LONG: &str = "--remote";
+const FLAG_OPTION_SHORT: &str = "-o";
+const FLAG_OPTION_LONG: &str = "--option";
+const FLAG_ALL_LONG: &str = "--all";
+const FLAG_TRACKED_LONG: &str = "--tracked";
+const FLAG_DELETED_LONG: &str = "--deleted";
+const FLAG_DRY_RUN_LONG: &str = "--dry-run";
 const FLAG_MESSAGE_SHORT: &str = "-m";
 const FLAG_MESSAGE_LONG: &str = "--message";
 const FLAG_AUTHOR_LONG: &str = "--author";
@@ -289,6 +305,25 @@ const METAEDIT_SCHEMA: ProgramCliSchema = ProgramCliSchema {
     ),
 };
 
+const GIT_PUSH_SCHEMA: ProgramCliSchema = ProgramCliSchema {
+    options_with_values: jj_options_with_values!(
+        FLAG_REMOTE_LONG,
+        FLAG_BOOKMARK_SHORT,
+        FLAG_BOOKMARK_LONG,
+        FLAG_BRANCH_LONG,
+        FLAG_TAG_SHORT,
+        FLAG_TAG_LONG,
+        FLAG_REV_SHORT,
+        FLAG_REV_LONG,
+        FLAG_REVS_LONG,
+        FLAG_CHANGE_SHORT,
+        FLAG_CHANGE_LONG,
+        FLAG_NAMED_LONG,
+        FLAG_OPTION_SHORT,
+        FLAG_OPTION_LONG,
+    ),
+};
+
 /// Repository override parsed from `-R` / `--repository` on a `jj` invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JjRepository {
@@ -458,8 +493,68 @@ impl JjInvocation {
             JjSubcommand::Absorb => Some(self.absorb_rewritten_revset()),
             JjSubcommand::Fix => Some(self.fix_rewritten_revset()),
             JjSubcommand::Rebase => Some(self.rebase_rewritten_revset()),
-            JjSubcommand::Log | JjSubcommand::Other => None,
+            JjSubcommand::Log | JjSubcommand::GitPush | JjSubcommand::Other => None,
         }
+    }
+
+    /// Returns the candidate mutable ancestor revset pushed by a `jj git push` invocation, or
+    /// `None` when this invocation is not a push or runs in `--dry-run`, delete-only, or tag-only
+    /// mode.
+    #[must_use]
+    pub fn pushed_mutable_revset(&self) -> Option<String> {
+        if self.subcommand != JjSubcommand::GitPush || self.args.has_flag(FLAG_DRY_RUN_LONG) {
+            return None;
+        }
+
+        let mut target_terms: Vec<String> = self
+            .collect_option_values(&[FLAG_CHANGE_SHORT, FLAG_CHANGE_LONG])
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+
+        for revision in self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG])
+        {
+            target_terms.push(format!("({revision}) & (bookmarks() | tags())"));
+        }
+
+        for named in self.args.option_values(FLAG_NAMED_LONG) {
+            if let Some((_, revision)) = named.split_once('=') {
+                let trimmed = revision.trim();
+                if !trimmed.is_empty() {
+                    target_terms.push(trimmed.to_owned());
+                }
+            }
+        }
+
+        for bookmark in
+            self.collect_option_values(&[FLAG_BOOKMARK_SHORT, FLAG_BOOKMARK_LONG, FLAG_BRANCH_LONG])
+        {
+            if let Some(expression) = format_bookmark_revset(bookmark) {
+                target_terms.push(expression);
+            }
+        }
+
+        if self.args.has_flag(FLAG_ALL_LONG) || self.args.has_flag(FLAG_TRACKED_LONG) {
+            target_terms.push("bookmarks()".to_owned());
+        }
+
+        if !target_terms.is_empty() {
+            let union = format_revset_terms(&target_terms);
+            return Some(format!("::({union}) & mutable()"));
+        }
+
+        if self.args.has_flag(FLAG_DELETED_LONG)
+            || self.args.has_flag(FLAG_TAG_SHORT)
+            || self.args.has_flag(FLAG_TAG_LONG)
+            || self.args.has_flag(FLAG_NAMED_LONG)
+            || self.args.has_flag(FLAG_BOOKMARK_SHORT)
+            || self.args.has_flag(FLAG_BOOKMARK_LONG)
+            || self.args.has_flag(FLAG_BRANCH_LONG)
+        {
+            return None;
+        }
+
+        Some(MUTABLE_ANCESTORS_OF_WORKING_COPY.to_owned())
     }
 
     fn squash_combined_description_interactivity(&self) -> Option<JjInteractivity> {
@@ -773,7 +868,14 @@ pub fn parse_jj_invocation(command: &InterceptedCommand) -> Option<JjInvocation>
 
     let subcommand_index = JJ_SUBCOMMAND_CLI_SCHEMA.find_subcommand_index(&command.arguments, 0)?;
     let subcommand_name = command.arguments[subcommand_index].text.as_str();
-    let subcommand = JjSubcommand::from_name(subcommand_name);
+    let secondary_name = (subcommand_name == SUBCOMMAND_GIT)
+        .then(|| {
+            JJ_SUBCOMMAND_CLI_SCHEMA
+                .find_subcommand_index(&command.arguments, subcommand_index + 1)
+                .map(|index| command.arguments[index].text.as_str())
+        })
+        .flatten();
+    let subcommand = JjSubcommand::from_tokens(subcommand_name, secondary_name);
     let args = command.parse_args(subcommand.schema());
     if JJ_STANDALONE_FLAGS.iter().any(|flag| args.has_flag(flag)) {
         return None;
@@ -819,27 +921,29 @@ enum JjSubcommand {
     Fix,
     New,
     Metaedit,
+    GitPush,
     Other,
 }
 
 impl JjSubcommand {
-    fn from_name(name: &str) -> Self {
-        match name {
-            "edit" => Self::Edit,
-            "log" => Self::Log,
-            "describe" | "desc" => Self::Describe,
-            "commit" | "ci" => Self::Commit,
-            "split" => Self::Split,
-            "squash" => Self::Squash,
-            "diffedit" => Self::Diffedit,
-            "resolve" => Self::Resolve,
-            "restore" => Self::Restore,
-            "absorb" => Self::Absorb,
-            "abandon" => Self::Abandon,
-            "rebase" => Self::Rebase,
-            "fix" => Self::Fix,
-            "new" => Self::New,
-            "metaedit" => Self::Metaedit,
+    fn from_tokens(primary: &str, secondary: Option<&str>) -> Self {
+        match (primary, secondary) {
+            ("edit", _) => Self::Edit,
+            ("log", _) => Self::Log,
+            ("describe" | "desc", _) => Self::Describe,
+            ("commit" | "ci", _) => Self::Commit,
+            ("split", _) => Self::Split,
+            ("squash", _) => Self::Squash,
+            ("diffedit", _) => Self::Diffedit,
+            ("resolve", _) => Self::Resolve,
+            ("restore", _) => Self::Restore,
+            ("absorb", _) => Self::Absorb,
+            ("abandon", _) => Self::Abandon,
+            ("rebase", _) => Self::Rebase,
+            ("fix", _) => Self::Fix,
+            ("new", _) => Self::New,
+            ("metaedit", _) => Self::Metaedit,
+            (SUBCOMMAND_GIT, Some(SUBCOMMAND_PUSH)) => Self::GitPush,
             _ => Self::Other,
         }
     }
@@ -861,6 +965,7 @@ impl JjSubcommand {
             Self::Fix => &FIX_SCHEMA,
             Self::New => &NEW_SCHEMA,
             Self::Metaedit => &METAEDIT_SCHEMA,
+            Self::GitPush => &GIT_PUSH_SCHEMA,
             Self::Other => &GLOBAL_ONLY_SCHEMA,
         }
     }
@@ -1170,9 +1275,80 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::bare_push("jj git push", Some("::@ & mutable()"))]
+    #[case::repo_flag_between_git_and_push("jj git -R ../ws2 push", Some("::@ & mutable()"))]
+    #[case::short_change("jj git push -c kpqxywon", Some("::(kpqxywon) & mutable()"))]
+    #[case::long_change("jj git push --change kpqxywon", Some("::(kpqxywon) & mutable()"))]
+    #[case::short_revision(
+        "jj git push -r 'mutable()'",
+        Some("::((mutable()) & (bookmarks() | tags())) & mutable()")
+    )]
+    #[case::long_revision(
+        "jj git push --revision feat",
+        Some("::((feat) & (bookmarks() | tags())) & mutable()")
+    )]
+    #[case::plural_revisions(
+        "jj git push --revisions main..@",
+        Some("::((main..@) & (bookmarks() | tags())) & mutable()")
+    )]
+    #[case::named_bookmark("jj git push --named feat=@-", Some("::(@-) & mutable()"))]
+    #[case::named_empty_revision_ignored("jj git push --named feat=", None)]
+    #[case::named_missing_equals_ignored("jj git push --named broken", None)]
+    #[case::short_bookmark_glob("jj git push -b feat-*", Some("::(bookmarks(feat-*)) & mutable()"))]
+    #[case::long_bookmark_union(
+        "jj git push --bookmark 'a | b'",
+        Some("::(bookmarks(a | b)) & mutable()")
+    )]
+    #[case::bookmark_negation("jj git push -b '~main'", Some("::(bookmarks(~main)) & mutable()"))]
+    #[case::bookmark_exact_prefix(
+        "jj git push -b exact:main",
+        Some("::(bookmarks(exact:main)) & mutable()")
+    )]
+    #[case::branch_alias("jj git push --branch feat", Some("::(bookmarks(feat)) & mutable()"))]
+    #[case::empty_short_bookmark_ignored(r#"jj git push -b """#, None)]
+    #[case::empty_long_bookmark_ignored(r#"jj git push --bookmark """#, None)]
+    #[case::empty_branch_alias_ignored(r#"jj git push --branch """#, None)]
+    #[case::all_bookmarks("jj git push --all", Some("::(bookmarks()) & mutable()"))]
+    #[case::tracked_bookmarks("jj git push --tracked", Some("::(bookmarks()) & mutable()"))]
+    #[case::deleted_only_exempt("jj git push --deleted", None)]
+    #[case::deleted_with_tracked(
+        "jj git push --deleted --tracked",
+        Some("::(bookmarks()) & mutable()")
+    )]
+    #[case::short_tag_only_exempt("jj git push -t v1.0.0", None)]
+    #[case::long_tag_only_exempt("jj git push --tag v1.0.0", None)]
+    #[case::tag_with_change("jj git push -t v1.0.0 -c kpqxywon", Some("::(kpqxywon) & mutable()"))]
+    #[case::multiple_targets(
+        "jj git push -c kpqxywon -b feat",
+        Some("::((kpqxywon) | (bookmarks(feat))) & mutable()")
+    )]
+    #[case::dry_run_exempt("jj git push --dry-run", None)]
+    #[case::git_fetch_exempt("jj git fetch", None)]
+    #[case::git_remote_add_push_exempt("jj git remote add push https://example.com/repo.git", None)]
+    #[case::git_fetch_remote_named_push_exempt("jj git fetch --remote push", None)]
+    #[case::non_git_subcommand_exempt("jj status", None)]
+    fn test_pushed_mutable_revset(#[case] raw: &str, #[case] expected: Option<&str>) {
+        let command = InterceptedCommand::parse_all(raw).remove(0);
+        let invocation = parse_jj_invocation(&command).expect("valid jj invocation");
+        assert_eq!(invocation.pushed_mutable_revset().as_deref(), expected);
+    }
+
+    #[test]
+    fn test_git_push_parses_repository_flag_between_subcommand_tokens() {
+        let command = InterceptedCommand::parse_all("jj git -R ../ws2 push").remove(0);
+        let invocation = parse_jj_invocation(&command).expect("valid jj invocation");
+        assert_eq!(
+            invocation.repository(),
+            &JjRepository::Static(PathBuf::from("../ws2"))
+        );
+    }
+
+    #[rstest::rstest]
     #[case::non_jj("git status")]
     #[case::top_level_help("jj --help")]
     #[case::subcommand_help("jj edit --help")]
+    #[case::git_help("jj git --help")]
+    #[case::git_push_help("jj git push --help")]
     #[case::clustered_short_version("jj -qV status")]
     #[case::flags_only("jj -R /tmp/ws --no-pager")]
     fn test_parse_jj_invocation_skips_non_subcommands(#[case] raw: &str) {
