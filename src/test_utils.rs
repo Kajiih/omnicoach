@@ -344,7 +344,28 @@ impl JjClient for FakeJjClient {
     }
 }
 
-/// Executes `rule` on `command_line`, asserting that `command_line` is valid shell syntax.
+/// Expected properties of the single diagnostic emitted by a [`command_rule_test!`] `fail` case.
+#[derive(Debug, Clone, Copy)]
+pub struct CommandFailExpectation<'a> {
+    /// Expected flagged source slice (defaults to `command_line.trim()` when `None`).
+    pub span: Option<&'a str>,
+    /// Required non-empty substring of `diagnostic.message.summary`, if specified.
+    pub summary: Option<&'a str>,
+    /// Required non-empty substring of `diagnostic.message.suggestion`, if specified.
+    pub suggestion: Option<&'a str>,
+}
+
+impl CommandFailExpectation<'_> {
+    /// Empty expectation that checks only the default trimmed command span.
+    pub const EMPTY: Self = Self {
+        span: None,
+        summary: None,
+        suggestion: None,
+    };
+}
+
+/// Executes `rule` on `command_line` in `context`, asserting that `command_line` is valid shell
+/// syntax.
 ///
 /// # Panics
 /// Panics if `command_line` has a shell syntax error.
@@ -710,23 +731,25 @@ pub fn assert_command_rule_pass(
 }
 
 /// Asserts that a command rule `fail` test case produces exactly one matching diagnostic whose
-/// span matches `expected_snippet` (or `command_line.trim()` when `None`), and reports both
-/// copies when `command_line` is repeated on two lines.
+/// span and message fields satisfy `expectation`, and reports both copies when `command_line` is
+/// repeated on two lines.
 ///
 /// # Panics
-/// Panics if diagnostic count, `rule_name`, span slice, or repeated-occurrence spans do not match.
+/// Panics if diagnostic count, `rule_name`, span slice, summary/suggestion substrings, or
+/// repeated-occurrence spans do not match.
 #[track_caller]
 pub fn assert_command_rule_fail(
     rule: &CommandRule,
     case_name: &str,
     command_line: &str,
-    expected_snippet: Option<&str>,
+    expectation: CommandFailExpectation<'_>,
     context: &CommandContext,
     client: &dyn JjClient,
 ) {
     let rule_name = rule.declaration.name.0;
+    validate_command_fail_expectation(rule_name, case_name, expectation);
     let diagnostics = run_command_rule(rule, command_line, context, client);
-    let expected_slice = expected_snippet.unwrap_or(command_line).trim();
+    let expected_slice = expectation.span.unwrap_or(command_line).trim();
 
     let [diagnostic] = diagnostics.as_slice() else {
         panic!(
@@ -762,6 +785,7 @@ pub fn assert_command_rule_fail(
             (Tip: if the flagged command is a sub-span of the test line, add `=> "..."` to specify the inner slice.)"#},
         rule_name, case_name, expected_slice, actual_slice,
     );
+    assert_command_message_matches(rule_name, case_name, diagnostic, expectation);
 
     let repeated = format!("{command_line}\n{command_line}");
     let second_offset = command_line.len() + 1;
@@ -796,11 +820,75 @@ pub fn assert_command_documented_examples(
             rule,
             DOCUMENTED_EXAMPLE_CASE,
             example.flagged,
-            Some(example.flagged_span),
+            CommandFailExpectation {
+                span: Some(example.flagged_span),
+                ..CommandFailExpectation::EMPTY
+            },
             context,
             client,
         );
         assert_command_rule_pass(rule, DOCUMENTED_FIX_CASE, example.fixed, context, client);
+    }
+}
+
+#[track_caller]
+fn validate_command_fail_expectation(
+    rule_name: &str,
+    case_name: &str,
+    expectation: CommandFailExpectation<'_>,
+) {
+    if let Some(expected_summary) = expectation.summary {
+        assert!(
+            !expected_summary.trim().is_empty(),
+            "command_rule_test! [{rule_name}] FAIL case '{case_name}': expected summary substring must not be empty",
+        );
+    }
+    if let Some(expected_suggestion) = expectation.suggestion {
+        assert!(
+            !expected_suggestion.trim().is_empty(),
+            "command_rule_test! [{rule_name}] FAIL case '{case_name}': expected suggestion substring must not be empty",
+        );
+    }
+}
+
+#[track_caller]
+fn assert_command_message_matches(
+    rule_name: &str,
+    case_name: &str,
+    diagnostic: &Diagnostic,
+    expectation: CommandFailExpectation<'_>,
+) {
+    if let Some(raw_summary) = expectation.summary {
+        let expected_summary = raw_summary.trim_end_matches(['\r', '\n']);
+        assert!(
+            diagnostic.message.summary.contains(expected_summary),
+            indoc::indoc! {"
+                command_rule_test! [{}] FAIL case '{}' summary substring mismatch:
+                Expected summary to contain:
+                {}
+                Actual summary:
+                {}"},
+            rule_name,
+            case_name,
+            expected_summary,
+            diagnostic.message.summary,
+        );
+    }
+    if let Some(raw_suggestion) = expectation.suggestion {
+        let expected_suggestion = raw_suggestion.trim_end_matches(['\r', '\n']);
+        assert!(
+            diagnostic.message.suggestion.contains(expected_suggestion),
+            indoc::indoc! {"
+                command_rule_test! [{}] FAIL case '{}' suggestion substring mismatch:
+                Expected suggestion to contain:
+                {}
+                Actual suggestion:
+                {}"},
+            rule_name,
+            case_name,
+            expected_suggestion,
+            diagnostic.message.suggestion,
+        );
     }
 }
 
@@ -1571,7 +1659,29 @@ pub(crate) use rule_test;
 ///
 /// Supports both purely syntactic command rules (omitting `jj: [...]`) and repository-aware
 /// command rules (providing `jj: [ "rev" => CommitSummary { ... }, ... ]`).
+///
+/// Each `fail` case accepts an optional expectation after `=>`:
+/// - omitted: asserts the flagged span equals the trimmed command line;
+/// - `=> "snippet"`: asserts the flagged span equals `snippet` (trimmed);
+/// - `=> { span: "...", summary: "...", suggestion: "..." }`: asserts exact trimmed `span`
+///   (optional, defaults to the trimmed command line) and non-empty substring containment on
+///   `diagnostic.message.summary` / `diagnostic.message.suggestion`.
 macro_rules! command_rule_test {
+    (@fail_expectation) => {
+        $crate::test_utils::CommandFailExpectation::EMPTY
+    };
+    (@fail_expectation $snippet:literal) => {
+        $crate::test_utils::CommandFailExpectation {
+            span: Some(indoc::indoc! { $snippet }),
+            ..$crate::test_utils::CommandFailExpectation::EMPTY
+        }
+    };
+    (@fail_expectation { $( $field:ident : $val:literal ),+ $(,)? }) => {
+        $crate::test_utils::CommandFailExpectation {
+            $( $field: Some(indoc::indoc! { $val }), )+
+            ..$crate::test_utils::CommandFailExpectation::EMPTY
+        }
+    };
     ($rule:ident, { $($body:tt)* } $(,)?) => {
         $crate::test_utils::command_rule_test!($rule, jj: [], { $($body)* });
     };
@@ -1580,7 +1690,7 @@ macro_rules! command_rule_test {
         jj: [ $( $rev:expr => $commit_info:expr ),* $(,)? ],
         {
             pass: [ $( $pass_name:ident => $pass_cmd:literal ),+ $(,)? ],
-            fail: [ $( $fail_name:ident => $fail_cmd:literal $( => $snippet:literal )? ),+ $(,)? ] $(,)?
+            fail: [ $( $fail_name:ident => $fail_cmd:literal $( => $fail_expect:tt )? ),+ $(,)? ] $(,)?
         } $(,)?
     ) => {
         mod tests {
@@ -1627,13 +1737,13 @@ macro_rules! command_rule_test {
                 #[case::$fail_name(
                     stringify!($fail_name),
                     indoc::indoc! { $fail_cmd },
-                    None $( .or(Some(indoc::indoc! { $snippet })) )?,
+                    $crate::test_utils::command_rule_test!(@fail_expectation $( $fail_expect )?),
                 )]
             )+
             fn fail(
                 #[case] case_name: &str,
                 #[case] command_line: &str,
-                #[case] expected_snippet: Option<&str>,
+                #[case] expectation: $crate::test_utils::CommandFailExpectation<'_>,
             ) {
                 let client = fake_jj_client();
                 let context = command_context();
@@ -1641,7 +1751,7 @@ macro_rules! command_rule_test {
                     &$rule,
                     case_name,
                     command_line,
-                    expected_snippet,
+                    expectation,
                     &context,
                     &client,
                 );
@@ -1657,7 +1767,7 @@ mod tests {
     use crate::code_lint::contract::RuleTarget;
     use crate::diagnostic::{RuleName, ViolationTemplate, violation_template};
     use crate::rule_declaration::{
-        Classification, Consensus, ImpactedQuality, ProjectExample, RuleDoc, Topic,
+        Classification, CommandExample, Consensus, ImpactedQuality, ProjectExample, RuleDoc, Topic,
     };
 
     const PROJECT_TEST_TEMPLATE: ViolationTemplate = violation_template! {
@@ -1665,6 +1775,58 @@ mod tests {
         rationale: "Shadowing an imported class obscures its origin.",
         suggestion: "Rename `{class}`.",
     };
+
+    const COMMAND_TEST_TEMPLATE: ViolationTemplate = violation_template! {
+        summary: "Dummy `{command}` flagged.",
+        rationale: "Test rationale.",
+        suggestion: "Replace `{command}` with a clean alternative.",
+    };
+
+    fn check_dummy_command(
+        rule: &CommandRule,
+        parsed: &crate::command_lint::command::ParsedCommand,
+        _env: &CommandEnv<'_>,
+    ) -> Vec<Diagnostic> {
+        parsed
+            .commands()
+            .iter()
+            .filter(|cmd| cmd.program_name() == "dummy")
+            .map(|cmd| {
+                rule.declaration.render_diagnostic(
+                    &[("command", &cmd.program.text)],
+                    parsed.to_source_location(cmd.span),
+                )
+            })
+            .collect()
+    }
+
+    const DUMMY_COMMAND_RULE: CommandRule = CommandRule::new_for_test(
+        Declaration {
+            name: RuleName("dummy-command-rule"),
+            template: &COMMAND_TEST_TEMPLATE,
+            languages: &[],
+            options: RuleOptions::none(),
+            classification: Classification {
+                topics: &[Topic::COMMAND_LINE],
+                consensus: Consensus::Opinionated,
+                impacted_quality: ImpactedQuality::Reliability,
+            },
+            doc: RuleDoc {
+                summary: "Flags dummy commands.",
+                what_it_does: "Flags dummy commands.",
+                why_is_this_bad: "Dummy commands are for harness tests.",
+                when_to_allow: None,
+                known_problems: None,
+                references: &[],
+                examples: &[CommandExample {
+                    flagged: "dummy arg",
+                    flagged_span: "dummy arg",
+                    fixed: "clean arg",
+                }],
+            },
+        },
+        check_dummy_command,
+    );
 
     fn check_shadowed_imported_class(
         rule: &ProjectCodeRule,
@@ -1862,6 +2024,132 @@ mod tests {
             client
                 .query_revisions(Path::new("."), "(a) | (missing)")
                 .is_err()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "summary substring mismatch")]
+    fn test_assert_command_rule_fail_panics_on_summary_mismatch() {
+        let context = CommandContext::new(".");
+        let client = FakeJjClient::from_entries(&[]);
+        assert_command_rule_fail(
+            &DUMMY_COMMAND_RULE,
+            "summary_mismatch",
+            "dummy arg",
+            CommandFailExpectation {
+                summary: Some("nonexistent summary text"),
+                ..CommandFailExpectation::EMPTY
+            },
+            &context,
+            &client,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "suggestion substring mismatch")]
+    fn test_assert_command_rule_fail_panics_on_suggestion_mismatch() {
+        let context = CommandContext::new(".");
+        let client = FakeJjClient::from_entries(&[]);
+        assert_command_rule_fail(
+            &DUMMY_COMMAND_RULE,
+            "suggestion_mismatch",
+            "dummy arg",
+            CommandFailExpectation {
+                suggestion: Some("wrong suggestion text"),
+                ..CommandFailExpectation::EMPTY
+            },
+            &context,
+            &client,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "flagged span mismatch")]
+    fn test_assert_command_rule_fail_panics_on_span_mismatch() {
+        let context = CommandContext::new(".");
+        let client = FakeJjClient::from_entries(&[]);
+        assert_command_rule_fail(
+            &DUMMY_COMMAND_RULE,
+            "span_mismatch",
+            "dummy arg",
+            CommandFailExpectation {
+                span: Some("dummy"),
+                ..CommandFailExpectation::EMPTY
+            },
+            &context,
+            &client,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected summary substring must not be empty")]
+    fn test_assert_command_rule_fail_rejects_empty_summary() {
+        let context = CommandContext::new(".");
+        let client = FakeJjClient::from_entries(&[]);
+        assert_command_rule_fail(
+            &DUMMY_COMMAND_RULE,
+            "empty_summary",
+            "dummy arg",
+            CommandFailExpectation {
+                summary: Some(""),
+                ..CommandFailExpectation::EMPTY
+            },
+            &context,
+            &client,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected summary substring must not be empty")]
+    fn test_assert_command_rule_fail_rejects_whitespace_only_summary() {
+        let context = CommandContext::new(".");
+        let client = FakeJjClient::from_entries(&[]);
+        assert_command_rule_fail(
+            &DUMMY_COMMAND_RULE,
+            "whitespace_summary",
+            "dummy arg",
+            CommandFailExpectation {
+                summary: Some("  \n "),
+                ..CommandFailExpectation::EMPTY
+            },
+            &context,
+            &client,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "expected suggestion substring must not be empty")]
+    fn test_assert_command_rule_fail_rejects_empty_suggestion() {
+        let context = CommandContext::new(".");
+        let client = FakeJjClient::from_entries(&[]);
+        assert_command_rule_fail(
+            &DUMMY_COMMAND_RULE,
+            "empty_suggestion",
+            "dummy arg",
+            CommandFailExpectation {
+                suggestion: Some(""),
+                ..CommandFailExpectation::EMPTY
+            },
+            &context,
+            &client,
+        );
+    }
+
+    #[test]
+    fn test_assert_command_rule_fail_trims_trailing_newline_in_message_expectation() {
+        let context = CommandContext::new(".");
+        let client = FakeJjClient::from_entries(&[]);
+        assert_command_rule_fail(
+            &DUMMY_COMMAND_RULE,
+            "multiline_closing_newline",
+            "dummy arg",
+            CommandFailExpectation {
+                summary: Some("Dummy `dummy` flagged.\n"),
+                suggestion: Some("Replace `dummy` with a clean alternative.\n"),
+                ..CommandFailExpectation::EMPTY
+            },
+            &context,
+            &client,
         );
     }
 }

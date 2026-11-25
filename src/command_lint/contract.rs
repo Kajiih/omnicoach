@@ -88,6 +88,16 @@ pub struct CommandRule {
 }
 
 impl CommandRule {
+    /// Constructs a synthetic [`CommandRule`] for unit tests outside `command_lint`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn new_for_test(
+        declaration: Declaration<(), &'static [CommandExample]>,
+        check: fn(&Self, &ParsedCommand, &CommandEnv<'_>) -> Vec<Diagnostic>,
+    ) -> Self {
+        Self { declaration, check }
+    }
+
     /// Finds the rule's violations in `parsed`.
     #[must_use]
     pub(crate) fn check_command(
@@ -110,72 +120,3 @@ impl CommandRule {
             .render_diagnostic(params, parsed.to_source_location(span))
     }
 }
-
-#[cfg(test)]
-const PURE_SHELL_TEMPLATE: crate::diagnostic::ViolationTemplate = crate::diagnostic::violation_template! {
-    summary: "redundant `{program} -c` wrapper",
-    rationale: "Wrapping a command in `sh -c` or `bash -c` adds an extra shell layer.",
-    suggestion: "Run `{inner}` directly without `{program} -c`.",
-};
-
-#[cfg(test)]
-const PURE_SHELL_RULE: CommandRule = CommandRule {
-    declaration: Declaration {
-        name: crate::diagnostic::RuleName("redundant-shell-wrapper"),
-        template: &PURE_SHELL_TEMPLATE,
-        languages: &[],
-        options: crate::rule_declaration::RuleOptions::none(),
-        classification: crate::rule_declaration::Classification {
-            topics: &[crate::rule_declaration::Topic::JJ],
-            consensus: crate::rule_declaration::Consensus::Opinionated,
-            impacted_quality: crate::rule_declaration::ImpactedQuality::Maintainability,
-        },
-        doc: crate::rule_declaration::RuleDoc {
-            summary: "Flags redundant `sh -c` or `bash -c` command wrappers.",
-            what_it_does: "Checks shell commands for `sh -c` or `bash -c` wrappers.",
-            why_is_this_bad: "An extra shell wrapper obscures the executed command.",
-            when_to_allow: None,
-            known_problems: None,
-            references: &[],
-            examples: &[CommandExample {
-                flagged: "bash -c 'cargo test'",
-                flagged_span: "bash -c 'cargo test'",
-                fixed: "cargo test",
-            }],
-        },
-    },
-    check: |rule, parsed, _env| {
-        parsed
-            .commands()
-            .iter()
-            .filter_map(|command| {
-                let program = command.program_name();
-                let is_shell = matches!(program, "sh" | "bash");
-                let [first_arg, second_arg] = command.arguments.as_slice() else {
-                    return None;
-                };
-                if !is_shell || first_arg.text != "-c" {
-                    return None;
-                }
-                Some(rule.diagnostic_at(
-                    parsed,
-                    command.span,
-                    &[("program", program), ("inner", &second_arg.text)],
-                ))
-            })
-            .collect()
-    },
-};
-
-#[cfg(test)]
-crate::test_utils::command_rule_test!(PURE_SHELL_RULE, {
-    pass: [
-        direct_command => "cargo build",
-        non_shell_with_dash_c => "python3 -c 'print(1)'",
-        bash_script_with_arg => "bash script.sh arg1",
-    ],
-    fail: [
-        bash_dash_c_wrapper => "bash -c 'cargo check'",
-        sh_dash_c_in_chain => "echo ok && sh -c 'cargo clippy'" => "sh -c 'cargo clippy'",
-    ],
-});

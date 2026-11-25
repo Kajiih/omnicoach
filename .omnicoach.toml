@@ -1,2 +1,10 @@
 [rules.bare-multiline-string.rust]
-extend-allowed = ["rule_test", "crate::test_utils::rule_test"]
+# `rule_test!` and `command_rule_test!` pass fixture literals through `indoc::indoc!` during macro
+# expansion, so bare multiline literals inside these macro invocations are already unindented.
+# TODO: Should we exempt macros usage from bare multiline strings?
+extend-allowed = [
+    "rule_test",
+    "crate::test_utils::rule_test",
+    "command_rule_test",
+    "crate::test_utils::command_rule_test",
+]
