@@ -10,7 +10,7 @@ use crate::code_lint::policy::is_trivial_literal;
 use crate::code_lint::project::{
     CONFIG_FILE_NAME, MemoryFileSource, ProjectConfig, ProjectContext, ProjectIndex, ProjectLayout,
 };
-use crate::command_lint::contract::CommandRule;
+use crate::command_lint::contract::{CommandContext, CommandEnv, CommandRule};
 use crate::command_lint::vcs::JjClient;
 use crate::diagnostic::{Diagnostic, Language};
 use crate::rule_declaration::{
@@ -353,6 +353,7 @@ impl JjClient for FakeJjClient {
 pub fn run_command_rule(
     rule: &CommandRule,
     command_line: &str,
+    context: &CommandContext,
     client: &dyn JjClient,
 ) -> Vec<Diagnostic> {
     let parsed = crate::command_lint::command::ParsedCommand::new(command_line);
@@ -361,7 +362,7 @@ pub fn run_command_rule(
         "run_command_rule [{}]: test command has a shell syntax error:\n{command_line}",
         rule.declaration.name.0,
     );
-    let env = crate::command_lint::contract::CommandEnv::new(client);
+    let env = CommandEnv::new(client, context);
     rule.check_command(&parsed, &env)
 }
 
@@ -670,10 +671,11 @@ pub fn assert_command_rule_pass(
     rule: &CommandRule,
     case_name: &str,
     command_line: &str,
+    context: &CommandContext,
     client: &dyn JjClient,
 ) {
     let rule_name = rule.declaration.name.0;
-    let diagnostics = run_command_rule(rule, command_line, client);
+    let diagnostics = run_command_rule(rule, command_line, context, client);
     assert!(
         diagnostics.is_empty(),
         indoc::indoc! {"
@@ -690,7 +692,7 @@ pub fn assert_command_rule_pass(
     );
 
     let repeated = format!("{command_line}\n{command_line}");
-    let repeated_diagnostics = run_command_rule(rule, &repeated, client);
+    let repeated_diagnostics = run_command_rule(rule, &repeated, context, client);
     assert!(
         repeated_diagnostics.is_empty(),
         indoc::indoc! {"
@@ -719,10 +721,11 @@ pub fn assert_command_rule_fail(
     case_name: &str,
     command_line: &str,
     expected_snippet: Option<&str>,
+    context: &CommandContext,
     client: &dyn JjClient,
 ) {
     let rule_name = rule.declaration.name.0;
-    let diagnostics = run_command_rule(rule, command_line, client);
+    let diagnostics = run_command_rule(rule, command_line, context, client);
     let expected_slice = expected_snippet.unwrap_or(command_line).trim();
 
     let [diagnostic] = diagnostics.as_slice() else {
@@ -767,7 +770,7 @@ pub fn assert_command_rule_fail(
         (second_offset + diagnostic.location.span.start)
             ..(second_offset + diagnostic.location.span.end),
     ];
-    let actual_spans: Vec<_> = run_command_rule(rule, &repeated, client)
+    let actual_spans: Vec<_> = run_command_rule(rule, &repeated, context, client)
         .into_iter()
         .map(|item| item.location.span.start..item.location.span.end)
         .collect();
@@ -778,21 +781,26 @@ pub fn assert_command_rule_fail(
 }
 
 /// Asserts each of the command rule's documented [`crate::rule_declaration::CommandExample`]s
-/// against `client`.
+/// against `client` in `context`.
 ///
 /// # Panics
 /// Panics as [`assert_command_rule_fail`] and [`assert_command_rule_pass`] do.
 #[track_caller]
-pub fn assert_command_documented_examples(rule: &CommandRule, client: &dyn JjClient) {
+pub fn assert_command_documented_examples(
+    rule: &CommandRule,
+    context: &CommandContext,
+    client: &dyn JjClient,
+) {
     for example in rule.declaration.doc.examples {
         assert_command_rule_fail(
             rule,
             DOCUMENTED_EXAMPLE_CASE,
             example.flagged,
             Some(example.flagged_span),
+            context,
             client,
         );
-        assert_command_rule_pass(rule, DOCUMENTED_FIX_CASE, example.fixed, client);
+        assert_command_rule_pass(rule, DOCUMENTED_FIX_CASE, example.fixed, context, client);
     }
 }
 
@@ -1584,10 +1592,15 @@ macro_rules! command_rule_test {
                 ])
             }
 
+            fn command_context() -> $crate::command_lint::contract::CommandContext {
+                $crate::command_lint::contract::CommandContext::new(".")
+            }
+
             #[test]
             fn documented_examples() {
                 let client = fake_jj_client();
-                $crate::test_utils::assert_command_documented_examples(&$rule, &client);
+                let context = command_context();
+                $crate::test_utils::assert_command_documented_examples(&$rule, &context, &client);
             }
 
             #[rstest::rstest]
@@ -1599,7 +1612,14 @@ macro_rules! command_rule_test {
             )+
             fn pass(#[case] case_name: &str, #[case] command_line: &str) {
                 let client = fake_jj_client();
-                $crate::test_utils::assert_command_rule_pass(&$rule, case_name, command_line, &client);
+                let context = command_context();
+                $crate::test_utils::assert_command_rule_pass(
+                    &$rule,
+                    case_name,
+                    command_line,
+                    &context,
+                    &client,
+                );
             }
 
             #[rstest::rstest]
@@ -1616,11 +1636,13 @@ macro_rules! command_rule_test {
                 #[case] expected_snippet: Option<&str>,
             ) {
                 let client = fake_jj_client();
+                let context = command_context();
                 $crate::test_utils::assert_command_rule_fail(
                     &$rule,
                     case_name,
                     command_line,
                     expected_snippet,
+                    &context,
                     &client,
                 );
             }

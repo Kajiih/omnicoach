@@ -2,53 +2,44 @@
 
 architecture_component!(CommandLintRunner);
 
-use std::path::{Path, PathBuf};
-
 use crate::command_lint::command::ParsedCommand;
-use crate::command_lint::contract::CommandEnv;
+use crate::command_lint::contract::{CommandContext, CommandEnv};
 use crate::command_lint::rules::COMMAND_RULES;
 use crate::command_lint::vcs::{JjCliClient, JjClient};
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 
-/// Evaluates all enabled command rules against `raw_cmd` in the process's current working directory.
+/// Evaluates all enabled command rules against `raw_cmd` in `context`.
 #[must_use]
-pub fn run_command_lint(raw_cmd: &str, config: &Config) -> Vec<Diagnostic> {
-    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    run_command_lint_in_dir(raw_cmd, config, &working_dir)
-}
-
-/// Evaluates all enabled command rules against `raw_cmd` rooted at `working_dir`.
-#[must_use]
-pub(crate) fn run_command_lint_in_dir(
+pub fn run_command_lint(
     raw_cmd: &str,
     config: &Config,
-    working_dir: &Path,
+    context: &CommandContext,
 ) -> Vec<Diagnostic> {
-    run_with_client(raw_cmd, config, working_dir, &JjCliClient)
+    run_with_client(raw_cmd, config, context, &JjCliClient)
 }
 
-/// Evaluates all enabled command rules against `raw_cmd` rooted at `working_dir` using an injected
+/// Evaluates all enabled command rules against `raw_cmd` in `context` using an injected
 /// [`JjClient`] fake.
 #[cfg(test)]
 #[must_use]
-pub(crate) fn run_command_lint_in_dir_with(
+pub(crate) fn run_command_lint_with(
     raw_cmd: &str,
     config: &Config,
-    working_dir: &Path,
+    context: &CommandContext,
     jj_client: &dyn JjClient,
 ) -> Vec<Diagnostic> {
-    run_with_client(raw_cmd, config, working_dir, jj_client)
+    run_with_client(raw_cmd, config, context, jj_client)
 }
 
 fn run_with_client(
     raw_cmd: &str,
     config: &Config,
-    working_dir: &Path,
+    context: &CommandContext,
     jj_client: &dyn JjClient,
 ) -> Vec<Diagnostic> {
     let parsed = ParsedCommand::new(raw_cmd);
-    let env = CommandEnv::with_working_dir(jj_client, working_dir);
+    let env = CommandEnv::new(jj_client, context);
     let mut all_diagnostics = Vec::new();
 
     for rule in COMMAND_RULES {
@@ -62,22 +53,25 @@ fn run_with_client(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
+    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::command_lint::vcs::CommitSummary;
 
     struct CountingJjClient {
         calls: Cell<usize>,
+        queried_dirs: RefCell<Vec<PathBuf>>,
     }
 
     impl JjClient for CountingJjClient {
         fn query_revisions(
             &self,
-            _repo_dir: &Path,
+            repo_dir: &Path,
             _revset: &str,
         ) -> Result<Vec<CommitSummary>, String> {
             self.calls.set(self.calls.get() + 1);
+            self.queried_dirs.borrow_mut().push(repo_dir.to_path_buf());
             Ok(vec![CommitSummary {
                 change_id: "kpqxywon".to_owned(),
                 description: "feat: described".to_owned(),
@@ -88,23 +82,27 @@ mod tests {
 
     #[test]
     fn test_run_command_lint_evaluates_syntactic_command_rules() {
-        let diagnostics = run_command_lint("jj --no-pager status", &Config::default());
+        let context = CommandContext::new(".");
+        let diagnostics = run_command_lint("jj --no-pager status", &Config::default(), &context);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].rule_name.0, "global-flag-before-subcommand");
     }
 
     #[test]
-    fn test_run_command_lint_shares_cached_jj_session_within_run() {
+    fn test_run_command_lint_shares_cached_jj_session_and_forwards_context_dir() {
         let client = CountingJjClient {
             calls: Cell::new(0),
+            queried_dirs: RefCell::new(Vec::new()),
         };
-        let diagnostics = run_command_lint_in_dir_with(
+        let context = CommandContext::new("/ws");
+        let diagnostics = run_command_lint_with(
             "jj edit kpqxywon && jj edit kpqxywon",
             &Config::default(),
-            Path::new("/ws"),
+            &context,
             &client,
         );
         assert_eq!(diagnostics.len(), 2);
         assert_eq!(client.calls.get(), 1);
+        assert_eq!(client.queried_dirs.into_inner(), vec![PathBuf::from("/ws")]);
     }
 }

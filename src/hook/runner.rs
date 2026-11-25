@@ -9,7 +9,8 @@ use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::{VirtualFile, apply_virtual_edit};
 use super::warning_queue::QueuedWarning;
 use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
-use crate::command_lint::runner::run_command_lint_in_dir;
+use crate::command_lint::contract::CommandContext;
+use crate::command_lint::runner::run_command_lint;
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Language, RuleName};
 use crate::paths::{lexical_normalize, path_is_within, resolve_against_cwd};
@@ -30,12 +31,12 @@ pub(super) struct ToolCallOutcome {
 
 /// Evaluates a tool call against the repository on disk.
 pub(super) fn evaluate_pre_tool_use(event: &PreToolUseEvent) -> ToolCallOutcome {
-    evaluate_pre_tool_use_with_runner(event, run_command_lint_in_dir)
+    evaluate_pre_tool_use_with_runner(event, run_command_lint)
 }
 
 fn evaluate_pre_tool_use_with_runner(
     event: &PreToolUseEvent,
-    run_lint: impl FnOnce(&str, &Config, &Path) -> Vec<Diagnostic>,
+    run_lint: impl FnOnce(&str, &Config, &CommandContext) -> Vec<Diagnostic>,
 ) -> ToolCallOutcome {
     match &event.payload {
         ToolCallPayload::RunCommand { command_line, cwd } => ToolCallOutcome {
@@ -62,7 +63,7 @@ fn check_command(
     command_line: &str,
     cwd: Option<&Path>,
     workspace_paths: &[PathBuf],
-    run_lint: impl FnOnce(&str, &Config, &Path) -> Vec<Diagnostic>,
+    run_lint: impl FnOnce(&str, &Config, &CommandContext) -> Vec<Diagnostic>,
 ) -> PreToolDecision {
     let working_directory =
         resolve_in_workspace(cwd.unwrap_or_else(|| Path::new("")), workspace_paths);
@@ -71,7 +72,8 @@ fn check_command(
         return PreToolDecision::NoObjection;
     };
 
-    let diagnostics = run_lint(command_line, &config, &working_directory);
+    let context = CommandContext::new(working_directory);
+    let diagnostics = run_lint(command_line, &config, &context);
     if diagnostics.is_empty() {
         PreToolDecision::NoObjection
     } else {
@@ -312,15 +314,15 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::command_lint::runner::run_command_lint_in_dir_with;
+    use crate::command_lint::runner::run_command_lint_with;
     use crate::command_lint::vcs::{CommitSummary, JjClient};
 
     fn evaluate_pre_tool_use_with(
         event: &PreToolUseEvent,
         jj_client: &dyn JjClient,
     ) -> ToolCallOutcome {
-        evaluate_pre_tool_use_with_runner(event, |cmd, config, working_dir| {
-            run_command_lint_in_dir_with(cmd, config, working_dir, jj_client)
+        evaluate_pre_tool_use_with_runner(event, |cmd, config, context| {
+            run_command_lint_with(cmd, config, context, jj_client)
         })
     }
 

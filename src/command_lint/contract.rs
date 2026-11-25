@@ -1,37 +1,49 @@
-//! The command rule contract ([`CommandRule`]) and execution environment ([`CommandEnv`]).
+//! The command rule contract ([`CommandRule`]) and execution context ([`CommandContext`], [`CommandEnv`]).
 
 architecture_component!(CommandLintContract);
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::command_lint::command::{InterceptedCommand, ParsedCommand};
 use crate::command_lint::vcs::{CachedJjSession, CommitSummary, JjClient, JjRepository};
 use crate::diagnostic::{Diagnostic, SourceSpan};
 use crate::rule_declaration::{CommandExample, Declaration};
 
+/// Execution metadata describing the environment in which an intercepted command line runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandContext {
+    working_dir: PathBuf,
+}
+
+impl CommandContext {
+    /// Creates a command execution context rooted at `working_dir`.
+    #[must_use]
+    pub fn new(working_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            working_dir: working_dir.into(),
+        }
+    }
+
+    /// Returns the base working directory in which the command line executes.
+    #[must_use]
+    fn working_dir(&self) -> &Path {
+        &self.working_dir
+    }
+}
+
 /// External execution environment available to command lint rules beyond the parsed shell AST.
 pub struct CommandEnv<'a> {
     jj_session: CachedJjSession<'a>,
-    base_working_dir: PathBuf,
+    context: &'a CommandContext,
 }
 
 impl<'a> CommandEnv<'a> {
-    /// Creates a command environment rooted at `"."` backed by `jj_client`.
-    #[cfg(test)]
+    /// Creates a command environment backed by `jj_client` and borrowing `context`.
     #[must_use]
-    pub(crate) fn new(jj_client: &'a dyn JjClient) -> Self {
-        Self::with_working_dir(jj_client, PathBuf::from("."))
-    }
-
-    /// Creates a command environment rooted at `base_working_dir` backed by `jj_client`.
-    #[must_use]
-    pub(crate) fn with_working_dir(
-        jj_client: &'a dyn JjClient,
-        base_working_dir: impl Into<PathBuf>,
-    ) -> Self {
+    pub(crate) fn new(jj_client: &'a dyn JjClient, context: &'a CommandContext) -> Self {
         Self {
             jj_session: CachedJjSession::new(jj_client),
-            base_working_dir: base_working_dir.into(),
+            context,
         }
     }
 
@@ -56,7 +68,7 @@ impl<'a> CommandEnv<'a> {
             }
         };
         let repo_dir = command
-            .resolve_working_dir(&self.base_working_dir, override_dir)
+            .resolve_working_dir(self.context.working_dir(), override_dir)
             .ok_or_else(|| "cannot resolve command working directory".to_owned())?;
         self.jj_session.query_revisions(&repo_dir, revset)
     }

@@ -44,6 +44,7 @@ use omnicoach::code_lint::rules::{self, CODE_RULES};
 use omnicoach::code_lint::runner::lint_file;
 use omnicoach::code_lint::suppression::SuppressionTracker;
 use omnicoach::command_lint::command::InterceptedCommand;
+use omnicoach::command_lint::contract::CommandContext;
 use omnicoach::command_lint::runner::run_command_lint;
 use omnicoach::config::Config;
 use omnicoach::diagnostic::Language;
@@ -705,8 +706,8 @@ const SHELL_WORKLOADS: &[ShellWorkload] = &[
 #[divan::bench_group]
 mod command_lint {
     use super::{
-        Bencher, BytesCount, DEFAULT_CONFIG, InterceptedCommand, SHELL_WORKLOADS, ShellWorkload,
-        black_box, run_command_lint,
+        Bencher, BytesCount, CommandContext, DEFAULT_CONFIG, InterceptedCommand, SHELL_WORKLOADS,
+        ShellWorkload, black_box, run_command_lint,
     };
 
     #[divan::bench(args = SHELL_WORKLOADS)]
@@ -718,10 +719,11 @@ mod command_lint {
 
     #[divan::bench(args = SHELL_WORKLOADS)]
     fn run_command_lint_pipeline(bencher: Bencher<'_, '_>, workload: &ShellWorkload) {
+        let context = CommandContext::new(".");
         bencher
             .counter(BytesCount::of_str(workload.command_line))
             .bench_local(|| {
-                run_command_lint(black_box(workload.command_line), &DEFAULT_CONFIG).len()
+                run_command_lint(black_box(workload.command_line), &DEFAULT_CONFIG, &context).len()
             });
     }
 }

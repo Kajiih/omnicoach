@@ -14,6 +14,7 @@ use crate::code_lint::graph::{
     SliceQueryOptions, generate_graph, run_find_query, run_slice_query,
 };
 use crate::code_lint::runner::{LintOptions, run_code_lint};
+use crate::command_lint::contract::CommandContext;
 use crate::command_lint::runner::run_command_lint;
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, OutputFormat, print_diagnostics};
@@ -370,7 +371,9 @@ fn run_code(options: &LintOptions, config: &Config, format: OutputFormat) -> any
 }
 
 fn run_command_check(command: &str, config: &Config, format: OutputFormat) -> anyhow::Result<u8> {
-    let diagnostics = run_command_lint(command, config);
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let context = CommandContext::new(working_dir);
+    let diagnostics = run_command_lint(command, config, &context);
     render_command_diagnostics(&diagnostics, format)
 }
 
