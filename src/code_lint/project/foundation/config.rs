@@ -1,10 +1,11 @@
 //! Rule-registry-independent project layout, path context (`[context]`), and architectural DAG
-//! (`[architecture]`) configuration resolved from `.omnicoach.toml`, along with lexical path and
+//! (`[architecture]`) configuration resolved from `.omnicoach.toml`, along with relative path and
 //! glob normalization helpers.
 
 use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
+use crate::paths::{is_rooted_path, lexical_normalize, resolve_against_cwd};
 use serde::Deserialize;
 
 /// The default configuration file name.
@@ -303,55 +304,6 @@ impl WorkspaceAnchor {
     }
 }
 
-/// Normalizes `path` lexically by stripping `.` (`CurDir`) and resolving `..` (`ParentDir`)
-/// components without touching the filesystem, returning `"."` when all components collapse.
-#[must_use]
-pub fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => match components.last() {
-                Some(Component::Normal(_)) => {
-                    components.pop();
-                }
-                Some(Component::RootDir | Component::Prefix(_)) => {}
-                Some(Component::ParentDir | Component::CurDir) | None => {
-                    components.push(component);
-                }
-            },
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                components.push(component);
-            }
-        }
-    }
-    if components.is_empty() {
-        PathBuf::from(".")
-    } else {
-        components.iter().collect()
-    }
-}
-
-/// Returns true if `path` is anchored at a root separator or drive/UNC prefix rather than
-/// directory-relative.
-///
-/// Unlike [`Path::is_absolute`], which returns `false` on Windows for drive-less rooted paths
-/// such as `"/repo"`, `is_rooted_path` matches the exact paths that [`Path::join`] treats as
-/// anchored instead of appending beneath a base directory.
-#[must_use]
-pub fn is_rooted_path(path: &Path) -> bool {
-    path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_)))
-}
-
-/// Resolves `path` against `cwd` when `path` is relative, normalizing `.` and `..` lexically.
-#[must_use]
-pub fn resolve_against_cwd(path: &Path, cwd: Option<&Path>) -> PathBuf {
-    cwd.filter(|_| !is_rooted_path(path)).map_or_else(
-        || lexical_normalize(path),
-        |base| lexical_normalize(&base.join(path)),
-    )
-}
-
 /// Normalizes `path` using forward slashes, stripping any leading `./` prefix.
 #[must_use]
 pub(in crate::code_lint::project) fn normalize_relative_path(path: &Path) -> String {
@@ -568,20 +520,6 @@ mod tests {
             ),
             expected
         );
-    }
-
-    #[rstest::rstest]
-    #[case::unix_root("/", true)]
-    #[case::unix_anchored("/repo/src/lib.rs", true)]
-    #[case::relative_file("src/lib.rs", false)]
-    #[case::dot_relative("./src/lib.rs", false)]
-    #[case::parent_relative("../src/lib.rs", false)]
-    #[case::empty("", false)]
-    #[cfg_attr(windows, case::windows_drive_root(r"C:\repo\src\lib.rs", true))]
-    #[cfg_attr(windows, case::windows_drive_relative(r"C:src\lib.rs", true))]
-    #[cfg_attr(windows, case::windows_unc(r"\\server\share\repo\lib.rs", true))]
-    fn test_is_rooted_path(#[case] input: &str, #[case] expected: bool) {
-        assert_eq!(is_rooted_path(Path::new(input)), expected);
     }
 
     #[test]

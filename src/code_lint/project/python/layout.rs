@@ -3,9 +3,10 @@
 use super::paths::{INIT_PY, INIT_PYI, INIT_STEM, is_python_package_init, python_dotted_path};
 use crate::code_lint::project::foundation::{
     CONFIG_FILE_NAME, FileSource, ProjectSourceFile, ROOT_MODULE_TAG, WorkspaceAnchor,
-    is_vcs_boundary, lexical_normalize, normalize_relative_path,
+    is_vcs_boundary, normalize_relative_path,
 };
 use crate::diagnostic::Language;
+use crate::paths::lexical_normalize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

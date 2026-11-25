@@ -1,12 +1,12 @@
 //! Project boundary, source-root layout, and file-system module mapping.
 
 use crate::code_lint::project::foundation::{
-    CONFIG_FILE_NAME, FileSource, WorkspaceAnchor, is_rooted_path, is_vcs_boundary,
-    resolve_against_cwd,
+    CONFIG_FILE_NAME, FileSource, WorkspaceAnchor, is_vcs_boundary,
 };
 use crate::code_lint::project::python::{self, PythonLayout, climb_package_init_chain};
 use crate::code_lint::project::rust::{self, RustLayout};
 use crate::diagnostic::Language;
+use crate::paths::{is_rooted_path, resolve_against_cwd};
 use std::path::{Path, PathBuf};
 
 /// Project boundary and per-language source layouts resolved once at the CLI, hook, or test boundary.
@@ -119,9 +119,8 @@ fn find_project_root(start_directory: &Path, source: &dyn FileSource) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_lint::project::foundation::{
-        MemoryFileSource, ProjectConfig, lexical_normalize,
-    };
+    use crate::code_lint::project::foundation::{MemoryFileSource, ProjectConfig};
+    use crate::paths::lexical_normalize;
 
     #[test]
     fn configured_source_roots_resolve_against_the_configuration_root_from_a_sub_package() {

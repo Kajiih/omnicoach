@@ -28,6 +28,7 @@ pub mod diagnostic;
 mod diff;
 /// Agent lifecycle hook protocols and runner.
 pub mod hook;
+mod paths;
 pub mod rule_catalog;
 pub mod rule_declaration;
 pub mod rule_selection;

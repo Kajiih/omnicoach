@@ -18,7 +18,7 @@
 //!   allowed only from a private direct child (`mod child; pub use self::child::Item;`), and a
 //!   `macro_rules!` macro declares its path with `pub(crate) use name;` next to its definition
 //!   (`#[macro_export]` only in `src/lib.rs`).
-//! - **Encapsulation**: only `diagnostic`, `rule_declaration`, `rule_selection`,
+//! - **Encapsulation**: only `paths`, `diagnostic`, `rule_declaration`, `rule_selection`,
 //!   `code_lint::ast`, `code_lint::project`, and `command_lint::command` use component-owned
 //!   external crates (`owns_external`).
 
@@ -125,6 +125,8 @@ define_architecture! {
     Diagnostic          => [] (owns_external: ["line_index"]),
     /// VCS detection and the changed lines of a working copy (`diff`).
     Diff                => [],
+    /// Host-independent lexical path normalization and anchoring utilities (`paths`).
+    Paths               => [] (owns_external: ["path_clean"]),
     /// What every rule states about itself: name, template, languages, options, classification and doc (`rule_declaration`).
     RuleDeclaration     => [Diagnostic] (owns_external: ["tagonomy"]) (modules: {
         documentation => [],
@@ -143,7 +145,7 @@ define_architecture! {
         type_annotations => [],
     }),
     /// Multi-file project layout, symbol indexing, fact extraction, and architectural conformance (`code_lint::project`).
-    CodeLintProject     => [CodeLintAst, Diagnostic] (owns_external: ["ignore"]) (modules: {
+    CodeLintProject     => [CodeLintAst, Diagnostic, Paths] (owns_external: ["ignore"]) (modules: {
         foundation => [] (modules: {
             config => [],
             architecture => [config],
@@ -183,7 +185,7 @@ define_architecture! {
     /// Concrete static analysis linter rules (`code_lint::rules`).
     CodeLintRules       => [CodeLintProject, CodeLintContract, CodeLintPolicy, RuleDeclaration],
     /// Static code linting multi-file orchestration runner (`code_lint::runner`).
-    CodeLintRunner      => [CodeLintProject, CodeLintRules, CodeLintSuppression, Diff],
+    CodeLintRunner      => [CodeLintProject, CodeLintRules, CodeLintSuppression, Diff, Paths],
     /// Alpha / experimental multi-level abstraction graph model, builder, and text renderers (`code_lint::graph`).
     CodeLintGraph       => [CodeLintProject, CodeLintAst, Diagnostic] (modules: {
         model => [],
@@ -195,7 +197,7 @@ define_architecture! {
 
     // --- Command Safety Domain (`command_lint`) ---
     /// The intercepted command parser: shell input to commands and their arguments (`command_lint::command`).
-    CommandLintCommand  => [Diagnostic] (owns_external: ["brush_parser"]) (modules: {
+    CommandLintCommand  => [Diagnostic, Paths] (owns_external: ["brush_parser"]) (modules: {
         shell => [],
         cli_args => [shell],
     }),
@@ -214,13 +216,13 @@ define_architecture! {
 
     // --- Rule Selection ---
     /// Taxonomy queries, config selector resolution and rule option validation (`rule_selection`).
-    RuleSelection       => [Diff, RuleDeclaration, CodeLintRules, CodeLintSuppression, CommandLintRules, Config] (owns_external: ["tagonomy"]),
+    RuleSelection       => [Diff, Paths, RuleDeclaration, CodeLintRules, CodeLintSuppression, CommandLintRules, Config] (owns_external: ["tagonomy"]),
     /// Rule list and single-rule Markdown rendering for discovery commands (`rule_catalog`).
     RuleCatalog         => [RuleSelection, RuleDeclaration],
 
     // --- Agent Lifecycle Hooks (`hook`) ---
     /// Agent-neutral tool-call evaluation, per-agent protocol adapters, deferred warning queue, and in-memory virtual file patching (`hook`).
-    Hook                => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, Diagnostic] (modules: {
+    Hook                => [CodeLintRunner, CommandLintRunner, RuleSelection, RuleCatalog, Diagnostic, Paths] (modules: {
         event => [],
         warning_queue => [],
         virtual_edit => [event],

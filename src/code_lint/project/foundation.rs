@@ -32,6 +32,6 @@ pub(in crate::code_lint::project) use self::source::is_vcs_boundary;
 pub use self::architecture::{ArchitectureError, ArchitectureSpec, ComponentSpec, SubmoduleSpec};
 pub use self::config::{
     ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig,
-    compile_glob, is_rooted_path, lexical_normalize, resolve_against_cwd,
+    compile_glob,
 };
 pub use self::source::{DiskFileSource, FileSource, MemoryFileSource};

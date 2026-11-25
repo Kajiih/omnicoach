@@ -4,11 +4,12 @@ use super::index::ProjectIndex;
 use super::layout::ProjectLayout;
 use crate::code_lint::project::foundation::{
     ArchitectureError, DiskFileSource, FileSource, ProjectConfig, ProjectFacts, ProjectGraphScope,
-    ProjectSourceFile, normalize_relative_path, resolve_against_cwd,
+    ProjectSourceFile, normalize_relative_path,
 };
 use crate::code_lint::project::python::collect_python_project_facts;
 use crate::code_lint::project::rust::collect_rust_project_facts;
 use crate::diagnostic::Language;
+use crate::paths::resolve_against_cwd;
 use std::path::{Path, PathBuf};
 
 /// Discovered source files paired with the shared [`ProjectIndex`] governing their repository.

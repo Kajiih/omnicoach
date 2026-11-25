@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use super::event::{FileEdit, PreToolDecision, PreToolUseEvent, ToolCallPayload};
 use super::virtual_edit::{VirtualFile, apply_virtual_edit};
 use super::warning_queue::QueuedWarning;
-use crate::code_lint::project::{is_rooted_path, lexical_normalize};
 use crate::code_lint::runner::{lint_virtual_file, lint_virtual_file_for_rules};
 use crate::command_lint::runner::run_command_lint_in_dir;
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Language, RuleName};
+use crate::paths::{lexical_normalize, path_is_within, resolve_against_cwd};
 use crate::rule_selection::{
     ConfigOverrides, discover_project_root, load_command_config_from_root, load_config_from_root,
 };
@@ -107,7 +107,7 @@ fn lint_proposed_edit(
         .as_ref()
         .is_some_and(|agent_owned_dir| {
             !agent_owned_dir.as_os_str().is_empty()
-                && target_file_path.starts_with(lexical_normalize(agent_owned_dir))
+                && path_is_within(&target_file_path, agent_owned_dir)
         });
     if is_agent_owned_file {
         return Vec::new();
@@ -177,8 +177,7 @@ fn is_within_workspace(target_file_path: &Path, workspace_paths: &[PathBuf]) -> 
     workspace_paths.is_empty()
         || workspace_paths
             .iter()
-            .map(|workspace| lexical_normalize(workspace))
-            .any(|workspace| target_file_path.starts_with(&workspace))
+            .any(|workspace| path_is_within(target_file_path, workspace))
 }
 
 /// Keeps diagnostics on lines touched by the edit, plus net-new spillover onto unmodified
@@ -281,19 +280,7 @@ fn format_code_warning(target_path: &Path, diagnostic: &Diagnostic) -> QueuedWar
 }
 
 fn resolve_in_workspace(raw_path: &Path, workspace_paths: &[PathBuf]) -> PathBuf {
-    let joined = if raw_path.as_os_str().is_empty() {
-        workspace_paths
-            .first()
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from("."))
-    } else if !is_rooted_path(raw_path)
-        && let Some(workspace_root) = workspace_paths.first()
-    {
-        workspace_root.join(raw_path)
-    } else {
-        raw_path.to_path_buf()
-    };
-    lexical_normalize(&joined)
+    resolve_against_cwd(raw_path, workspace_paths.first().map(PathBuf::as_path))
 }
 
 fn resolve_project_root(directory: &Path, workspace_paths: &[PathBuf]) -> PathBuf {
@@ -301,8 +288,8 @@ fn resolve_project_root(directory: &Path, workspace_paths: &[PathBuf]) -> PathBu
         .or_else(|| {
             workspace_paths
                 .iter()
+                .find(|workspace| path_is_within(directory, workspace))
                 .map(|workspace| lexical_normalize(workspace))
-                .find(|workspace| directory.starts_with(workspace))
         })
         .unwrap_or_else(|| directory.to_path_buf())
 }

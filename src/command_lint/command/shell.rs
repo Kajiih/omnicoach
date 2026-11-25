@@ -1,9 +1,10 @@
 //! Shell command-line AST and word-expansion parser (`brush_parser` on host and WASI targets;
 //! zero-import stub on `wasm32-unknown-unknown`).
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::diagnostic::{SourceLocation, SourceSpan, VCS_CONTEXT_NAME};
+use crate::paths::{is_rooted_path, lexical_normalize, resolve_against_cwd};
 
 /// A parsed shell command line (single command, pipeline, or compound script).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,20 +131,15 @@ impl InterceptedCommand {
                 return None;
             }
             if is_rooted_path(target) {
-                return Some(normalize_path_lexically(target));
+                return Some(lexical_normalize(target));
             }
         }
         let offset = self.working_dir.known_offset()?;
-        let after_cd = if offset.as_os_str().is_empty() {
-            base_dir.to_path_buf()
-        } else {
-            join_anchored_path(base_dir, offset)
-        };
-        let combined = match override_dir {
-            Some(target) => join_anchored_path(&after_cd, target),
+        let after_cd = resolve_against_cwd(offset, Some(base_dir));
+        Some(match override_dir {
+            Some(target) => resolve_against_cwd(target, Some(&after_cd)),
             None => after_cd,
-        };
-        Some(normalize_path_lexically(&combined))
+        })
     }
 }
 
@@ -278,7 +274,7 @@ impl WorkingDirState {
         if is_rooted_path(target) {
             self.0 = Some(target.to_path_buf());
         } else if let Some(current) = &mut self.0 {
-            *current = join_anchored_path(current, target);
+            current.push(target);
         }
     }
 
@@ -286,44 +282,6 @@ impl WorkingDirState {
         if self != other {
             self.0 = None;
         }
-    }
-}
-
-fn join_anchored_path(base: &Path, child: &Path) -> PathBuf {
-    if is_rooted_path(child) {
-        child.to_path_buf()
-    } else {
-        base.join(child)
-    }
-}
-
-fn is_rooted_path(path: &Path) -> bool {
-    path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_)))
-}
-
-fn normalize_path_lexically(path: &Path) -> PathBuf {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => match components.last() {
-                Some(Component::Normal(_)) => {
-                    components.pop();
-                }
-                Some(Component::RootDir | Component::Prefix(_)) => {}
-                Some(Component::ParentDir | Component::CurDir) | None => {
-                    components.push(component);
-                }
-            },
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                components.push(component);
-            }
-        }
-    }
-    if components.is_empty() {
-        PathBuf::from(".")
-    } else {
-        components.iter().collect()
     }
 }
 

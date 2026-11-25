@@ -15,9 +15,7 @@ pub(super) use self::context::{
 };
 #[cfg(test)]
 pub(super) use self::foundation::CrossModuleRefFact;
-pub(crate) use self::foundation::{
-    ArchitectureConfig, compile_glob, is_rooted_path, lexical_normalize, resolve_against_cwd,
-};
+pub(crate) use self::foundation::{ArchitectureConfig, compile_glob};
 pub(super) use self::foundation::{
     ComponentFact, InvalidArchitectureComponentKind, ModuleFact, OverlayFileSource, ProjectFacts,
     ProjectSourceFile,

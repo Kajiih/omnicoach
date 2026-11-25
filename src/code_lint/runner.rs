@@ -6,13 +6,14 @@ use crate::code_lint::ast::{self, ParsedFile};
 use crate::code_lint::contract::{AnyCodeRule, RuleTarget};
 use crate::code_lint::project::{
     ArchitectureError, DiskFileSource, OverlayFileSource, ProjectContext, ProjectIndex,
-    ProjectLayout, is_rooted_path, lexical_normalize, resolve_against_cwd,
+    ProjectLayout,
 };
 use crate::code_lint::rules::CODE_RULES;
 use crate::code_lint::semantic::may_contain_suppression_directive;
 use crate::code_lint::suppression::{SUPPRESSION_AUDITS, SuppressionTracker};
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Language, RuleName};
+use crate::paths::{is_rooted_path, lexical_normalize, resolve_against_cwd};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;

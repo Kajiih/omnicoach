@@ -22,11 +22,12 @@ use self::taxonomy::CATALOG;
 pub use self::taxonomy::{AnalyzedInput, RegisteredRule, registered_topics};
 use crate::code_lint::project::{
     ArchitectureConfig, ArchitectureConfigError, CONFIG_FILE_NAME, ContextConfig, ProjectConfig,
-    compile_glob, lexical_normalize, resolve_against_cwd,
+    compile_glob,
 };
 use crate::config::Config;
 use crate::diagnostic::RuleName;
 use crate::diff::detect_vcs_at;
+use crate::paths::{lexical_normalize, resolve_against_cwd};
 use crate::rule_declaration::{RuleOptionsError, RuleOverrides};
 
 /// Command-line overrides for configuration loading and rule selection: `--config`, `--select`
