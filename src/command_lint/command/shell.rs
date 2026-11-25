@@ -80,7 +80,7 @@ impl InterceptedCommand {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::super::model::{RedirectKind, ShellScope};
+    use super::super::model::{RedirectKind, RedirectTarget, ShellScope};
     use super::*;
 
     #[derive(Debug, PartialEq, Eq)]
@@ -350,23 +350,126 @@ mod tests {
     }
 
     #[test]
-    fn test_heredoc_and_word_escapes() {
+    fn test_heredoc_span_trims_trailing_newline() {
         let script = indoc::indoc! {r"
             cat <<EOF
             hello
             EOF
             echo a\ b $HOME"};
         let parsed = ParsedCommand::new(script);
+        let cmd = &parsed.commands()[0];
+        let redirect = &cmd.redirects[0];
+        assert_eq!(redirect.kind, RedirectKind::HereDoc);
+        assert_eq!(redirect.span, SourceSpan::new(4, 19));
+        assert_eq!(cmd.span, SourceSpan::new(0, 19));
+        let RedirectTarget::HereDoc {
+            span: target_span, ..
+        } = &redirect.target
+        else {
+            panic!("expected HereDoc target");
+        };
+        assert_eq!(*target_span, SourceSpan::new(6, 19));
+    }
+
+    #[test]
+    fn test_word_escapes_and_dynamic_expansion() {
+        let parsed = ParsedCommand::new(r"echo a\ b $HOME");
+        assert_eq!(parsed.commands()[0].arguments[0].text, "a b");
+        assert!(parsed.commands()[0].arguments[1].is_dynamic());
+    }
+
+    #[test]
+    fn test_heredoc_without_trailing_newline_keeps_closing_delimiter() {
+        let script = indoc::indoc! {"
+            cat <<EOF
+            héllo
+            EOF"};
+        let expected_redirect = indoc::indoc! {"
+            <<EOF
+            héllo
+            EOF"};
+        let parsed = ParsedCommand::new(script);
+        let cmd = &parsed.commands()[0];
+        let redirect = &cmd.redirects[0];
         assert_eq!(
-            parsed.commands()[0].redirects[0].kind,
-            RedirectKind::HereDoc
+            &script[redirect.span.start..redirect.span.end],
+            expected_redirect
         );
+        assert_eq!(&script[cmd.span.start..cmd.span.end], script);
+        let RedirectTarget::HereDoc {
+            span: target_span, ..
+        } = &redirect.target
+        else {
+            panic!("expected HereDoc target");
+        };
         assert_eq!(
-            parsed.commands()[0].redirects[0].span,
-            SourceSpan::new(4, 20)
+            *target_span,
+            SourceSpan::new(redirect.span.start + 2, redirect.span.end)
         );
-        assert_eq!(parsed.commands()[1].arguments[0].text, "a b");
-        assert!(parsed.commands()[1].arguments[1].is_dynamic());
+    }
+
+    #[test]
+    fn test_heredoc_span_trims_trailing_crlf_terminator() {
+        let script = indoc::indoc! {"
+            cat <<EOF
+            hello
+            EOF
+            echo done"}
+        .replace('\n', "\r\n");
+        let expected = indoc::indoc! {"
+            <<EOF
+            hello
+            EOF"}
+        .replace('\n', "\r\n");
+        let parsed = ParsedCommand::new(&script);
+        let cmd = &parsed.commands()[0];
+        let redirect = &cmd.redirects[0];
+        assert_eq!(&script[redirect.span.start..redirect.span.end], expected);
+        assert_eq!(
+            &script[cmd.span.start..cmd.span.end],
+            format!("cat {expected}")
+        );
+        let RedirectTarget::HereDoc {
+            span: target_span, ..
+        } = &redirect.target
+        else {
+            panic!("expected HereDoc target");
+        };
+        assert_eq!(
+            *target_span,
+            SourceSpan::new(redirect.span.start + 2, redirect.span.end)
+        );
+    }
+
+    #[test]
+    fn test_nested_heredoc_inside_command_substitution_trims_trailing_newline() {
+        let script = indoc::indoc! {r#"
+            echo "$(cat <<EOF
+            hello
+            EOF
+            echo inner)""#};
+        let expected = indoc::indoc! {"
+            <<EOF
+            hello
+            EOF"};
+        let parsed = ParsedCommand::new(script);
+        let cmd = &parsed.commands()[1];
+        let redirect = &cmd.redirects[0];
+        assert_eq!(&script[redirect.span.start..redirect.span.end], expected);
+        assert_eq!(
+            &script[cmd.span.start..cmd.span.end],
+            format!("cat {expected}")
+        );
+        let RedirectTarget::HereDoc {
+            span: target_span, ..
+        } = &redirect.target
+        else {
+            panic!("expected HereDoc target");
+        };
+        assert_eq!(
+            *target_span,
+            SourceSpan::new(redirect.span.start + 2, redirect.span.end)
+        );
     }
 
     #[test]

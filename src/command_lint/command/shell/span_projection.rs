@@ -30,19 +30,41 @@ impl CharToByteMap {
     }
 
     pub(super) fn map_span(&self, brush_span: &BrushSpan) -> SourceSpan {
+        self.shift_local_span(self.map_local_span(brush_span))
+    }
+
+    pub(super) fn map_local_span(&self, brush_span: &BrushSpan) -> SourceSpan {
         SourceSpan::new(
-            self.char_to_byte(brush_span.start.index),
-            self.char_to_byte(brush_span.end.index),
+            self.local_char_to_byte(brush_span.start.index),
+            self.local_char_to_byte(brush_span.end.index),
         )
     }
 
-    fn char_to_byte(&self, char_offset: usize) -> usize {
-        let local_offset = self.non_ascii_offsets.as_ref().map_or_else(
+    pub(super) const fn shift_local_span(&self, local_span: SourceSpan) -> SourceSpan {
+        SourceSpan::new(
+            self.base_byte_offset + local_span.start,
+            self.base_byte_offset + local_span.end,
+        )
+    }
+
+    fn local_char_to_byte(&self, char_offset: usize) -> usize {
+        self.non_ascii_offsets.as_ref().map_or_else(
             || char_offset.min(self.byte_len),
             |offsets| offsets.get(char_offset).copied().unwrap_or(self.byte_len),
-        );
-        self.base_byte_offset + local_offset
+        )
     }
+}
+
+/// Strips a trailing `\n` or `\r\n` line terminator from `span` within `source`.
+pub(super) fn trim_trailing_newline(source: &str, span: SourceSpan) -> SourceSpan {
+    let Some(slice) = source.get(span.start..span.end) else {
+        return span;
+    };
+    let trimmed = slice
+        .strip_suffix("\r\n")
+        .or_else(|| slice.strip_suffix('\n'))
+        .unwrap_or(slice);
+    SourceSpan::new(span.start, span.start + trimmed.len())
 }
 
 /// Smallest span enclosing both `left` and `right`.

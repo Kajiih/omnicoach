@@ -18,7 +18,7 @@ use super::super::model::{
     CommandArg, CommandRedirect, EnvAssignment, InterceptedCommand, RedirectKind, RedirectTarget,
     ShellScope, WorkingDirState,
 };
-use super::span_projection::{CharToByteMap, hull_span};
+use super::span_projection::{CharToByteMap, hull_span, trim_trailing_newline};
 use crate::diagnostic::SourceSpan;
 
 /// Result of tokenizing and lowering a shell script.
@@ -68,7 +68,7 @@ fn parse_script_into(
 }
 
 struct ScriptWalker<'a> {
-    context: &'a LoweringContext,
+    context: &'a LoweringContext<'a>,
 }
 
 impl ScriptWalker<'_> {
@@ -656,7 +656,13 @@ impl ScriptWalker<'_> {
                 let header_span = self.extend_redirect_span_left(end_span, raw_fd.is_some());
                 let doc_span = doc
                     .location()
-                    .map(|loc| self.context.char_offsets.map_span(&loc))
+                    .map(|loc| {
+                        let local = trim_trailing_newline(
+                            self.context.source,
+                            self.context.char_offsets.map_local_span(&loc),
+                        );
+                        self.context.char_offsets.shift_local_span(local)
+                    })
                     .filter(|span| span.end > span.start);
                 let target_span =
                     doc_span.map_or(end_span, |body_span| hull_span(end_span, body_span));
@@ -901,7 +907,8 @@ impl WordBuilder {
 }
 
 /// Bundled tokenization and span state shared across AST lowering passes for a single script fragment.
-struct LoweringContext {
+struct LoweringContext<'a> {
+    source: &'a str,
     tokens: Vec<Token>,
     char_offsets: CharToByteMap,
     token_spans: Vec<SourceSpan>,
@@ -909,9 +916,9 @@ struct LoweringContext {
     array_token_cursor: Cell<usize>,
 }
 
-impl LoweringContext {
+impl<'a> LoweringContext<'a> {
     fn from_tokens(
-        source: &str,
+        source: &'a str,
         base_byte_offset: usize,
         tokens: Vec<Token>,
         parser_options: ParserOptions,
@@ -922,6 +929,7 @@ impl LoweringContext {
             .map(|token: &Token| char_offsets.map_span(token.location()))
             .collect();
         Self {
+            source,
             tokens,
             char_offsets,
             token_spans,
