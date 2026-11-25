@@ -1,5 +1,7 @@
-//! Shell tokenization and AST lowering backed by `brush-parser`, compiled on every target except browser `wasm32-unknown-unknown`.
+//! Shell tokenization and AST lowering backed by `brush-parser`, compiled on every target except
+//! browser `wasm32-unknown-unknown`.
 
+use std::cell::Cell;
 use std::path::Path;
 
 use brush_parser::ast::{
@@ -10,16 +12,39 @@ use brush_parser::ast::{
     SourceLocation as _, SubshellCommand, WhileOrUntilClauseCommand, Word,
 };
 use brush_parser::word::{WordPiece, WordPieceWithSource};
-use brush_parser::{ParserOptions, SourceSpan as BrushSpan, Token, TokenizerOptions};
+use brush_parser::{ParserOptions, Token, TokenizerOptions};
 
 use super::super::model::{
     CommandArg, CommandRedirect, EnvAssignment, InterceptedCommand, RedirectKind, RedirectTarget,
     ShellScope, WorkingDirState,
 };
+use super::span_projection::{CharToByteMap, hull_span};
 use crate::diagnostic::SourceSpan;
 
+/// Result of tokenizing and lowering a shell script.
+pub(super) struct LoweredScript {
+    pub(super) has_syntax_error: bool,
+    pub(super) commands: Vec<InterceptedCommand>,
+}
+
+/// Tokenizes and parses `source`, returning all extracted [`InterceptedCommand`]s.
+pub(super) fn lower_script(source: &str) -> LoweredScript {
+    let mut commands = Vec::new();
+    let has_syntax_error = !parse_script_into(
+        source,
+        0,
+        &mut Vec::new(),
+        &WorkingDirState::initial(),
+        &mut commands,
+    );
+    LoweredScript {
+        has_syntax_error,
+        commands,
+    }
+}
+
 /// Tokenizes and parses `source` into `out`, returning `true` when the script is valid shell syntax.
-pub(super) fn parse_script_into(
+fn parse_script_into(
     source: &str,
     base_byte_offset: usize,
     scopes: &mut Vec<ShellScope>,
@@ -35,30 +60,15 @@ pub(super) fn parse_script_into(
         return false;
     };
 
-    let char_offsets = CharToByteMap::new(source, base_byte_offset);
-    let token_spans: Vec<SourceSpan> = tokens
-        .iter()
-        .map(|token: &Token| char_offsets.map_span(token.location()))
-        .collect();
-
-    let walker = ScriptWalker {
-        tokens: &tokens,
-        char_offsets: &char_offsets,
-        token_spans: &token_spans,
-        parser_options: &parser_options,
-        array_token_cursor: std::cell::Cell::new(0),
-    };
+    let context = LoweringContext::from_tokens(source, base_byte_offset, tokens, parser_options);
+    let walker = ScriptWalker { context: &context };
     let mut cwd = initial_cwd.clone();
     walker.walk_program(&program, scopes, &mut cwd, out);
     true
 }
 
 struct ScriptWalker<'a> {
-    tokens: &'a [Token],
-    char_offsets: &'a CharToByteMap,
-    token_spans: &'a [SourceSpan],
-    parser_options: &'a ParserOptions,
-    array_token_cursor: std::cell::Cell<usize>,
+    context: &'a LoweringContext,
 }
 
 impl ScriptWalker<'_> {
@@ -486,7 +496,7 @@ impl ScriptWalker<'_> {
                 }
             }
             CommandPrefixOrSuffixItem::ProcessSubstitution(_, subshell) => {
-                let span = self.char_offsets.map_span(&subshell.loc);
+                let span = self.context.char_offsets.map_span(&subshell.loc);
                 arguments.push(CommandArg {
                     text: String::new(),
                     span,
@@ -525,7 +535,7 @@ impl ScriptWalker<'_> {
             AssignmentValue::Scalar(val_word) => {
                 let scalar_span = val_word
                     .location()
-                    .map_or(value_span, |loc| self.char_offsets.map_span(&loc));
+                    .map_or(value_span, |loc| self.context.char_offsets.map_span(&loc));
                 self.parse_word_at_span(&val_word.value, scalar_span, sink)
             }
             AssignmentValue::Array(_) => {
@@ -548,26 +558,28 @@ impl ScriptWalker<'_> {
     ) -> CommandArg {
         let mut has_expansion = false;
         let mut value_span = fallback_value_span;
-        let search_start = self.array_token_cursor.get();
-        let head_offset = self.tokens[search_start..].windows(2).position(|pair| {
-            matches!(&pair[0], Token::Word(head, _) if head.ends_with('='))
-                && matches!(&pair[1], Token::Operator(op, _) if op == "(")
-        });
+        let search_start = self.context.array_token_cursor.get();
+        let head_offset = self.context.tokens[search_start..]
+            .windows(2)
+            .position(|pair| {
+                matches!(&pair[0], Token::Word(head, _) if head.ends_with('='))
+                    && matches!(&pair[1], Token::Operator(op, _) if op == "(")
+            });
         if let Some(relative_head) = head_offset {
             let head_index = search_start + relative_head;
-            full_span.start = self.token_spans[head_index].start;
-            value_span.start = self.token_spans[head_index + 1].start;
+            full_span.start = self.context.token_spans[head_index].start;
+            value_span.start = self.context.token_spans[head_index + 1].start;
             let mut depth = 1usize;
-            for index in (head_index + 2)..self.tokens.len() {
-                let token_span = self.token_spans[index];
-                match &self.tokens[index] {
+            for index in (head_index + 2)..self.context.tokens.len() {
+                let token_span = self.context.token_spans[index];
+                match &self.context.tokens[index] {
                     Token::Operator(op, _) if op == "(" => depth += 1,
                     Token::Operator(op, _) if op == ")" => {
                         depth -= 1;
                         if depth == 0 {
                             full_span.end = token_span.end;
                             value_span.end = token_span.end;
-                            self.array_token_cursor.set(index + 1);
+                            self.context.array_token_cursor.set(index + 1);
                             break;
                         }
                     }
@@ -628,7 +640,7 @@ impl ScriptWalker<'_> {
                 let header_span = self.extend_redirect_span_left(end_span, raw_fd.is_some());
                 let doc_span = doc
                     .location()
-                    .map(|loc| self.char_offsets.map_span(&loc))
+                    .map(|loc| self.context.char_offsets.map_span(&loc))
                     .filter(|span| span.end > span.start);
                 let target_span =
                     doc_span.map_or(end_span, |body_span| hull_span(end_span, body_span));
@@ -681,7 +693,7 @@ impl ScriptWalker<'_> {
                 (dup_target, span)
             }
             IoFileRedirectTarget::ProcessSubstitution(_, subshell) => {
-                let sub_span = self.char_offsets.map_span(&subshell.loc);
+                let sub_span = self.context.char_offsets.map_span(&subshell.loc);
                 let pushed = push_unique_scope(sink.scopes, ShellScope::ProcessSubstitution);
                 let mut proc_cwd = sink.cwd.clone();
                 self.walk_compound_list(&subshell.list, sink.scopes, &mut proc_cwd, sink.out);
@@ -712,17 +724,18 @@ impl ScriptWalker<'_> {
         has_explicit_fd: bool,
     ) -> SourceSpan {
         let target_token_position = self
+            .context
             .token_spans
             .partition_point(|span| span.start < target_span.start);
         if target_token_position == 0 {
             return target_span;
         }
-        let op_span = self.token_spans[target_token_position - 1];
+        let op_span = self.context.token_spans[target_token_position - 1];
         let start = if has_explicit_fd
             && target_token_position >= 2
-            && self.token_spans[target_token_position - 2].end == op_span.start
+            && self.context.token_spans[target_token_position - 2].end == op_span.start
         {
-            self.token_spans[target_token_position - 2].start
+            self.context.token_spans[target_token_position - 2].start
         } else {
             op_span.start
         };
@@ -739,7 +752,7 @@ impl ScriptWalker<'_> {
         span: SourceSpan,
         sink: &mut NestedSink<'_>,
     ) -> CommandArg {
-        let Ok(pieces) = brush_parser::word::parse(raw, self.parser_options) else {
+        let Ok(pieces) = brush_parser::word::parse(raw, &self.context.parser_options) else {
             return CommandArg {
                 text: raw.to_owned(),
                 span,
@@ -853,8 +866,39 @@ impl ScriptWalker<'_> {
     fn word_span(&self, word: &Word) -> SourceSpan {
         word.location().map_or_else(
             || SourceSpan::new(0, 0),
-            |loc| self.char_offsets.map_span(&loc),
+            |loc| self.context.char_offsets.map_span(&loc),
         )
+    }
+}
+
+/// Bundled tokenization and span state shared across AST lowering passes for a single script fragment.
+struct LoweringContext {
+    tokens: Vec<Token>,
+    char_offsets: CharToByteMap,
+    token_spans: Vec<SourceSpan>,
+    parser_options: ParserOptions,
+    array_token_cursor: Cell<usize>,
+}
+
+impl LoweringContext {
+    fn from_tokens(
+        source: &str,
+        base_byte_offset: usize,
+        tokens: Vec<Token>,
+        parser_options: ParserOptions,
+    ) -> Self {
+        let char_offsets = CharToByteMap::new(source, base_byte_offset);
+        let token_spans: Vec<SourceSpan> = tokens
+            .iter()
+            .map(|token: &Token| char_offsets.map_span(token.location()))
+            .collect();
+        Self {
+            tokens,
+            char_offsets,
+            token_spans,
+            parser_options,
+            array_token_cursor: Cell::new(0),
+        }
     }
 }
 
@@ -867,47 +911,6 @@ struct NestedSink<'a> {
 enum AssignmentSink<'a> {
     Env(&'a mut Vec<EnvAssignment>),
     SuffixArg,
-}
-
-/// Maps `brush_parser`'s 0-based Unicode `char` offset to 0-based UTF-8 byte offsets, shifted by
-/// `base_byte_offset` when parsing nested command substitutions.
-struct CharToByteMap {
-    non_ascii_offsets: Option<Vec<usize>>,
-    byte_len: usize,
-    base_byte_offset: usize,
-}
-
-impl CharToByteMap {
-    fn new(source: &str, base_byte_offset: usize) -> Self {
-        let non_ascii_offsets = (!source.is_ascii()).then(|| {
-            let mut offsets: Vec<usize> = source
-                .char_indices()
-                .map(|(byte_offset, _)| byte_offset)
-                .collect();
-            offsets.push(source.len());
-            offsets
-        });
-        Self {
-            non_ascii_offsets,
-            byte_len: source.len(),
-            base_byte_offset,
-        }
-    }
-
-    fn map_span(&self, brush_span: &BrushSpan) -> SourceSpan {
-        SourceSpan::new(
-            self.char_to_byte(brush_span.start.index),
-            self.char_to_byte(brush_span.end.index),
-        )
-    }
-
-    fn char_to_byte(&self, char_offset: usize) -> usize {
-        let local_offset = self.non_ascii_offsets.as_ref().map_or_else(
-            || char_offset.min(self.byte_len),
-            |offsets| offsets.get(char_offset).copied().unwrap_or(self.byte_len),
-        );
-        self.base_byte_offset + local_offset
-    }
 }
 
 enum CdEffect {
@@ -1011,19 +1014,4 @@ fn push_unique_scope(scopes: &mut Vec<ShellScope>, scope: ShellScope) -> bool {
         scopes.push(scope);
         true
     }
-}
-
-/// Smallest span enclosing both `left` and `right`.
-const fn hull_span(left: SourceSpan, right: SourceSpan) -> SourceSpan {
-    let start = if left.start < right.start {
-        left.start
-    } else {
-        right.start
-    };
-    let end = if left.end > right.end {
-        left.end
-    } else {
-        right.end
-    };
-    SourceSpan::new(start, end)
 }

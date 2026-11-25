@@ -200,7 +200,10 @@ define_architecture! {
     CommandLintCommand  => [Diagnostic, Paths] (owns_external: ["brush_parser"]) (modules: {
         model => [],
         cli_args => [model],
-        shell => [model],
+        shell => [model] (modules: {
+            span_projection => [],
+            lowering => [span_projection],
+        }),
     }),
     /// Jujutsu CLI parsing, revset boundedness, and repository state queries (`command_lint::vcs`).
     CommandLintVcs      => [CommandLintCommand] (modules: {

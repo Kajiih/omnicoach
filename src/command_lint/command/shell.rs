@@ -2,12 +2,12 @@
 //! zero-import stub on `wasm32-unknown-unknown`).
 
 use super::model::InterceptedCommand;
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-use super::model::WorkingDirState;
 use crate::diagnostic::{SourceLocation, SourceSpan, VCS_CONTEXT_NAME};
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-mod brush_backend;
+mod lowering;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+mod span_projection;
 
 /// A parsed shell command line (single command, pipeline, or compound script).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,18 +25,11 @@ impl ParsedCommand {
     pub fn new(raw_command: &str) -> Self {
         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
         {
-            let mut commands = Vec::new();
-            let has_syntax_error = !brush_backend::parse_script_into(
-                raw_command,
-                0,
-                &mut Vec::new(),
-                &WorkingDirState::initial(),
-                &mut commands,
-            );
+            let lowered = lowering::lower_script(raw_command);
             Self {
                 source: raw_command.to_string(),
-                has_syntax_error,
-                commands,
+                has_syntax_error: lowered.has_syntax_error,
+                commands: lowered.commands,
             }
         }
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
