@@ -7,76 +7,115 @@ use super::revset::{
     intersect_revset_with_mutable, is_bounded_jj_revset, join_revset_union,
 };
 use crate::command_lint::command::{
-    InterceptedCommand, LastOptionValue, ParsedArgs, PreSubcommandSpec, ProgramCliSchema,
+    CliSpec, FlagName, InterceptedCommand, LastOptionValue, ParsedCli, PreSubcommandSpec,
     SubcommandCliSchema,
 };
 
-// TODO: Should we add some abstraction for these?
-// TODO: at least something like an enum or maybe something better designed that we can generalize to other tools too?
 const JJ_PROGRAM: &str = "jj";
 const SUBCOMMAND_GIT: &str = "git";
 const SUBCOMMAND_PUSH: &str = "push";
-const FLAG_REPO_SHORT: &str = "-R";
-const FLAG_REPO_LONG: &str = "--repository";
-const FLAG_REV_SHORT: &str = "-r";
-const FLAG_REV_LONG: &str = "--revision";
-const FLAG_REVS_LONG: &str = "--revisions";
-const FLAG_FROM_SHORT: &str = "-f";
-const FLAG_FROM_LONG: &str = "--from";
-const FLAG_INTO_SHORT: &str = "-t";
-const FLAG_INTO_LONG: &str = "--into";
-const FLAG_TO_LONG: &str = "--to";
-const FLAG_ONTO_SHORT: &str = "-o";
-const FLAG_ONTO_LONG: &str = "--onto";
-const FLAG_DEST_SHORT: &str = "-d";
-const FLAG_DEST_LONG: &str = "--destination";
-const FLAG_AFTER_SHORT: &str = "-A";
-const FLAG_INSERT_AFTER_LONG: &str = "--insert-after";
-const FLAG_AFTER_LONG: &str = "--after";
-const FLAG_BEFORE_SHORT: &str = "-B";
-const FLAG_INSERT_BEFORE_LONG: &str = "--insert-before";
-const FLAG_BEFORE_LONG: &str = "--before";
-const FLAG_CHANGES_IN_SHORT: &str = "-c";
-const FLAG_CHANGES_IN_LONG: &str = "--changes-in";
-const FLAG_SOURCE_SHORT: &str = "-s";
-const FLAG_SOURCE_LONG: &str = "--source";
-const FLAG_BRANCH_SHORT: &str = "-b";
-const FLAG_BRANCH_LONG: &str = "--branch";
-const FLAG_BOOKMARK_SHORT: &str = "-b";
-const FLAG_BOOKMARK_LONG: &str = "--bookmark";
-const FLAG_CHANGE_SHORT: &str = "-c";
-const FLAG_CHANGE_LONG: &str = "--change";
-const FLAG_NAMED_LONG: &str = "--named";
-const FLAG_TAG_SHORT: &str = "-t";
-const FLAG_TAG_LONG: &str = "--tag";
-const FLAG_REMOTE_LONG: &str = "--remote";
-const FLAG_OPTION_SHORT: &str = "-o";
-const FLAG_OPTION_LONG: &str = "--option";
-const FLAG_ALL_LONG: &str = "--all";
-const FLAG_TRACKED_LONG: &str = "--tracked";
-const FLAG_DELETED_LONG: &str = "--deleted";
-const FLAG_DRY_RUN_LONG: &str = "--dry-run";
-const FLAG_MESSAGE_SHORT: &str = "-m";
-const FLAG_MESSAGE_LONG: &str = "--message";
-const FLAG_AUTHOR_LONG: &str = "--author";
-const FLAG_STDIN: &str = "--stdin";
-const FLAG_NO_EDIT: &str = "--no-edit";
-const FLAG_EDITOR: &str = "--editor";
-const FLAG_INTERACTIVE_SHORT: &str = "-i";
-const FLAG_INTERACTIVE_LONG: &str = "--interactive";
-const FLAG_TOOL: &str = "--tool";
-const FLAG_USE_DEST_SHORT: &str = "-u";
-const FLAG_USE_DEST_LONG: &str = "--use-destination-message";
-const FLAG_KEEP_EMPTIED_SHORT: &str = "-k";
-const FLAG_KEEP_EMPTIED_LONG: &str = "--keep-emptied";
-const FLAG_LIST_SHORT: &str = "-l";
-const FLAG_LIST_LONG: &str = "--list";
-const FLAG_LIMIT_SHORT: &str = "-n";
-const FLAG_LIMIT_LONG: &str = "--limit";
-const FLAG_HELP_SHORT: &str = "-h";
-const FLAG_HELP_LONG: &str = "--help";
-const FLAG_VERSION_SHORT: &str = "-V";
-const FLAG_VERSION_LONG: &str = "--version";
+
+const OPT_REPOSITORY: &str = "repository";
+const OPT_REVISION: &str = "revision";
+const OPT_REVISIONS: &str = "revisions";
+const OPT_FROM: &str = "from";
+const OPT_INTO: &str = "into";
+const OPT_TO: &str = "to";
+const OPT_ONTO: &str = "onto";
+const OPT_DESTINATION: &str = "destination";
+const OPT_INSERT_AFTER: &str = "insert-after";
+const OPT_AFTER: &str = "after";
+const OPT_INSERT_BEFORE: &str = "insert-before";
+const OPT_BEFORE: &str = "before";
+const OPT_MESSAGE: &str = "message";
+const OPT_TOOL: &str = "tool";
+const OPT_SOURCE: &str = "source";
+const OPT_BRANCH: &str = "branch";
+const OPT_AUTHOR: &str = "author";
+const OPT_LIMIT: &str = "limit";
+const OPT_CHANGES_IN: &str = "changes-in";
+const OPT_BOOKMARK: &str = "bookmark";
+const OPT_TAG: &str = "tag";
+const OPT_CHANGE: &str = "change";
+const OPT_NAMED: &str = "named";
+
+const REPO_FLAGS: &[FlagName<'_>] = &[FlagName::Short('R'), FlagName::Long(OPT_REPOSITORY)];
+const REV_FLAGS: &[FlagName<'_>] = &[FlagName::Short('r'), FlagName::Long(OPT_REVISION)];
+const REVS_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('r'),
+    FlagName::Long(OPT_REVISION),
+    FlagName::Long(OPT_REVISIONS),
+];
+const FROM_FLAGS: &[FlagName<'_>] = &[FlagName::Short('f'), FlagName::Long(OPT_FROM)];
+const INTO_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('t'),
+    FlagName::Long(OPT_INTO),
+    FlagName::Long(OPT_TO),
+];
+const DIFFEDIT_TO_FLAGS: &[FlagName<'_>] = &[FlagName::Short('t'), FlagName::Long(OPT_TO)];
+const ONTO_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('o'),
+    FlagName::Long(OPT_ONTO),
+    FlagName::Short('d'),
+    FlagName::Long(OPT_DESTINATION),
+];
+const AFTER_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('A'),
+    FlagName::Long(OPT_INSERT_AFTER),
+    FlagName::Long(OPT_AFTER),
+];
+const BEFORE_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('B'),
+    FlagName::Long(OPT_INSERT_BEFORE),
+    FlagName::Long(OPT_BEFORE),
+];
+const SQUASH_NEW_COMMIT_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('o'),
+    FlagName::Long(OPT_ONTO),
+    FlagName::Short('d'),
+    FlagName::Long(OPT_DESTINATION),
+    FlagName::Short('A'),
+    FlagName::Long(OPT_INSERT_AFTER),
+    FlagName::Long(OPT_AFTER),
+    FlagName::Short('B'),
+    FlagName::Long(OPT_INSERT_BEFORE),
+    FlagName::Long(OPT_BEFORE),
+];
+const CHANGES_IN_FLAGS: &[FlagName<'_>] = &[FlagName::Short('c'), FlagName::Long(OPT_CHANGES_IN)];
+const SOURCE_FLAGS: &[FlagName<'_>] = &[FlagName::Short('s'), FlagName::Long(OPT_SOURCE)];
+const BRANCH_FLAGS: &[FlagName<'_>] = &[FlagName::Short('b'), FlagName::Long(OPT_BRANCH)];
+const BOOKMARK_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('b'),
+    FlagName::Long(OPT_BOOKMARK),
+    FlagName::Long(OPT_BRANCH),
+];
+const CHANGE_FLAGS: &[FlagName<'_>] = &[FlagName::Short('c'), FlagName::Long(OPT_CHANGE)];
+const MESSAGE_FLAGS: &[FlagName<'_>] = &[FlagName::Short('m'), FlagName::Long(OPT_MESSAGE)];
+const LIST_FLAGS: &[FlagName<'_>] = &[FlagName::Short('l'), FlagName::Long("list")];
+const LIMIT_FLAGS: &[FlagName<'_>] = &[FlagName::Short('n'), FlagName::Long(OPT_LIMIT)];
+const INTERACTIVE_OR_TOOL_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('i'),
+    FlagName::Long("interactive"),
+    FlagName::Long(OPT_TOOL),
+];
+const SKIP_COMBINED_DESCRIPTION_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Short('u'),
+    FlagName::Long("use-destination-message"),
+    FlagName::Short('k'),
+    FlagName::Long("keep-emptied"),
+];
+const EXPLICIT_PUSH_SELECTOR_FLAGS: &[FlagName<'_>] = &[
+    FlagName::Long("deleted"),
+    FlagName::Short('t'),
+    FlagName::Long(OPT_TAG),
+    FlagName::Long(OPT_NAMED),
+    FlagName::Short('b'),
+    FlagName::Long(OPT_BOOKMARK),
+    FlagName::Long(OPT_BRANCH),
+];
+
+const JJ_ABORT_LONGS: &[&str] = &["help", "version"];
+
 const WORKING_COPY_REV: &str = "@";
 const MUTABLE_ANCESTORS_OF_WORKING_COPY: &str = "::@ & mutable()";
 
@@ -91,248 +130,169 @@ const SUGGEST_RESTORE_PATHS: &str = "jj restore <paths>";
 const SUGGEST_ABSORB_PATHS: &str = "jj absorb <paths>";
 const SUGGEST_RESOLVE: &str = "jj resolve --list";
 
-macro_rules! jj_options_with_values {
-    ($($extra:expr,)*) => {
+macro_rules! jj_long_values {
+    ( $( $extra_long:expr ),* $(,)? ) => {
         &[
-            $($extra,)*
-            FLAG_REPO_SHORT,
-            FLAG_REPO_LONG,
-            "--at-operation",
-            "--at-op",
-            "--color",
-            "--config",
-            "--config-toml",
-            "--config-file",
-        ]
-    };
-}
-
-/// Standalone top-level flags on `jj` that print help or version without running a subcommand.
-const JJ_STANDALONE_FLAGS: &[&str] = &[
-    FLAG_HELP_SHORT,
-    FLAG_HELP_LONG,
-    FLAG_VERSION_SHORT,
-    FLAG_VERSION_LONG,
-];
-
-/// Leading-flag schema for `jj` subcommands (`clap` global options).
-pub const JJ_SUBCOMMAND_CLI_SCHEMA: SubcommandCliSchema = SubcommandCliSchema {
-    program_name: JJ_PROGRAM,
-    pre_subcommand_spec: PreSubcommandSpec {
-        short_values: "R",
-        long_values: &[
-            "repository",
+            $( $extra_long, )*
+            OPT_REPOSITORY,
             "at-operation",
             "at-op",
             "color",
             "config",
             "config-toml",
             "config-file",
-        ],
+        ]
+    };
+}
+
+macro_rules! jj_spec {
+    (shorts: $shorts:literal $(, longs: [ $( $extra_long:expr ),* $(,)? ])? $(,)?) => {
+        CliSpec {
+            short_values: concat!("R", $shorts),
+            short_equals_values: true,
+            long_values: jj_long_values!( $( $( $extra_long, )* )? ),
+            abort_shorts: "hV",
+            abort_longs: JJ_ABORT_LONGS,
+            ..CliSpec::DEFAULT
+        }
+    };
+}
+
+const GLOBAL_ONLY_SPEC: CliSpec = jj_spec!(shorts: "");
+
+/// Leading-flag schema for `jj` subcommands (`clap` global options).
+pub const JJ_SUBCOMMAND_CLI_SCHEMA: SubcommandCliSchema = SubcommandCliSchema {
+    program_name: JJ_PROGRAM,
+    pre_subcommand_spec: PreSubcommandSpec {
+        short_values: "R",
+        long_values: jj_long_values!(),
         abort_shorts: "hV",
-        abort_longs: &["help", "version"],
+        abort_longs: JJ_ABORT_LONGS,
     },
     allows_plus_toolchain: false,
 };
 
-const GLOBAL_ONLY_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(),
-};
+const EDIT_SPEC: CliSpec = jj_spec!(shorts: "r", longs: [OPT_REVISION]);
 
-const EDIT_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(FLAG_REV_SHORT, FLAG_REV_LONG,),
-};
+const LOG_SPEC: CliSpec = jj_spec!(
+    shorts: "rnT",
+    longs: [
+        OPT_REVISION,
+        OPT_REVISIONS,
+        OPT_LIMIT,
+        "template",
+        OPT_TOOL,
+        "context",
+    ],
+);
 
-const LOG_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_REVS_LONG,
-        FLAG_LIMIT_SHORT,
-        FLAG_LIMIT_LONG,
-        "-T",
-        "--template",
-        FLAG_TOOL,
-        "--context",
-    ),
-};
+const DESCRIBE_SPEC: CliSpec = jj_spec!(
+    shorts: "rm",
+    longs: [OPT_REVISION, OPT_REVISIONS, OPT_MESSAGE, OPT_AUTHOR],
+);
 
-const DESCRIBE_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_REVS_LONG,
-        FLAG_MESSAGE_SHORT,
-        FLAG_MESSAGE_LONG,
-        FLAG_AUTHOR_LONG,
-    ),
-};
+const COMMIT_SPEC: CliSpec = jj_spec!(shorts: "m", longs: [OPT_MESSAGE, OPT_TOOL]);
 
-const COMMIT_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(FLAG_MESSAGE_SHORT, FLAG_MESSAGE_LONG, FLAG_TOOL,),
-};
+const SPLIT_SPEC: CliSpec = jj_spec!(
+    shorts: "rodABm",
+    longs: [
+        OPT_REVISION,
+        OPT_ONTO,
+        OPT_DESTINATION,
+        OPT_INSERT_AFTER,
+        OPT_AFTER,
+        OPT_INSERT_BEFORE,
+        OPT_BEFORE,
+        OPT_MESSAGE,
+        OPT_TOOL,
+    ],
+);
 
-const SPLIT_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_ONTO_SHORT,
-        FLAG_ONTO_LONG,
-        FLAG_DEST_SHORT,
-        FLAG_DEST_LONG,
-        FLAG_AFTER_SHORT,
-        FLAG_INSERT_AFTER_LONG,
-        FLAG_AFTER_LONG,
-        FLAG_BEFORE_SHORT,
-        FLAG_INSERT_BEFORE_LONG,
-        FLAG_BEFORE_LONG,
-        FLAG_MESSAGE_SHORT,
-        FLAG_MESSAGE_LONG,
-        FLAG_TOOL,
-    ),
-};
+const SQUASH_SPEC: CliSpec = jj_spec!(
+    shorts: "rftodABm",
+    longs: [
+        OPT_REVISION,
+        OPT_FROM,
+        OPT_INTO,
+        OPT_TO,
+        OPT_ONTO,
+        OPT_DESTINATION,
+        OPT_INSERT_AFTER,
+        OPT_AFTER,
+        OPT_INSERT_BEFORE,
+        OPT_BEFORE,
+        OPT_MESSAGE,
+        OPT_TOOL,
+    ],
+);
 
-const SQUASH_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_FROM_SHORT,
-        FLAG_FROM_LONG,
-        FLAG_INTO_SHORT,
-        FLAG_INTO_LONG,
-        FLAG_TO_LONG,
-        FLAG_ONTO_SHORT,
-        FLAG_ONTO_LONG,
-        FLAG_DEST_SHORT,
-        FLAG_DEST_LONG,
-        FLAG_AFTER_SHORT,
-        FLAG_INSERT_AFTER_LONG,
-        FLAG_AFTER_LONG,
-        FLAG_BEFORE_SHORT,
-        FLAG_INSERT_BEFORE_LONG,
-        FLAG_BEFORE_LONG,
-        FLAG_MESSAGE_SHORT,
-        FLAG_MESSAGE_LONG,
-        FLAG_TOOL,
-    ),
-};
+const DIFFEDIT_SPEC: CliSpec = jj_spec!(
+    shorts: "rft",
+    longs: [OPT_REVISION, OPT_FROM, OPT_TO, OPT_TOOL],
+);
 
-const DIFFEDIT_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_FROM_SHORT,
-        FLAG_FROM_LONG,
-        FLAG_INTO_SHORT,
-        FLAG_TO_LONG,
-        FLAG_TOOL,
-    ),
-};
+const RESOLVE_SPEC: CliSpec = jj_spec!(shorts: "r", longs: [OPT_REVISION, OPT_TOOL]);
 
-const RESOLVE_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_TOOL,),
-};
+const RESTORE_SPEC: CliSpec = jj_spec!(
+    shorts: "ftc",
+    longs: [OPT_FROM, OPT_INTO, OPT_TO, OPT_CHANGES_IN, OPT_TOOL],
+);
 
-const RESTORE_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_FROM_SHORT,
-        FLAG_FROM_LONG,
-        FLAG_INTO_SHORT,
-        FLAG_INTO_LONG,
-        FLAG_TO_LONG,
-        FLAG_CHANGES_IN_SHORT,
-        FLAG_CHANGES_IN_LONG,
-        FLAG_TOOL,
-    ),
-};
+const ABSORB_SPEC: CliSpec = jj_spec!(
+    shorts: "ft",
+    longs: [OPT_FROM, OPT_INTO, OPT_TO, OPT_TOOL],
+);
 
-const ABSORB_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_FROM_SHORT,
-        FLAG_FROM_LONG,
-        FLAG_INTO_SHORT,
-        FLAG_INTO_LONG,
-        FLAG_TO_LONG,
-        FLAG_TOOL,
-    ),
-};
+const ABANDON_SPEC: CliSpec = jj_spec!(shorts: "r", longs: [OPT_REVISION, OPT_REVISIONS]);
 
-const ABANDON_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG,),
-};
+const REBASE_SPEC: CliSpec = jj_spec!(
+    shorts: "bsrodAB",
+    longs: [
+        OPT_BRANCH,
+        OPT_SOURCE,
+        OPT_REVISION,
+        OPT_REVISIONS,
+        OPT_ONTO,
+        OPT_DESTINATION,
+        OPT_INSERT_AFTER,
+        OPT_AFTER,
+        OPT_INSERT_BEFORE,
+        OPT_BEFORE,
+    ],
+);
 
-const REBASE_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_BRANCH_SHORT,
-        FLAG_BRANCH_LONG,
-        FLAG_SOURCE_SHORT,
-        FLAG_SOURCE_LONG,
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_REVS_LONG,
-        FLAG_ONTO_SHORT,
-        FLAG_ONTO_LONG,
-        FLAG_DEST_SHORT,
-        FLAG_DEST_LONG,
-        FLAG_AFTER_SHORT,
-        FLAG_INSERT_AFTER_LONG,
-        FLAG_AFTER_LONG,
-        FLAG_BEFORE_SHORT,
-        FLAG_INSERT_BEFORE_LONG,
-        FLAG_BEFORE_LONG,
-    ),
-};
+const FIX_SPEC: CliSpec = jj_spec!(shorts: "s", longs: [OPT_SOURCE]);
 
-const FIX_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(FLAG_SOURCE_SHORT, FLAG_SOURCE_LONG,),
-};
+const NEW_SPEC: CliSpec = jj_spec!(
+    shorts: "rodmAB",
+    longs: [
+        OPT_MESSAGE,
+        OPT_INSERT_AFTER,
+        OPT_AFTER,
+        OPT_INSERT_BEFORE,
+        OPT_BEFORE,
+    ],
+);
 
-const NEW_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REV_SHORT,
-        FLAG_ONTO_SHORT,
-        FLAG_DEST_SHORT,
-        FLAG_MESSAGE_SHORT,
-        FLAG_MESSAGE_LONG,
-        FLAG_AFTER_SHORT,
-        FLAG_INSERT_AFTER_LONG,
-        FLAG_AFTER_LONG,
-        FLAG_BEFORE_SHORT,
-        FLAG_INSERT_BEFORE_LONG,
-        FLAG_BEFORE_LONG,
-    ),
-};
+const METAEDIT_SPEC: CliSpec = jj_spec!(
+    shorts: "rm",
+    longs: [OPT_REVISION, OPT_REVISIONS, OPT_MESSAGE, OPT_AUTHOR, "author-timestamp"],
+);
 
-const METAEDIT_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_REVS_LONG,
-        FLAG_MESSAGE_SHORT,
-        FLAG_MESSAGE_LONG,
-        FLAG_AUTHOR_LONG,
-        "--author-timestamp",
-    ),
-};
-
-const GIT_PUSH_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-    options_with_values: jj_options_with_values!(
-        FLAG_REMOTE_LONG,
-        FLAG_BOOKMARK_SHORT,
-        FLAG_BOOKMARK_LONG,
-        FLAG_BRANCH_LONG,
-        FLAG_TAG_SHORT,
-        FLAG_TAG_LONG,
-        FLAG_REV_SHORT,
-        FLAG_REV_LONG,
-        FLAG_REVS_LONG,
-        FLAG_CHANGE_SHORT,
-        FLAG_CHANGE_LONG,
-        FLAG_NAMED_LONG,
-        FLAG_OPTION_SHORT,
-        FLAG_OPTION_LONG,
-    ),
-};
+const GIT_PUSH_SPEC: CliSpec = jj_spec!(
+    shorts: "btrco",
+    longs: [
+        "remote",
+        OPT_BOOKMARK,
+        OPT_BRANCH,
+        OPT_TAG,
+        OPT_REVISION,
+        OPT_REVISIONS,
+        OPT_CHANGE,
+        OPT_NAMED,
+        "option",
+    ],
+);
 
 /// Repository override parsed from `-R` / `--repository` on a `jj` invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -366,13 +326,13 @@ pub enum JjInteractivity {
 
 /// Parsed Jujutsu CLI invocation with subcommand-specific option classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JjInvocation {
+pub struct JjInvocation<'a> {
     subcommand: JjSubcommand,
-    args: ParsedArgs,
+    args: ParsedCli<'a>,
     repository: JjRepository,
 }
 
-impl JjInvocation {
+impl<'a> JjInvocation<'a> {
     /// Repository override passed via `-R` / `--repository`, or [`JjRepository::Inherited`].
     #[must_use]
     pub const fn repository(&self) -> &JjRepository {
@@ -381,15 +341,14 @@ impl JjInvocation {
 
     /// Target revision of a `jj edit` invocation, defaulting to `"@"` when omitted.
     #[must_use]
-    pub fn edit_target_revision(&self) -> Option<&str> {
+    pub fn edit_target_revision(&self) -> Option<&'a str> {
         if self.subcommand != JjSubcommand::Edit {
             return None;
         }
         Some(
             self.args
-                .get_option(FLAG_REV_SHORT)
-                .or_else(|| self.args.get_option(FLAG_REV_LONG))
-                .or_else(|| self.args.positionals.get(1).map(String::as_str))
+                .first_value(REV_FLAGS)
+                .or_else(|| self.args.positionals().get(1).map(|arg| arg.text.as_str()))
                 .unwrap_or(WORKING_COPY_REV),
         )
     }
@@ -398,28 +357,26 @@ impl JjInvocation {
     /// `None` when it is not `jj log` or is already bounded.
     #[must_use]
     pub fn suggest_bounded_log(&self) -> Option<String> {
-        if self.subcommand != JjSubcommand::Log
-            || self.args.has_flag(FLAG_LIMIT_SHORT)
-            || self.args.has_flag(FLAG_LIMIT_LONG)
-        {
+        if self.subcommand != JjSubcommand::Log || self.args.has_any_flag(LIMIT_FLAGS) {
             return None;
         }
 
-        let mut revisions = [FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG]
-            .into_iter()
-            .flat_map(|flag| self.args.option_values(flag))
-            .map(String::as_str)
-            .peekable();
-
-        if revisions.peek().is_none() {
-            if self.args.positionals.len() <= 1 {
+        let revisions = self.args.values(REVS_FLAGS);
+        if revisions.is_empty() {
+            let trailing = self.args.positionals().get(1..)?;
+            if trailing.is_empty() {
                 return None;
             }
-            let trailing_paths = self.args.positionals[1..].join(" ");
-            return Some(format!("jj log -r 'mutable()' {trailing_paths}"));
+            let trailing_paths: Vec<&str> = trailing.iter().map(|arg| arg.text.as_str()).collect();
+            return Some(format!(
+                "jj log -r 'mutable()' {}",
+                trailing_paths.join(" ")
+            ));
         }
 
-        let first_unbounded = revisions.find(|revset| !is_bounded_jj_revset(revset))?;
+        let first_unbounded = revisions
+            .into_iter()
+            .find(|revset| !is_bounded_jj_revset(revset))?;
         let bounded_revset = intersect_revset_with_mutable(first_unbounded);
         Some(format!("jj log -r '{bounded_revset}'"))
     }
@@ -428,7 +385,7 @@ impl JjInvocation {
     /// editor unconditionally or conditionally when combining multiple described commits.
     #[must_use]
     pub fn interactivity(&self) -> Option<JjInteractivity> {
-        if self.args.has_flag(FLAG_EDITOR)
+        if self.args.has_flag(FlagName::Long("editor"))
             && let Some(replacement) = self.editor_free_suggestion()
         {
             return Some(JjInteractivity::AlwaysInteractive { replacement });
@@ -439,22 +396,19 @@ impl JjInvocation {
             });
         }
         if self.subcommand == JjSubcommand::Resolve {
-            let is_non_interactive_resolve = self.args.has_flag(FLAG_LIST_SHORT)
-                || self.args.has_flag(FLAG_LIST_LONG)
+            let is_non_interactive_resolve = self.args.has_any_flag(LIST_FLAGS)
                 || matches!(
-                    self.args.last_option_value(&[FLAG_TOOL]),
+                    self.args.last_option_value(&[FlagName::Long(OPT_TOOL)]),
                     LastOptionValue::Value {
                         text: ":ours" | ":theirs",
-                        has_expansion: false,
+                        is_dynamic: false,
                     }
                 );
             return (!is_non_interactive_resolve).then_some(JjInteractivity::AlwaysInteractive {
                 replacement: SUGGEST_RESOLVE,
             });
         }
-        if (self.args.has_flag(FLAG_INTERACTIVE_SHORT)
-            || self.args.has_flag(FLAG_INTERACTIVE_LONG)
-            || self.args.has_flag(FLAG_TOOL))
+        if self.args.has_any_flag(INTERACTIVE_OR_TOOL_FLAGS)
             && let Some(replacement) = self.non_interactive_diff_suggestion()
         {
             return Some(JjInteractivity::AlwaysInteractive { replacement });
@@ -462,8 +416,9 @@ impl JjInvocation {
         match self.subcommand {
             JjSubcommand::Describe
                 if !self.has_message_flag()
-                    && !self.args.has_flag(FLAG_STDIN)
-                    && !self.args.has_flag(FLAG_NO_EDIT) =>
+                    && !self
+                        .args
+                        .has_any_flag(&[FlagName::Long("stdin"), FlagName::Long("no-edit")]) =>
             {
                 Some(JjInteractivity::AlwaysInteractive {
                     replacement: SUGGEST_DESCRIBE,
@@ -474,7 +429,9 @@ impl JjInvocation {
                     replacement: SUGGEST_COMMIT,
                 })
             }
-            JjSubcommand::Split if !self.has_message_flag() || self.args.positionals.len() <= 1 => {
+            JjSubcommand::Split
+                if !self.has_message_flag() || self.args.positionals().len() <= 1 =>
+            {
                 Some(JjInteractivity::AlwaysInteractive {
                     replacement: SUGGEST_SPLIT,
                 })
@@ -512,22 +469,23 @@ impl JjInvocation {
     /// mode.
     #[must_use]
     pub fn pushed_mutable_revset(&self) -> Option<String> {
-        if self.subcommand != JjSubcommand::GitPush || self.args.has_flag(FLAG_DRY_RUN_LONG) {
+        if self.subcommand != JjSubcommand::GitPush || self.args.has_flag(FlagName::Long("dry-run"))
+        {
             return None;
         }
 
         let mut target_terms: Vec<String> = self
-            .collect_option_values(&[FLAG_CHANGE_SHORT, FLAG_CHANGE_LONG])
+            .args
+            .values(CHANGE_FLAGS)
             .into_iter()
             .map(str::to_owned)
             .collect();
 
-        for revision in self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG])
-        {
+        for revision in self.args.values(REVS_FLAGS) {
             target_terms.push(format!("({revision}) & (bookmarks() | tags())"));
         }
 
-        for named in self.args.option_values(FLAG_NAMED_LONG) {
+        for named in self.args.values(&[FlagName::Long(OPT_NAMED)]) {
             if let Some((_, revision)) = named.split_once('=') {
                 let trimmed = revision.trim();
                 if !trimmed.is_empty() {
@@ -536,15 +494,16 @@ impl JjInvocation {
             }
         }
 
-        for bookmark in
-            self.collect_option_values(&[FLAG_BOOKMARK_SHORT, FLAG_BOOKMARK_LONG, FLAG_BRANCH_LONG])
-        {
+        for bookmark in self.args.values(BOOKMARK_FLAGS) {
             if let Some(expression) = format_bookmark_revset(bookmark) {
                 target_terms.push(expression);
             }
         }
 
-        if self.args.has_flag(FLAG_ALL_LONG) || self.args.has_flag(FLAG_TRACKED_LONG) {
+        if self
+            .args
+            .has_any_flag(&[FlagName::Long("all"), FlagName::Long("tracked")])
+        {
             target_terms.push("bookmarks()".to_owned());
         }
 
@@ -553,14 +512,7 @@ impl JjInvocation {
             return Some(format!("::({union}) & mutable()"));
         }
 
-        if self.args.has_flag(FLAG_DELETED_LONG)
-            || self.args.has_flag(FLAG_TAG_SHORT)
-            || self.args.has_flag(FLAG_TAG_LONG)
-            || self.args.has_flag(FLAG_NAMED_LONG)
-            || self.args.has_flag(FLAG_BOOKMARK_SHORT)
-            || self.args.has_flag(FLAG_BOOKMARK_LONG)
-            || self.args.has_flag(FLAG_BRANCH_LONG)
-        {
+        if self.args.has_any_flag(EXPLICIT_PUSH_SELECTOR_FLAGS) {
             return None;
         }
 
@@ -568,16 +520,11 @@ impl JjInvocation {
     }
 
     fn squash_combined_description_interactivity(&self) -> Option<JjInteractivity> {
-        if self.has_message_flag()
-            || self.args.has_flag(FLAG_USE_DEST_SHORT)
-            || self.args.has_flag(FLAG_USE_DEST_LONG)
-            || self.args.has_flag(FLAG_KEEP_EMPTIED_SHORT)
-            || self.args.has_flag(FLAG_KEEP_EMPTIED_LONG)
-        {
+        if self.has_message_flag() || self.args.has_any_flag(SKIP_COMBINED_DESCRIPTION_FLAGS) {
             return None;
         }
 
-        let from_values = self.collect_option_values(&[FLAG_FROM_SHORT, FLAG_FROM_LONG]);
+        let from_values = self.args.values(FROM_FLAGS);
         if self.has_squash_new_commit_location() {
             return (!from_values.is_empty() && from_values != [WORKING_COPY_REV]).then(|| {
                 JjInteractivity::IfMultipleDescribed {
@@ -587,8 +534,7 @@ impl JjInvocation {
             });
         }
 
-        let into_values =
-            self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_INTO_LONG, FLAG_TO_LONG]);
+        let into_values = self.args.values(INTO_FLAGS);
         if !from_values.is_empty() || !into_values.is_empty() {
             let sources = if from_values.is_empty() {
                 vec![WORKING_COPY_REV]
@@ -611,11 +557,7 @@ impl JjInvocation {
             });
         }
 
-        let source = self
-            .args
-            .get_option(FLAG_REV_SHORT)
-            .or_else(|| self.args.get_option(FLAG_REV_LONG))
-            .unwrap_or(WORKING_COPY_REV);
+        let source = self.args.first_value(REV_FLAGS).unwrap_or(WORKING_COPY_REV);
         let parent = format_parent_revset(source);
         Some(JjInteractivity::IfMultipleDescribed {
             revset: format!("({source}) | ({parent})"),
@@ -624,26 +566,31 @@ impl JjInvocation {
     }
 
     fn explicit_or_positional_revisions(&self) -> String {
-        let mut revisions =
-            self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG]);
-        revisions.extend(self.args.positionals.iter().skip(1).map(String::as_str));
+        let mut revisions = self.args.values(REVS_FLAGS);
+        revisions.extend(
+            self.args
+                .positionals()
+                .iter()
+                .skip(1)
+                .map(|arg| arg.text.as_str()),
+        );
         format_single_or_union(&revisions, WORKING_COPY_REV)
     }
 
     fn diffedit_rewritten_revset(&self) -> String {
-        let to_values = self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_TO_LONG]);
+        let to_values = self.args.values(DIFFEDIT_TO_FLAGS);
         if !to_values.is_empty() {
             return format_single_or_union(&to_values, WORKING_COPY_REV);
         }
-        let rev_values = self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG]);
+        let rev_values = self.args.values(REV_FLAGS);
         format_single_or_union(&rev_values, WORKING_COPY_REV)
     }
 
     fn resolve_rewritten_revset(&self) -> Option<String> {
-        if self.args.has_flag(FLAG_LIST_SHORT) || self.args.has_flag(FLAG_LIST_LONG) {
+        if self.args.has_any_flag(LIST_FLAGS) {
             return None;
         }
-        let rev_values = self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG]);
+        let rev_values = self.args.values(REV_FLAGS);
         Some(format_single_or_union(&rev_values, WORKING_COPY_REV))
     }
 
@@ -654,7 +601,7 @@ impl JjInvocation {
     }
 
     fn squash_rewritten_revset(&self) -> String {
-        let from_values = self.collect_option_values(&[FLAG_FROM_SHORT, FLAG_FROM_LONG]);
+        let from_values = self.args.values(FROM_FLAGS);
         if self.has_squash_new_commit_location() {
             let mut terms: Vec<String> = if from_values.is_empty() {
                 vec![WORKING_COPY_REV.to_owned()]
@@ -665,8 +612,7 @@ impl JjInvocation {
             return format_revset_terms(&terms);
         }
 
-        let into_values =
-            self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_INTO_LONG, FLAG_TO_LONG]);
+        let into_values = self.args.values(INTO_FLAGS);
         if !from_values.is_empty() || !into_values.is_empty() {
             let sources = if from_values.is_empty() {
                 vec![WORKING_COPY_REV]
@@ -683,42 +629,33 @@ impl JjInvocation {
             return join_revset_union(&combined);
         }
 
-        let source = self
-            .args
-            .get_option(FLAG_REV_SHORT)
-            .or_else(|| self.args.get_option(FLAG_REV_LONG))
-            .unwrap_or(WORKING_COPY_REV);
+        let source = self.args.first_value(REV_FLAGS).unwrap_or(WORKING_COPY_REV);
         let parent = format_parent_revset(source);
         format!("({source}) | ({parent})")
     }
 
     fn split_rewritten_revset(&self) -> String {
-        let rev = self
-            .args
-            .get_option(FLAG_REV_SHORT)
-            .or_else(|| self.args.get_option(FLAG_REV_LONG))
-            .unwrap_or(WORKING_COPY_REV);
+        let rev = self.args.first_value(REV_FLAGS).unwrap_or(WORKING_COPY_REV);
         let mut terms = vec![rev.to_owned()];
         self.extend_insert_location_terms(&mut terms);
         format_revset_terms(&terms)
     }
 
     fn restore_rewritten_revset(&self) -> String {
-        let changes_in = self.collect_option_values(&[FLAG_CHANGES_IN_SHORT, FLAG_CHANGES_IN_LONG]);
+        let changes_in = self.args.values(CHANGES_IN_FLAGS);
         if !changes_in.is_empty() {
             return format_single_or_union(&changes_in, WORKING_COPY_REV);
         }
-        let into = self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_INTO_LONG, FLAG_TO_LONG]);
+        let into = self.args.values(INTO_FLAGS);
         format_single_or_union(&into, WORKING_COPY_REV)
     }
 
     fn absorb_rewritten_revset(&self) -> String {
         let from = self
             .args
-            .get_option(FLAG_FROM_SHORT)
-            .or_else(|| self.args.get_option(FLAG_FROM_LONG))
+            .first_value(FROM_FLAGS)
             .unwrap_or(WORKING_COPY_REV);
-        let into = self.collect_option_values(&[FLAG_INTO_SHORT, FLAG_INTO_LONG, FLAG_TO_LONG]);
+        let into = self.args.values(INTO_FLAGS);
         if from == WORKING_COPY_REV && into.is_empty() {
             MUTABLE_ANCESTORS_OF_WORKING_COPY.to_owned()
         } else if into.is_empty() {
@@ -730,7 +667,7 @@ impl JjInvocation {
     }
 
     fn fix_rewritten_revset(&self) -> String {
-        let sources = self.collect_option_values(&[FLAG_SOURCE_SHORT, FLAG_SOURCE_LONG]);
+        let sources = self.args.values(SOURCE_FLAGS);
         if sources.is_empty() {
             "reachable(@, mutable())".to_owned()
         } else {
@@ -739,10 +676,9 @@ impl JjInvocation {
     }
 
     fn rebase_rewritten_revset(&self) -> String {
-        let sources = self.collect_option_values(&[FLAG_SOURCE_SHORT, FLAG_SOURCE_LONG]);
-        let revisions =
-            self.collect_option_values(&[FLAG_REV_SHORT, FLAG_REV_LONG, FLAG_REVS_LONG]);
-        let mut branches = self.collect_option_values(&[FLAG_BRANCH_SHORT, FLAG_BRANCH_LONG]);
+        let sources = self.args.values(SOURCE_FLAGS);
+        let revisions = self.args.values(REVS_FLAGS);
+        let mut branches = self.args.values(BRANCH_FLAGS);
         if sources.is_empty() && revisions.is_empty() && branches.is_empty() {
             branches.push(WORKING_COPY_REV);
         }
@@ -769,47 +705,28 @@ impl JjInvocation {
     /// Computes the `new_parent_ids` revset matching Jujutsu's `compute_commit_location`:
     /// `-o`/`-d` takes precedence, then `-A` (even when paired with `-B`), then `({before})-`.
     fn rebase_new_parent_revset(&self) -> Option<String> {
-        let onto = self.collect_option_values(&[
-            FLAG_ONTO_SHORT,
-            FLAG_ONTO_LONG,
-            FLAG_DEST_SHORT,
-            FLAG_DEST_LONG,
-        ]);
+        let onto = self.args.values(ONTO_FLAGS);
         if !onto.is_empty() {
             return Some(format_single_or_union(&onto, WORKING_COPY_REV));
         }
-        let after = self.collect_option_values(&[
-            FLAG_AFTER_SHORT,
-            FLAG_INSERT_AFTER_LONG,
-            FLAG_AFTER_LONG,
-        ]);
+        let after = self.args.values(AFTER_FLAGS);
         if !after.is_empty() {
             return Some(format_single_or_union(&after, WORKING_COPY_REV));
         }
-        let before = self.collect_option_values(&[
-            FLAG_BEFORE_SHORT,
-            FLAG_INSERT_BEFORE_LONG,
-            FLAG_BEFORE_LONG,
-        ]);
+        let before = self.args.values(BEFORE_FLAGS);
         (!before.is_empty())
             .then(|| format_parent_revset(&format_single_or_union(&before, WORKING_COPY_REV)))
     }
 
     fn extend_insert_location_terms(&self, terms: &mut Vec<String>) {
-        let before_values = self.collect_option_values(&[
-            FLAG_BEFORE_SHORT,
-            FLAG_INSERT_BEFORE_LONG,
-            FLAG_BEFORE_LONG,
-        ]);
+        let before_values = self.args.values(BEFORE_FLAGS);
         if !before_values.is_empty() {
             for before in before_values {
                 terms.push(before.to_owned());
             }
             return;
         }
-        for after in
-            self.collect_option_values(&[FLAG_AFTER_SHORT, FLAG_INSERT_AFTER_LONG, FLAG_AFTER_LONG])
-        {
+        for after in self.args.values(AFTER_FLAGS) {
             terms.push(format!("({after})+ & mutable()"));
         }
     }
@@ -839,40 +756,19 @@ impl JjInvocation {
     }
 
     fn has_message_flag(&self) -> bool {
-        self.args.has_flag(FLAG_MESSAGE_SHORT) || self.args.has_flag(FLAG_MESSAGE_LONG)
+        self.args.has_any_flag(MESSAGE_FLAGS)
     }
 
     fn has_squash_new_commit_location(&self) -> bool {
-        [
-            FLAG_ONTO_SHORT,
-            FLAG_ONTO_LONG,
-            FLAG_DEST_SHORT,
-            FLAG_DEST_LONG,
-            FLAG_AFTER_SHORT,
-            FLAG_INSERT_AFTER_LONG,
-            FLAG_AFTER_LONG,
-            FLAG_BEFORE_SHORT,
-            FLAG_INSERT_BEFORE_LONG,
-            FLAG_BEFORE_LONG,
-        ]
-        .iter()
-        .any(|flag| self.args.has_flag(flag))
-    }
-
-    fn collect_option_values(&self, flags: &[&str]) -> Vec<&str> {
-        flags
-            .iter()
-            .flat_map(|flag| self.args.option_values(flag))
-            .map(String::as_str)
-            .collect()
+        self.args.has_any_flag(SQUASH_NEW_COMMIT_FLAGS)
     }
 }
 
 /// Parses `command` as a Jujutsu subcommand invocation using two-stage subcommand dispatch,
 /// returning `None` for non-`jj` commands or `--help` / `--version` queries.
 #[must_use]
-pub fn parse_jj_invocation(command: &InterceptedCommand) -> Option<JjInvocation> {
-    if command.program.has_expansion || command.program_base_name() != JJ_PROGRAM {
+pub fn parse_jj_invocation(command: &InterceptedCommand) -> Option<JjInvocation<'_>> {
+    if command.program.is_dynamic() || command.program_base_name() != JJ_PROGRAM {
         return None;
     }
 
@@ -886,19 +782,13 @@ pub fn parse_jj_invocation(command: &InterceptedCommand) -> Option<JjInvocation>
         })
         .flatten();
     let subcommand = JjSubcommand::from_tokens(subcommand_name, secondary_name);
-    let args = command.parse_args(subcommand.schema());
-    if JJ_STANDALONE_FLAGS.iter().any(|flag| args.has_flag(flag)) {
-        return None;
-    }
+    let args = subcommand.spec().parse(&command.arguments)?;
 
-    let repository = match args.last_option_value(&[FLAG_REPO_SHORT, FLAG_REPO_LONG]) {
+    let repository = match args.last_option_value(REPO_FLAGS) {
         LastOptionValue::Absent => JjRepository::Inherited,
         LastOptionValue::MissingValue => JjRepository::Unresolvable,
-        LastOptionValue::Value {
-            text,
-            has_expansion,
-        } => {
-            if has_expansion || text.is_empty() {
+        LastOptionValue::Value { text, is_dynamic } => {
+            if is_dynamic || text.is_empty() {
                 JjRepository::Unresolvable
             } else {
                 JjRepository::Static(PathBuf::from(text))
@@ -958,25 +848,25 @@ impl JjSubcommand {
         }
     }
 
-    const fn schema(self) -> &'static ProgramCliSchema {
+    const fn spec(self) -> &'static CliSpec {
         match self {
-            Self::Edit => &EDIT_SCHEMA,
-            Self::Log => &LOG_SCHEMA,
-            Self::Describe => &DESCRIBE_SCHEMA,
-            Self::Commit => &COMMIT_SCHEMA,
-            Self::Split => &SPLIT_SCHEMA,
-            Self::Squash => &SQUASH_SCHEMA,
-            Self::Diffedit => &DIFFEDIT_SCHEMA,
-            Self::Resolve => &RESOLVE_SCHEMA,
-            Self::Restore => &RESTORE_SCHEMA,
-            Self::Absorb => &ABSORB_SCHEMA,
-            Self::Abandon => &ABANDON_SCHEMA,
-            Self::Rebase => &REBASE_SCHEMA,
-            Self::Fix => &FIX_SCHEMA,
-            Self::New => &NEW_SCHEMA,
-            Self::Metaedit => &METAEDIT_SCHEMA,
-            Self::GitPush => &GIT_PUSH_SCHEMA,
-            Self::Other => &GLOBAL_ONLY_SCHEMA,
+            Self::Edit => &EDIT_SPEC,
+            Self::Log => &LOG_SPEC,
+            Self::Describe => &DESCRIBE_SPEC,
+            Self::Commit => &COMMIT_SPEC,
+            Self::Split => &SPLIT_SPEC,
+            Self::Squash => &SQUASH_SPEC,
+            Self::Diffedit => &DIFFEDIT_SPEC,
+            Self::Resolve => &RESOLVE_SPEC,
+            Self::Restore => &RESTORE_SPEC,
+            Self::Absorb => &ABSORB_SPEC,
+            Self::Abandon => &ABANDON_SPEC,
+            Self::Rebase => &REBASE_SPEC,
+            Self::Fix => &FIX_SPEC,
+            Self::New => &NEW_SPEC,
+            Self::Metaedit => &METAEDIT_SPEC,
+            Self::GitPush => &GIT_PUSH_SPEC,
+            Self::Other => &GLOBAL_ONLY_SPEC,
         }
     }
 }
@@ -1028,6 +918,16 @@ mod tests {
         "jj status -R ../ws2",
         None,
         JjRepository::Static(PathBuf::from("../ws2"))
+    )]
+    #[case::edit_dynamic_lone_dash_flag_ignored(
+        r#"jj edit -"$FLAG""#,
+        Some("@"),
+        JjRepository::Inherited
+    )]
+    #[case::edit_dynamic_double_dash_flag_ignored(
+        r#"jj edit --"$FLAG""#,
+        Some("@"),
+        JjRepository::Inherited
     )]
     fn test_parse_jj_edit_and_repository(
         #[case] raw: &str,

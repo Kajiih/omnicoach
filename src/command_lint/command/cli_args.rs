@@ -1,18 +1,222 @@
 //! Zero-copy declarative CLI option and positional classification over [`CommandArg`] slices.
 
-use std::collections::HashMap;
-use std::iter::Peekable;
-use std::slice::Iter;
-
 use super::model::{CommandArg, InterceptedCommand};
 use crate::diagnostic::SourceSpan;
 
 const OPTION_TERMINATOR: &str = "--";
 
+/// How a CLI scanner handles options that appear after the first positional operand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::command_lint) enum OptionOrder {
+    /// GNU / `clap` style: options and positional operands may be freely interleaved until `--`.
+    Permute,
+    /// POSIX / subcommand-prefix style: the first positional operand ends option scanning,
+    /// treating all remaining tokens (including `-flag` and `--`) as positional arguments.
+    StopAtFirstPositional,
+}
+
+/// Compile-time declarative option layout for statically classifying a `&[CommandArg]` slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::command_lint) struct CliSpec {
+    /// Whether option scanning continues past positional arguments (`Permute`) or stops at the
+    /// first positional (`StopAtFirstPositional`).
+    pub(in crate::command_lint) order: OptionOrder,
+    /// Single-character short options that consume a required value (for example `"Rm"`).
+    pub(in crate::command_lint) short_values: &'static str,
+    /// Whether attached short option values strip a leading `=` (`-r=main` -> `"main"`), as in
+    /// `clap`-based CLIs (`jj`, `cargo`, `uv`). POSIX tools (`sed -e=`) set this to `false`.
+    pub(in crate::command_lint) short_equals_values: bool,
+    /// Long option names (without leading `--`) that consume a required value (for example
+    /// `&["repository", "message"]`).
+    pub(in crate::command_lint) long_values: &'static [&'static str],
+    /// Single-character short flags (such as `"hV"`) whose presence aborts classification (`None`).
+    pub(in crate::command_lint) abort_shorts: &'static str,
+    /// Long option names without leading `--` (such as `&["help", "version"]`) whose presence
+    /// aborts classification (`None`).
+    pub(in crate::command_lint) abort_longs: &'static [&'static str],
+}
+
+impl CliSpec {
+    /// Baseline permissive `CliSpec` (`Permute`, no value-taking or aborting flags) for `const`
+    /// struct-update literals (`CliSpec { short_values: "R", ..CliSpec::DEFAULT }`).
+    pub(in crate::command_lint) const DEFAULT: Self = Self {
+        order: OptionOrder::Permute,
+        short_values: "",
+        short_equals_values: false,
+        long_values: &[],
+        abort_shorts: "",
+        abort_longs: &[],
+    };
+
+    /// Classifies `arguments` without cloning strings, returning `None` if an `abort_shorts` or
+    /// `abort_longs` flag is encountered before option scanning ends.
+    #[must_use]
+    pub(in crate::command_lint) fn parse<'a>(
+        &self,
+        arguments: &'a [CommandArg],
+    ) -> Option<ParsedCli<'a>> {
+        let mut positionals = Vec::new();
+        let mut occurrences = Vec::new();
+        let mut double_dash_positional_index = None;
+        let mut iter = arguments.iter();
+
+        while let Some(argument) = iter.next() {
+            let static_prefix = argument.static_prefix();
+            let full_text = argument.text.as_str();
+
+            if !argument.is_dynamic() && full_text == OPTION_TERMINATOR {
+                double_dash_positional_index = Some(positionals.len());
+                positionals.extend(iter.by_ref());
+                break;
+            }
+
+            if let Some(after_dashes) = static_prefix.strip_prefix(OPTION_TERMINATOR) {
+                if after_dashes.is_empty() || after_dashes.starts_with('=') {
+                    if self.order == OptionOrder::StopAtFirstPositional {
+                        positionals.push(argument);
+                        positionals.extend(iter.by_ref());
+                        break;
+                    }
+                    continue;
+                }
+                if self.parse_long_option(argument, after_dashes, &mut iter, &mut occurrences)?
+                    == CliOptionOutcome::StopAsPositional
+                {
+                    positionals.push(argument);
+                    positionals.extend(iter.by_ref());
+                    break;
+                }
+                continue;
+            }
+
+            if let Some(short_prefix) = static_prefix.strip_prefix('-')
+                && (!short_prefix.is_empty() || argument.is_dynamic())
+            {
+                if self.parse_short_cluster(argument, short_prefix, &mut iter, &mut occurrences)?
+                    == CliOptionOutcome::StopAsPositional
+                {
+                    positionals.push(argument);
+                    positionals.extend(iter.by_ref());
+                    break;
+                }
+                continue;
+            }
+
+            positionals.push(argument);
+            if self.order == OptionOrder::StopAtFirstPositional {
+                positionals.extend(iter.by_ref());
+                break;
+            }
+        }
+
+        Some(ParsedCli {
+            positionals,
+            occurrences,
+            double_dash_positional_index,
+        })
+    }
+
+    fn parse_long_option<'a>(
+        &self,
+        argument: &'a CommandArg,
+        after_dashes: &'a str,
+        iter: &mut std::slice::Iter<'a, CommandArg>,
+        occurrences: &mut Vec<OptionOccurrence<'a>>,
+    ) -> Option<CliOptionOutcome> {
+        if let Some((long_name, _)) = after_dashes.split_once('=') {
+            if self.abort_longs.contains(&long_name) {
+                return None;
+            }
+            let value_offset = OPTION_TERMINATOR.len() + long_name.len() + 1;
+            let value_text = &argument.text[value_offset..];
+            occurrences.push(OptionOccurrence {
+                flag: FlagName::Long(long_name),
+                value: Some(OptValue {
+                    text: value_text,
+                    is_dynamic: argument.is_dynamic(),
+                }),
+            });
+            return Some(CliOptionOutcome::Continue);
+        }
+
+        if argument.is_dynamic() {
+            return Some(if self.order == OptionOrder::StopAtFirstPositional {
+                CliOptionOutcome::StopAsPositional
+            } else {
+                CliOptionOutcome::Continue
+            });
+        }
+
+        let long_name = after_dashes;
+        if self.abort_longs.contains(&long_name) {
+            return None;
+        }
+
+        let value = if self.long_values.contains(&long_name) {
+            consume_next_value_token(iter)
+        } else {
+            None
+        };
+        occurrences.push(OptionOccurrence {
+            flag: FlagName::Long(long_name),
+            value,
+        });
+        Some(CliOptionOutcome::Continue)
+    }
+
+    fn parse_short_cluster<'a>(
+        &self,
+        argument: &'a CommandArg,
+        short_prefix: &'a str,
+        iter: &mut std::slice::Iter<'a, CommandArg>,
+        occurrences: &mut Vec<OptionOccurrence<'a>>,
+    ) -> Option<CliOptionOutcome> {
+        let full_text = argument.text.as_str();
+        let initial_len = occurrences.len();
+        for (rel_offset, character) in short_prefix.char_indices() {
+            if self.abort_shorts.contains(character) {
+                return None;
+            }
+            if self.short_values.contains(character) {
+                let byte_after_char = 1 + rel_offset + character.len_utf8();
+                let value = if byte_after_char < full_text.len() {
+                    let raw_attached = &full_text[byte_after_char..];
+                    let value_text = if self.short_equals_values {
+                        raw_attached.strip_prefix('=').unwrap_or(raw_attached)
+                    } else {
+                        raw_attached
+                    };
+                    Some(OptValue {
+                        text: value_text,
+                        is_dynamic: argument.is_dynamic(),
+                    })
+                } else {
+                    consume_next_value_token(iter)
+                };
+                occurrences.push(OptionOccurrence {
+                    flag: FlagName::Short(character),
+                    value,
+                });
+                return Some(CliOptionOutcome::Continue);
+            }
+            occurrences.push(OptionOccurrence {
+                flag: FlagName::Short(character),
+                value: None,
+            });
+        }
+        if self.order == OptionOrder::StopAtFirstPositional && argument.is_dynamic() {
+            occurrences.truncate(initial_len);
+            return Some(CliOptionOutcome::StopAsPositional);
+        }
+        Some(CliOptionOutcome::Continue)
+    }
+}
+
 /// Compile-time declarative option layout active before a CLI subcommand token.
 ///
-/// Pre-subcommand scanning always stops at the first positional operand so options after
-/// `<SUBCOMMAND>` are never consumed as leading global flags.
+/// Pre-subcommand scanning always stops at the first positional operand
+/// ([`OptionOrder::StopAtFirstPositional`]), making option permutation past the subcommand
+/// unrepresentable by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::command_lint) struct PreSubcommandSpec {
     /// Single-character short options that consume a required value (for example `"R"`).
@@ -36,121 +240,48 @@ impl PreSubcommandSpec {
         abort_longs: &[],
     };
 
-    /// Classifies leading options before the first positional without cloning strings, returning
-    /// `None` if an `abort_shorts` or `abort_longs` flag is encountered before option scanning ends.
-    #[must_use]
-    pub(in crate::command_lint) fn parse<'a>(
-        &self,
-        arguments: &'a [CommandArg],
-    ) -> Option<ParsedCli<'a>> {
-        let mut positionals = Vec::new();
-        let mut double_dash_positional_index = None;
-        let mut iter = arguments.iter();
-
-        while let Some(argument) = iter.next() {
-            let static_prefix = argument.static_prefix();
-            let full_text = argument.text.as_str();
-
-            if !argument.is_dynamic() && full_text == OPTION_TERMINATOR {
-                double_dash_positional_index = Some(positionals.len());
-                positionals.extend(iter.by_ref());
-                break;
-            }
-
-            if let Some(after_dashes) = static_prefix.strip_prefix(OPTION_TERMINATOR) {
-                if after_dashes.is_empty()
-                    || after_dashes.starts_with('=')
-                    || self.parse_long_option(argument, after_dashes, &mut iter)?
-                        == CliOptionOutcome::StopAsPositional
-                {
-                    positionals.push(argument);
-                    positionals.extend(iter.by_ref());
-                    break;
-                }
-                continue;
-            }
-
-            if let Some(short_prefix) = static_prefix.strip_prefix('-')
-                && (!short_prefix.is_empty() || argument.is_dynamic())
-            {
-                if self.parse_short_cluster(argument, short_prefix, &mut iter)?
-                    == CliOptionOutcome::StopAsPositional
-                {
-                    positionals.push(argument);
-                    positionals.extend(iter.by_ref());
-                    break;
-                }
-                continue;
-            }
-
-            positionals.push(argument);
-            positionals.extend(iter.by_ref());
-            break;
+    const fn into_cli_spec(self) -> CliSpec {
+        CliSpec {
+            order: OptionOrder::StopAtFirstPositional,
+            short_values: self.short_values,
+            long_values: self.long_values,
+            abort_shorts: self.abort_shorts,
+            abort_longs: self.abort_longs,
+            ..CliSpec::DEFAULT
         }
-
-        Some(ParsedCli {
-            positionals,
-            double_dash_positional_index,
-        })
-    }
-
-    fn parse_long_option<'a>(
-        &self,
-        argument: &'a CommandArg,
-        after_dashes: &'a str,
-        iter: &mut Iter<'a, CommandArg>,
-    ) -> Option<CliOptionOutcome> {
-        if let Some((long_name, _)) = after_dashes.split_once('=') {
-            if self.abort_longs.contains(&long_name) {
-                return None;
-            }
-            return Some(CliOptionOutcome::Continue);
-        }
-
-        if argument.is_dynamic() {
-            return Some(CliOptionOutcome::StopAsPositional);
-        }
-
-        if self.abort_longs.contains(&after_dashes) {
-            return None;
-        }
-
-        if self.long_values.contains(&after_dashes) {
-            skip_next_value_token(iter);
-        }
-        Some(CliOptionOutcome::Continue)
-    }
-
-    fn parse_short_cluster<'a>(
-        &self,
-        argument: &'a CommandArg,
-        short_prefix: &'a str,
-        iter: &mut Iter<'a, CommandArg>,
-    ) -> Option<CliOptionOutcome> {
-        let full_text = argument.text.as_str();
-        for (rel_offset, character) in short_prefix.char_indices() {
-            if self.abort_shorts.contains(character) {
-                return None;
-            }
-            if self.short_values.contains(character) {
-                let byte_after_char = 1 + rel_offset + character.len_utf8();
-                if byte_after_char >= full_text.len() {
-                    skip_next_value_token(iter);
-                }
-                return Some(CliOptionOutcome::Continue);
-            }
-        }
-        if argument.is_dynamic() {
-            return Some(CliOptionOutcome::StopAsPositional);
-        }
-        Some(CliOptionOutcome::Continue)
     }
 }
 
-/// Borrowed classification of positional operands produced by [`PreSubcommandSpec`].
+/// Result of looking up the last CLI occurrence across one or more option flag aliases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::command_lint) enum LastOptionValue<'a> {
+    /// None of the queried flag aliases appeared in the command arguments.
+    Absent,
+    /// The last matching flag appeared without a value operand (dangling before `--` or EOF).
+    MissingValue,
+    /// The last matching flag carried a value operand and its shell-expansion marker.
+    Value {
+        /// Unquoted option value slice.
+        text: &'a str,
+        /// `true` if the value contained dynamic shell expansions (`$VAR`, `$(...)`, `~`).
+        is_dynamic: bool,
+    },
+}
+
+/// Borrowed identifier of a short (`-c`) or long (`--config`) CLI option flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::command_lint) enum FlagName<'a> {
+    /// Single-character short flag without the leading `-` (for example `'R'` for `-R`).
+    Short(char),
+    /// Long flag name without the leading `--` (for example `"repository"` for `--repository`).
+    Long(&'a str),
+}
+
+/// Borrowed classification of positional operands and option occurrences produced by [`CliSpec`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::command_lint) struct ParsedCli<'a> {
     positionals: Vec<&'a CommandArg>,
+    occurrences: Vec<OptionOccurrence<'a>>,
     double_dash_positional_index: Option<usize>,
 }
 
@@ -161,16 +292,68 @@ impl<'a> ParsedCli<'a> {
         &self.positionals
     }
 
+    /// Returns `true` if `flag` (such as `FlagName::Short('u')` or `FlagName::Long("no-edit")`)
+    /// was provided.
+    #[must_use]
+    pub(in crate::command_lint) fn has_flag(&self, flag: FlagName<'_>) -> bool {
+        self.occurrences.iter().any(|entry| entry.flag == flag)
+    }
+
+    /// Returns `true` if any flag in `flags` was provided.
+    #[must_use]
+    pub(in crate::command_lint) fn has_any_flag(&self, flags: &[FlagName<'_>]) -> bool {
+        self.occurrences
+            .iter()
+            .any(|entry| flags.contains(&entry.flag))
+    }
+
+    /// Returns the first value provided across `flags` in command-line order, if any.
+    #[must_use]
+    pub(in crate::command_lint) fn first_value(&self, flags: &[FlagName<'_>]) -> Option<&'a str> {
+        self.occurrences
+            .iter()
+            .filter(|entry| flags.contains(&entry.flag))
+            .find_map(|entry| entry.value.map(|val| val.text))
+    }
+
+    /// Returns all values provided across `flags` in command-line order.
+    #[must_use]
+    pub(in crate::command_lint) fn values(&self, flags: &[FlagName<'_>]) -> Vec<&'a str> {
+        self.occurrences
+            .iter()
+            .filter(|entry| flags.contains(&entry.flag))
+            .filter_map(|entry| entry.value.map(|val| val.text))
+            .collect()
+    }
+
+    /// Returns the last occurrence across `flags` in command-line order, preserving missing-value
+    /// and shell-expansion state.
+    #[must_use]
+    pub(in crate::command_lint) fn last_option_value(
+        &self,
+        flags: &[FlagName<'_>],
+    ) -> LastOptionValue<'a> {
+        let Some(occurrence) = self
+            .occurrences
+            .iter()
+            .rev()
+            .find(|entry| flags.contains(&entry.flag))
+        else {
+            return LastOptionValue::Absent;
+        };
+        occurrence
+            .value
+            .map_or(LastOptionValue::MissingValue, |val| {
+                LastOptionValue::Value {
+                    text: val.text,
+                    is_dynamic: val.is_dynamic,
+                }
+            })
+    }
+
     const fn has_double_dash_before_first_positional(&self) -> bool {
         matches!(self.double_dash_positional_index, Some(0))
     }
-}
-
-/// Schema defining a program's command-line interface options layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::command_lint) struct ProgramCliSchema {
-    /// Option flags that consume a value (e.g. `["-R", "--repository"]`).
-    pub(in crate::command_lint) options_with_values: &'static [&'static str],
 }
 
 /// Leading-flag layout for a `clap`-style subcommand CLI where global flags (`Arg::global(true)`)
@@ -200,7 +383,7 @@ impl SubcommandCliSchema {
         start_index: usize,
     ) -> Option<usize> {
         let slice = arguments.get(start_index..)?;
-        let parsed = self.pre_subcommand_spec.parse(slice)?;
+        let parsed = self.pre_subcommand_spec.into_cli_spec().parse(slice)?;
         if parsed.has_double_dash_before_first_positional() {
             return None;
         }
@@ -212,95 +395,6 @@ impl SubcommandCliSchema {
             .iter()
             .position(|candidate| std::ptr::eq(candidate, first_positional))
             .map(|offset| start_index + offset)
-    }
-}
-
-/// Result of looking up the last CLI occurrence of one or more option flag aliases.
-// TODO: Isn't there a more ricr/standar way to do things like memoization?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::command_lint) enum LastOptionValue<'a> {
-    /// None of the queried flag aliases appeared in the command arguments.
-    Absent,
-    /// A queried flag appeared without a value operand (for example, dangling before `--` or EOF).
-    MissingValue,
-    /// The last matching flag carried a value token and its shell-expansion marker.
-    Value {
-        /// Unquoted option value text.
-        text: &'a str,
-        /// `true` if the value token contained shell expansions (`$VAR`, `$(...)`, `~`).
-        has_expansion: bool,
-    },
-}
-
-/// Parsed command-line positional arguments and option flags.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::command_lint) struct ParsedArgs {
-    /// Positional arguments in order (e.g. `["edit", "@-"]`), excluding options and their values.
-    pub(in crate::command_lint) positionals: Vec<String>,
-    options: HashMap<String, Vec<String>>,
-    occurrences: Vec<OptionOccurrence>,
-}
-
-impl ParsedArgs {
-    /// Parses `arguments` according to `schema`.
-    #[must_use]
-    pub(in crate::command_lint) fn parse(
-        arguments: &[CommandArg],
-        schema: &ProgramCliSchema,
-    ) -> Self {
-        ArgParser::new(arguments, schema.options_with_values).parse()
-    }
-
-    /// Returns `true` if a boolean or key-value option flag was provided.
-    #[must_use]
-    pub(in crate::command_lint) fn has_flag(&self, flag: &str) -> bool {
-        self.options.contains_key(flag)
-    }
-
-    /// Returns the first value associated with `option`, if present.
-    #[must_use]
-    pub(in crate::command_lint) fn get_option(&self, option: &str) -> Option<&str> {
-        self.options
-            .get(option)
-            .and_then(|values| values.first())
-            .map(String::as_str)
-    }
-
-    /// Returns all values associated with `option` in the order they were provided.
-    #[must_use]
-    pub(in crate::command_lint) fn option_values(&self, option: &str) -> &[String] {
-        self.options.get(option).map_or(&[], Vec::as_slice)
-    }
-
-    /// Returns the last occurrence across `flags` in command-line order, preserving missing-value
-    /// and shell-expansion state.
-    #[must_use]
-    pub(in crate::command_lint) fn last_option_value(&self, flags: &[&str]) -> LastOptionValue<'_> {
-        let Some(occurrence) = self
-            .occurrences
-            .iter()
-            .rev()
-            .find(|entry| flags.contains(&entry.flag.as_str()))
-        else {
-            return LastOptionValue::Absent;
-        };
-        occurrence
-            .value
-            .as_ref()
-            .map_or(LastOptionValue::MissingValue, |value| {
-                LastOptionValue::Value {
-                    text: &value.text,
-                    has_expansion: value.has_expansion,
-                }
-            })
-    }
-}
-
-impl InterceptedCommand {
-    /// Classifies `self.arguments` into positional arguments and option key-values using `schema`.
-    #[must_use]
-    pub(in crate::command_lint) fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
-        ParsedArgs::parse(&self.arguments, schema)
     }
 }
 
@@ -377,149 +471,10 @@ pub(in crate::command_lint) fn extract_leading_global_flags(
     })
 }
 
-struct ArgParser<'a> {
-    arguments_iter: Peekable<Iter<'a, CommandArg>>,
-    options_with_values: &'a [&'a str],
-    positionals: Vec<String>,
-    options: HashMap<String, Vec<String>>,
-    occurrences: Vec<OptionOccurrence>,
-}
-
-impl<'a> ArgParser<'a> {
-    fn new(arguments: &'a [CommandArg], options_with_values: &'a [&'a str]) -> Self {
-        Self {
-            arguments_iter: arguments.iter().peekable(),
-            options_with_values,
-            positionals: Vec::new(),
-            options: HashMap::new(),
-            occurrences: Vec::new(),
-        }
-    }
-
-    fn parse(mut self) -> ParsedArgs {
-        let mut options_terminated = false;
-
-        while let Some(argument) = self.arguments_iter.next() {
-            let text = argument.text.as_str();
-            if options_terminated {
-                self.positionals.push(argument.text.clone());
-                continue;
-            }
-
-            if text == "--" {
-                options_terminated = true;
-                continue;
-            }
-
-            if text.starts_with("--") {
-                self.parse_long_option(argument);
-            } else if text.starts_with('-') && text.len() > 1 {
-                self.parse_short_option_cluster(argument);
-            } else {
-                self.positionals.push(argument.text.clone());
-            }
-        }
-
-        ParsedArgs {
-            positionals: self.positionals,
-            options: self.options,
-            occurrences: self.occurrences,
-        }
-    }
-
-    fn parse_long_option(&mut self, argument: &CommandArg) {
-        let text = argument.text.as_str();
-        if let Some((flag, option_value)) = text.split_once('=') {
-            if self.options_with_values.contains(&flag) {
-                self.record_option_value(
-                    flag.to_string(),
-                    option_value.to_string(),
-                    argument.has_expansion,
-                );
-            } else {
-                self.record_flag(text.to_string());
-            }
-        } else if self.options_with_values.contains(&text)
-            && self
-                .arguments_iter
-                .peek()
-                .is_some_and(|next_arg| next_arg.text != "--")
-        {
-            if let Some(option_value) = self.arguments_iter.next() {
-                self.record_option_value(
-                    text.to_string(),
-                    option_value.text.clone(),
-                    option_value.has_expansion,
-                );
-            }
-        } else {
-            self.record_flag(text.to_string());
-        }
-    }
-
-    fn parse_short_option_cluster(&mut self, argument: &CommandArg) {
-        let text = argument.text.as_str();
-        let mut char_indices = text.char_indices().skip(1).peekable();
-
-        while let Some((byte_offset, character)) = char_indices.next() {
-            let flag = format!("-{character}");
-            let is_option_with_value = self.options_with_values.contains(&flag.as_str());
-
-            if is_option_with_value {
-                if char_indices.peek().is_some() {
-                    let rest = &text[byte_offset + character.len_utf8()..];
-                    let attached_value = rest.strip_prefix('=').unwrap_or(rest).to_string();
-                    self.record_option_value(flag, attached_value, argument.has_expansion);
-                    break;
-                }
-                let next_is_value = self
-                    .arguments_iter
-                    .peek()
-                    .is_some_and(|next_arg| next_arg.text != "--");
-                if next_is_value && let Some(option_value) = self.arguments_iter.next() {
-                    self.record_option_value(
-                        flag,
-                        option_value.text.clone(),
-                        option_value.has_expansion,
-                    );
-                    break;
-                }
-            }
-            self.record_flag(flag);
-        }
-    }
-
-    fn record_flag(&mut self, flag: String) {
-        self.options.entry(flag.clone()).or_default();
-        self.occurrences
-            .push(OptionOccurrence { flag, value: None });
-    }
-
-    fn record_option_value(&mut self, flag: String, text: String, has_expansion: bool) {
-        self.options
-            .entry(flag.clone())
-            .or_default()
-            .push(text.clone());
-        self.occurrences.push(OptionOccurrence {
-            flag,
-            value: Some(OptionValue {
-                text,
-                has_expansion,
-            }),
-        });
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct OptionOccurrence {
-    flag: String,
-    value: Option<OptionValue>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct OptionValue {
-    text: String,
-    has_expansion: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OptionOccurrence<'a> {
+    flag: FlagName<'a>,
+    value: Option<OptValue<'a>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -528,14 +483,31 @@ enum CliOptionOutcome {
     StopAsPositional,
 }
 
-fn skip_next_value_token(iter: &mut Iter<'_, CommandArg>) {
+/// Borrowed value operand consumed by a CLI option, preserving shell-expansion state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OptValue<'a> {
+    /// Unquoted option value slice borrowed from [`CommandArg::text`].
+    text: &'a str,
+    /// `true` when the value (or the attached value tail of a partially dynamic flag token)
+    /// contains dynamic shell expansions.
+    is_dynamic: bool,
+}
+
+fn consume_next_value_token<'a>(
+    iter: &mut std::slice::Iter<'a, CommandArg>,
+) -> Option<OptValue<'a>> {
     let next_is_value = iter
         .as_slice()
         .first()
         .is_some_and(|next_arg| next_arg.is_dynamic() || next_arg.text != OPTION_TERMINATOR);
-    if next_is_value {
-        let _ = iter.next();
+    if !next_is_value {
+        return None;
     }
+    let next_arg = iter.next()?;
+    Some(OptValue {
+        text: &next_arg.text,
+        is_dynamic: next_arg.is_dynamic(),
+    })
 }
 
 fn is_valid_subcommand_token(argument: &CommandArg) -> bool {
@@ -553,17 +525,21 @@ mod tests {
     use super::super::ParsedCommand;
     use super::*;
 
-    const TEST_PROGRAM_SCHEMA: ProgramCliSchema = ProgramCliSchema {
-        options_with_values: &[
-            "-C",
-            "--directory",
-            "--config",
-            "-r",
-            "--revision",
-            "--revisions",
-            "-n",
-            "--limit",
-        ],
+    const TEST_CLAP_SPEC: CliSpec = CliSpec {
+        short_values: "Crn",
+        short_equals_values: true,
+        long_values: &["directory", "config", "revision", "revisions", "limit"],
+        abort_shorts: "hV",
+        abort_longs: &["help", "version"],
+        ..CliSpec::DEFAULT
+    };
+
+    const TEST_POSIX_STOP_SPEC: CliSpec = CliSpec {
+        order: OptionOrder::StopAtFirstPositional,
+        short_values: "e",
+        short_equals_values: false,
+        abort_longs: &["help"],
+        ..CliSpec::DEFAULT
     };
 
     const TEST_SUBCOMMAND_SCHEMAS: &[SubcommandCliSchema] = &[
@@ -589,6 +565,158 @@ mod tests {
         },
     ];
 
+    fn positional_texts<'a>(parsed: &ParsedCli<'a>) -> Vec<&'a str> {
+        parsed
+            .positionals()
+            .iter()
+            .map(|arg| arg.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn test_parse_permute_options_and_positionals() {
+        let cmd = InterceptedCommand::parse_all("tool check -C . --config myconf target").remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(positional_texts(&parsed), vec!["check", "target"]);
+        assert_eq!(parsed.first_value(&[FlagName::Short('C')]), Some("."));
+        assert_eq!(
+            parsed.first_value(&[FlagName::Long("config")]),
+            Some("myconf")
+        );
+    }
+
+    #[test]
+    fn test_parse_stop_at_first_positional_and_literal_short_equals() {
+        let cmd = InterceptedCommand::parse_all("sed -e= script.sed -i --help file.txt").remove(0);
+        let parsed = TEST_POSIX_STOP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(parsed.first_value(&[FlagName::Short('e')]), Some("="));
+        assert_eq!(
+            positional_texts(&parsed),
+            vec!["script.sed", "-i", "--help", "file.txt"]
+        );
+        assert!(!parsed.has_flag(FlagName::Short('i')));
+    }
+
+    #[test]
+    fn test_parse_boolean_long_flag_and_stdin_dash() {
+        let cmd = InterceptedCommand::parse_all("tool --quiet check -").remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(positional_texts(&parsed), vec!["check", "-"]);
+        assert!(parsed.has_flag(FlagName::Long("quiet")));
+        assert!(parsed.has_any_flag(&[FlagName::Short('q'), FlagName::Long("quiet")]));
+    }
+
+    #[test]
+    fn test_parse_equals_syntax_and_glued_shorts() {
+        let cmd =
+            InterceptedCommand::parse_all("tool check --directory=. -C/ws -r=abc123").remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(positional_texts(&parsed), vec!["check"]);
+        assert_eq!(
+            parsed.first_value(&[FlagName::Long("directory")]),
+            Some(".")
+        );
+        assert_eq!(parsed.first_value(&[FlagName::Short('C')]), Some("/ws"));
+        assert_eq!(parsed.first_value(&[FlagName::Short('r')]), Some("abc123"));
+    }
+
+    #[test]
+    fn test_parse_posix_clustering_with_values() {
+        let cmd = InterceptedCommand::parse_all("tool check -am -qC /ws -vC/alt -qr=abc123 target")
+            .remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(positional_texts(&parsed), vec!["check", "target"]);
+        assert_eq!(
+            parsed.occurrences,
+            vec![
+                OptionOccurrence {
+                    flag: FlagName::Short('a'),
+                    value: None,
+                },
+                OptionOccurrence {
+                    flag: FlagName::Short('m'),
+                    value: None,
+                },
+                OptionOccurrence {
+                    flag: FlagName::Short('q'),
+                    value: None,
+                },
+                OptionOccurrence {
+                    flag: FlagName::Short('C'),
+                    value: Some(OptValue {
+                        text: "/ws",
+                        is_dynamic: false,
+                    }),
+                },
+                OptionOccurrence {
+                    flag: FlagName::Short('v'),
+                    value: None,
+                },
+                OptionOccurrence {
+                    flag: FlagName::Short('C'),
+                    value: Some(OptValue {
+                        text: "/alt",
+                        is_dynamic: false,
+                    }),
+                },
+                OptionOccurrence {
+                    flag: FlagName::Short('q'),
+                    value: None,
+                },
+                OptionOccurrence {
+                    flag: FlagName::Short('r'),
+                    value: Some(OptValue {
+                        text: "abc123",
+                        is_dynamic: false,
+                    }),
+                },
+            ]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::short_dynamic_abort_tail(r#"tool -q"$VERBOSE" status"#, &[FlagName::Short('q')])]
+    #[case::short_dynamic_value_tail(r#"tool -C"$C_VAR" status"#, &[FlagName::Short('C')])]
+    #[case::long_dynamic_abort_tail(r#"tool --help"$SUFFIX" status"#, &[])]
+    #[case::long_dynamic_value_tail(r#"tool --directory"$SUFFIX"=x status"#, &[])]
+    #[case::dynamic_double_dash(r#"tool --"$VAR" status"#, &[])]
+    #[case::empty_long_name_equals("tool --=foo status", &[])]
+    fn test_parse_dynamic_option_prefixes_and_malformed_double_dash(
+        #[case] script: &str,
+        #[case] expected_flags: &[FlagName<'_>],
+    ) {
+        let cmd = InterceptedCommand::parse_all(script).remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        let actual_flags: Vec<FlagName<'_>> =
+            parsed.occurrences.iter().map(|entry| entry.flag).collect();
+        assert_eq!(positional_texts(&parsed), vec!["status"]);
+        assert_eq!(actual_flags, expected_flags);
+    }
+
+    #[test]
+    fn test_short_dynamic_value_tail_captures_dynamic_value() {
+        let cmd = InterceptedCommand::parse_all(r#"tool -C"$C_VAR" status"#).remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(
+            parsed.last_option_value(&[FlagName::Short('C')]),
+            LastOptionValue::Value {
+                text: "$C_VAR",
+                is_dynamic: true,
+            }
+        );
+    }
+
+    #[test]
+    fn test_first_value_respects_cli_order_across_aliases() {
+        let cmd =
+            InterceptedCommand::parse_all("tool --directory /first list -C /second").remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(
+            parsed.first_value(&[FlagName::Short('C'), FlagName::Long("directory")]),
+            Some("/first")
+        );
+    }
+
     #[test]
     fn test_find_subcommand_index_stops_before_subcommand_help_flag() {
         let schema = SubcommandCliSchema {
@@ -604,114 +732,53 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_args_basic() {
-        let cmd = InterceptedCommand::parse_all("tool check -C . --config myconf target").remove(0);
-        let schema = ProgramCliSchema {
-            options_with_values: &["-C", "--directory", "--config"],
-        };
-        let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["check", "target"]);
-        assert_eq!(args.get_option("-C"), Some("."));
-        assert_eq!(args.get_option("--config"), Some("myconf"));
+    fn test_parse_posix_terminator_and_dash_prefixed_values() {
+        let cmd = InterceptedCommand::parse_all("tool -r -wip --revision -second -- -R").remove(0);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(positional_texts(&parsed), vec!["-R"]);
+        assert_eq!(
+            parsed.values(&[FlagName::Short('r'), FlagName::Long("revision")]),
+            vec!["-wip", "-second"]
+        );
+        assert!(!parsed.has_flag(FlagName::Short('R')));
     }
 
-    #[test]
-    fn test_parse_args_boolean_long_flag_and_stdin_dash() {
-        let cmd = InterceptedCommand::parse_all("tool --quiet check -").remove(0);
-        let schema = ProgramCliSchema {
-            options_with_values: &["-C"],
-        };
-        let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["check", "-"]);
-        assert!(args.has_flag("--quiet"));
-    }
-
-    #[test]
-    fn test_parse_args_equals_syntax() {
-        let cmd = InterceptedCommand::parse_all("tool check --directory=. target").remove(0);
-        let schema = ProgramCliSchema {
-            options_with_values: &["-C", "--directory"],
-        };
-        let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["check", "target"]);
-        assert_eq!(args.get_option("--directory"), Some("."));
-    }
-
-    #[test]
-    fn test_parse_args_posix_clustering() {
-        let cmd = InterceptedCommand::parse_all("tool check -am").remove(0);
-        let schema = ProgramCliSchema {
-            options_with_values: &[],
-        };
-        let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["check"]);
-        assert!(args.has_flag("-a"));
-        assert!(args.has_flag("-m"));
-    }
-
-    #[test]
-    fn test_parse_args_posix_glued_value_and_short_equals() {
-        let cmd = InterceptedCommand::parse_all("tool check -C. -r=abc123").remove(0);
-        let args = cmd.parse_args(&TEST_PROGRAM_SCHEMA);
-        assert_eq!(args.positionals, vec!["check"]);
-        assert_eq!(args.get_option("-C"), Some("."));
-        assert_eq!(args.get_option("-r"), Some("abc123"));
-    }
-
-    #[test]
-    fn test_parse_args_posix_cluster_with_value() {
-        let cmd = InterceptedCommand::parse_all("git commit -am msg").remove(0);
-        let schema = ProgramCliSchema {
-            options_with_values: &["-m"],
-        };
-        let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["commit"]);
-        assert!(args.has_flag("-a"));
-        assert_eq!(args.get_option("-m"), Some("msg"));
-    }
-
-    #[test]
-    fn test_parse_args_posix_terminator() {
-        let cmd = InterceptedCommand::parse_all("git log -- -R").remove(0);
-        let schema = ProgramCliSchema {
-            options_with_values: &["-R"],
-        };
-        let args_term = cmd.parse_args(&schema);
-        assert_eq!(args_term.positionals, vec!["log", "-R"]);
-        assert!(!args_term.has_flag("-R"));
-        assert_eq!(args_term.get_option("-R"), None);
-    }
-
-    #[test]
-    fn test_parse_args_consumes_dash_prefixed_option_values() {
-        let cmd =
-            InterceptedCommand::parse_all("tool note -m -wip --message -second target").remove(0);
-        let schema = ProgramCliSchema {
-            options_with_values: &["-m", "--message"],
-        };
-        let args = cmd.parse_args(&schema);
-        assert_eq!(args.positionals, vec!["note", "target"]);
-        assert_eq!(args.get_option("-m"), Some("-wip"));
-        assert_eq!(args.get_option("--message"), Some("-second"));
+    #[rstest::rstest]
+    #[case::abort_short("-h")]
+    #[case::abort_clustered_short("-qV")]
+    #[case::abort_long("--help")]
+    #[case::abort_long_equals("--version=1")]
+    fn test_parse_returns_none_on_abort_flags(#[case] flag: &str) {
+        let script = format!("tool {flag} status");
+        let cmd = InterceptedCommand::parse_all(&script).remove(0);
+        assert_eq!(TEST_CLAP_SPEC.parse(&cmd.arguments), None);
     }
 
     #[rstest::rstest]
     #[case::absent("tool list", LastOptionValue::Absent)]
     #[case::short_after_long_wins(
         "tool --directory /first list -C /second",
-        LastOptionValue::Value { text: "/second", has_expansion: false }
+        LastOptionValue::Value { text: "/second", is_dynamic: false }
     )]
     #[case::long_after_short_wins(
         "tool -C /first list --directory=/second",
-        LastOptionValue::Value { text: "/second", has_expansion: false }
+        LastOptionValue::Value { text: "/second", is_dynamic: false }
     )]
-    #[case::expanded_value_marked(
+    #[case::separate_expanded_value_marked(
         r#"tool list -C "$WS""#,
-        LastOptionValue::Value { text: "$WS", has_expansion: true }
+        LastOptionValue::Value { text: "$WS", is_dynamic: true }
+    )]
+    #[case::attached_short_expanded_value_marked(
+        r#"tool list -C"$WS""#,
+        LastOptionValue::Value { text: "$WS", is_dynamic: true }
+    )]
+    #[case::attached_long_expanded_value_marked(
+        r#"tool list --directory="$WS/sub""#,
+        LastOptionValue::Value { text: "$WS/sub", is_dynamic: true }
     )]
     #[case::tilde_value_marked(
         "tool list -C ~/ws",
-        LastOptionValue::Value { text: "~/ws", has_expansion: true }
+        LastOptionValue::Value { text: "~/ws", is_dynamic: true }
     )]
     #[case::dangling_flag_before_terminator(
         "tool list -C -- target",
@@ -722,19 +789,31 @@ mod tests {
         #[case] expected: LastOptionValue<'_>,
     ) {
         let cmd = InterceptedCommand::parse_all(script).remove(0);
-        let args = cmd.parse_args(&TEST_PROGRAM_SCHEMA);
-        assert_eq!(args.last_option_value(&["-C", "--directory"]), expected);
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(
+            parsed.last_option_value(&[FlagName::Short('C'), FlagName::Long("directory")]),
+            expected
+        );
     }
 
     #[test]
-    fn test_option_values_returns_all_occurrences_in_order() {
-        let parsed = ParsedCommand::new("tool list -r a --revision b -rc --revisions=d -r=e");
-        let cmd = &parsed.commands()[0];
-        let args = cmd.parse_args(&TEST_PROGRAM_SCHEMA);
-        assert_eq!(args.option_values("-r"), &["a", "c", "e"]);
-        assert_eq!(args.option_values("--revision"), &["b"]);
-        assert_eq!(args.option_values("--revisions"), &["d"]);
-        assert_eq!(args.option_values("--limit"), &[] as &[String]);
+    fn test_values_returns_all_occurrences_in_cli_order() {
+        let parsed_cmd = ParsedCommand::new("tool list -r a --revision b -rc --revisions=d -r=e");
+        let cmd = &parsed_cmd.commands()[0];
+        let parsed = TEST_CLAP_SPEC.parse(&cmd.arguments).unwrap();
+        assert_eq!(parsed.values(&[FlagName::Short('r')]), vec!["a", "c", "e"]);
+        assert_eq!(
+            parsed.values(&[
+                FlagName::Short('r'),
+                FlagName::Long("revision"),
+                FlagName::Long("revisions"),
+            ]),
+            vec!["a", "b", "c", "d", "e"]
+        );
+        assert_eq!(
+            parsed.values(&[FlagName::Long("limit")]),
+            Vec::<&str>::new()
+        );
     }
 
     #[rstest::rstest]
@@ -825,19 +904,53 @@ mod tests {
         assert_eq!(actual_tuple, expected, "script: `{script}`");
     }
 
-    #[test]
-    fn test_pre_subcommand_spec_keeps_dynamic_lone_dash_as_positional() {
-        let cmd = InterceptedCommand::parse_all(r#"tool -"$FLAG" target"#).remove(0);
-        let actual: Option<Vec<&str>> =
-            PreSubcommandSpec::DEFAULT
-                .parse(&cmd.arguments)
-                .map(|parsed| {
-                    parsed
-                        .positionals()
-                        .iter()
-                        .map(|arg| arg.text.as_str())
-                        .collect()
-                });
-        assert_eq!(actual.as_deref(), Some(&["-$FLAG", "target"][..]));
+    #[rstest::rstest]
+    #[case::permute_ignores_dynamic_lone_dash(
+        OptionOrder::Permute,
+        r#"tool -"$FLAG" target"#,
+        &["target"]
+    )]
+    #[case::permute_matches_dynamic_double_dash(
+        OptionOrder::Permute,
+        r#"tool --"$FLAG" target"#,
+        &["target"]
+    )]
+    #[case::permute_keeps_literal_single_dash(
+        OptionOrder::Permute,
+        "tool - target",
+        &["-", "target"]
+    )]
+    #[case::permute_keeps_dynamic_lone_dash_after_terminator(
+        OptionOrder::Permute,
+        r#"tool -- -"$FLAG" target"#,
+        &["-$FLAG", "target"]
+    )]
+    #[case::stop_at_first_positional_keeps_dynamic_lone_dash(
+        OptionOrder::StopAtFirstPositional,
+        r#"tool -"$FLAG" target"#,
+        &["-$FLAG", "target"]
+    )]
+    fn test_cli_spec_parse_dynamic_lone_dash(
+        #[case] order: OptionOrder,
+        #[case] script: &str,
+        #[case] expected_positionals: &[&str],
+    ) {
+        let spec = CliSpec {
+            order,
+            ..CliSpec::DEFAULT
+        };
+        let cmd = InterceptedCommand::parse_all(script).remove(0);
+        let actual: Option<Vec<&str>> = spec.parse(&cmd.arguments).map(|parsed| {
+            parsed
+                .positionals()
+                .iter()
+                .map(|arg| arg.text.as_str())
+                .collect()
+        });
+        assert_eq!(
+            actual.as_deref(),
+            Some(expected_positionals),
+            "script: `{script}`"
+        );
     }
 }

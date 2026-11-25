@@ -105,7 +105,7 @@ fn check_command(
 
 fn find_interactive_replacement(
     command: &InterceptedCommand,
-    invocation: &JjInvocation,
+    invocation: &JjInvocation<'_>,
     env: &CommandEnv<'_>,
 ) -> Option<&'static str> {
     match invocation.interactivity()? {
