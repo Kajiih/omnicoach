@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::iter::Peekable;
 use std::slice::Iter;
 
-use super::shell::{CommandArg, InterceptedCommand};
+use super::model::{CommandArg, InterceptedCommand};
 use crate::diagnostic::SourceSpan;
 
 /// Schema defining a program's command-line interface options layout.
@@ -408,7 +408,7 @@ fn classify_short_cluster(argument: &str, schema: &SubcommandCliSchema) -> Short
 
 #[cfg(test)]
 mod tests {
-    use super::super::shell::ParsedCommand;
+    use super::super::ParsedCommand;
     use super::*;
 
     const TEST_PROGRAM_SCHEMA: ProgramCliSchema = ProgramCliSchema {

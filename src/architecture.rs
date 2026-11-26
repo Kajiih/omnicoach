@@ -198,8 +198,9 @@ define_architecture! {
     // --- Command Safety Domain (`command_lint`) ---
     /// The intercepted command parser: shell input to commands and their arguments (`command_lint::command`).
     CommandLintCommand  => [Diagnostic, Paths] (owns_external: ["brush_parser"]) (modules: {
-        shell => [],
-        cli_args => [shell],
+        model => [],
+        cli_args => [model],
+        shell => [model],
     }),
     /// Jujutsu CLI parsing, revset boundedness, and repository state queries (`command_lint::vcs`).
     CommandLintVcs      => [CommandLintCommand] (modules: {

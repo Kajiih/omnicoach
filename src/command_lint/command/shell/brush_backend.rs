@@ -12,10 +12,11 @@ use brush_parser::ast::{
 use brush_parser::word::{WordPiece, WordPieceWithSource};
 use brush_parser::{ParserOptions, SourceSpan as BrushSpan, Token, TokenizerOptions};
 
-use super::{
+use super::super::model::{
     CommandArg, CommandRedirect, EnvAssignment, InterceptedCommand, RedirectKind, RedirectTarget,
-    ShellScope, SourceSpan, WorkingDirState,
+    ShellScope, WorkingDirState,
 };
+use crate::diagnostic::SourceSpan;
 
 /// Tokenizes and parses `source` into `out`, returning `true` when the script is valid shell syntax.
 pub(super) fn parse_script_into(
