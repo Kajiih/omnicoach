@@ -366,7 +366,21 @@ mod tests {
             SourceSpan::new(4, 20)
         );
         assert_eq!(parsed.commands()[1].arguments[0].text, "a b");
-        assert!(parsed.commands()[1].arguments[1].has_expansion);
+        assert!(parsed.commands()[1].arguments[1].is_dynamic());
+    }
+
+    #[test]
+    fn test_word_static_prefix_tracks_first_expansion_boundary() {
+        let parsed = ParsedCommand::new(r#"cmd foo"$BAR" foo"$A"bar"$B" 'a'\ b"$Z" "$ONLY""#);
+        let actual: Vec<(&str, bool)> = parsed.commands()[0]
+            .arguments
+            .iter()
+            .map(|arg| (arg.static_prefix(), arg.is_dynamic()))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![("foo", true), ("foo", true), ("a b", true), ("", true)]
+        );
     }
 
     #[test]

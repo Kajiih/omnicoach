@@ -7,7 +7,7 @@ mod model;
 mod shell;
 
 pub(super) use self::cli_args::{
-    LastOptionValue, ParsedArgs, ProgramCliSchema, SubcommandCliSchema,
+    LastOptionValue, ParsedArgs, PreSubcommandSpec, ProgramCliSchema, SubcommandCliSchema,
     extract_leading_global_flags,
 };
 pub use self::model::{

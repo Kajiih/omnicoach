@@ -1,4 +1,4 @@
-//! CLI option and positional argument classification over parsed [`CommandArg`] words.
+//! Zero-copy declarative CLI option and positional classification over [`CommandArg`] slices.
 
 use std::collections::HashMap;
 use std::iter::Peekable;
@@ -7,11 +7,170 @@ use std::slice::Iter;
 use super::model::{CommandArg, InterceptedCommand};
 use crate::diagnostic::SourceSpan;
 
+const OPTION_TERMINATOR: &str = "--";
+
+/// Compile-time declarative option layout active before a CLI subcommand token.
+///
+/// Pre-subcommand scanning always stops at the first positional operand so options after
+/// `<SUBCOMMAND>` are never consumed as leading global flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::command_lint) struct PreSubcommandSpec {
+    /// Single-character short options that consume a required value (for example `"R"`).
+    pub(in crate::command_lint) short_values: &'static str,
+    /// Long option names (without leading `--`) that consume a required value (for example
+    /// `&["repository", "config"]`).
+    pub(in crate::command_lint) long_values: &'static [&'static str],
+    /// Single-character short flags (such as `"hV"`) whose presence aborts classification (`None`).
+    pub(in crate::command_lint) abort_shorts: &'static str,
+    /// Long option names without leading `--` (such as `&["help", "version"]`) whose presence
+    /// aborts classification (`None`).
+    pub(in crate::command_lint) abort_longs: &'static [&'static str],
+}
+
+impl PreSubcommandSpec {
+    /// Baseline empty `PreSubcommandSpec` for `const` struct-update literals.
+    pub(in crate::command_lint) const DEFAULT: Self = Self {
+        short_values: "",
+        long_values: &[],
+        abort_shorts: "",
+        abort_longs: &[],
+    };
+
+    /// Classifies leading options before the first positional without cloning strings, returning
+    /// `None` if an `abort_shorts` or `abort_longs` flag is encountered before option scanning ends.
+    #[must_use]
+    pub(in crate::command_lint) fn parse<'a>(
+        &self,
+        arguments: &'a [CommandArg],
+    ) -> Option<ParsedCli<'a>> {
+        let mut positionals = Vec::new();
+        let mut double_dash_positional_index = None;
+        let mut iter = arguments.iter();
+
+        while let Some(argument) = iter.next() {
+            let static_prefix = argument.static_prefix();
+            let full_text = argument.text.as_str();
+
+            if !argument.is_dynamic() && full_text == OPTION_TERMINATOR {
+                double_dash_positional_index = Some(positionals.len());
+                positionals.extend(iter.by_ref());
+                break;
+            }
+
+            if let Some(after_dashes) = static_prefix.strip_prefix(OPTION_TERMINATOR) {
+                if after_dashes.is_empty()
+                    || after_dashes.starts_with('=')
+                    || self.parse_long_option(argument, after_dashes, &mut iter)?
+                        == CliOptionOutcome::StopAsPositional
+                {
+                    positionals.push(argument);
+                    positionals.extend(iter.by_ref());
+                    break;
+                }
+                continue;
+            }
+
+            if let Some(short_prefix) = static_prefix.strip_prefix('-')
+                && (!short_prefix.is_empty() || argument.is_dynamic())
+            {
+                if self.parse_short_cluster(argument, short_prefix, &mut iter)?
+                    == CliOptionOutcome::StopAsPositional
+                {
+                    positionals.push(argument);
+                    positionals.extend(iter.by_ref());
+                    break;
+                }
+                continue;
+            }
+
+            positionals.push(argument);
+            positionals.extend(iter.by_ref());
+            break;
+        }
+
+        Some(ParsedCli {
+            positionals,
+            double_dash_positional_index,
+        })
+    }
+
+    fn parse_long_option<'a>(
+        &self,
+        argument: &'a CommandArg,
+        after_dashes: &'a str,
+        iter: &mut Iter<'a, CommandArg>,
+    ) -> Option<CliOptionOutcome> {
+        if let Some((long_name, _)) = after_dashes.split_once('=') {
+            if self.abort_longs.contains(&long_name) {
+                return None;
+            }
+            return Some(CliOptionOutcome::Continue);
+        }
+
+        if argument.is_dynamic() {
+            return Some(CliOptionOutcome::StopAsPositional);
+        }
+
+        if self.abort_longs.contains(&after_dashes) {
+            return None;
+        }
+
+        if self.long_values.contains(&after_dashes) {
+            skip_next_value_token(iter);
+        }
+        Some(CliOptionOutcome::Continue)
+    }
+
+    fn parse_short_cluster<'a>(
+        &self,
+        argument: &'a CommandArg,
+        short_prefix: &'a str,
+        iter: &mut Iter<'a, CommandArg>,
+    ) -> Option<CliOptionOutcome> {
+        let full_text = argument.text.as_str();
+        for (rel_offset, character) in short_prefix.char_indices() {
+            if self.abort_shorts.contains(character) {
+                return None;
+            }
+            if self.short_values.contains(character) {
+                let byte_after_char = 1 + rel_offset + character.len_utf8();
+                if byte_after_char >= full_text.len() {
+                    skip_next_value_token(iter);
+                }
+                return Some(CliOptionOutcome::Continue);
+            }
+        }
+        if argument.is_dynamic() {
+            return Some(CliOptionOutcome::StopAsPositional);
+        }
+        Some(CliOptionOutcome::Continue)
+    }
+}
+
+/// Borrowed classification of positional operands produced by [`PreSubcommandSpec`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::command_lint) struct ParsedCli<'a> {
+    positionals: Vec<&'a CommandArg>,
+    double_dash_positional_index: Option<usize>,
+}
+
+impl<'a> ParsedCli<'a> {
+    /// Positional arguments in command-line order, excluding recognized options and their values.
+    #[must_use]
+    pub(in crate::command_lint) fn positionals(&self) -> &[&'a CommandArg] {
+        &self.positionals
+    }
+
+    const fn has_double_dash_before_first_positional(&self) -> bool {
+        matches!(self.double_dash_positional_index, Some(0))
+    }
+}
+
 /// Schema defining a program's command-line interface options layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProgramCliSchema {
+pub(in crate::command_lint) struct ProgramCliSchema {
     /// Option flags that consume a value (e.g. `["-R", "--repository"]`).
-    pub options_with_values: &'static [&'static str],
+    pub(in crate::command_lint) options_with_values: &'static [&'static str],
 }
 
 /// Leading-flag layout for a `clap`-style subcommand CLI where global flags (`Arg::global(true)`)
@@ -19,75 +178,47 @@ pub struct ProgramCliSchema {
 ///
 /// On a valid `clap` subcommand invocation, only global flags and standalone top-level flags are
 /// accepted before `<SUBCOMMAND>`, so every non-standalone flag preceding the subcommand is a
-/// global flag that can move after it. Only value-consuming global options need to be listed in
-/// `global_options_with_values` so their value token is not mistaken for the subcommand.
+/// global flag that can move after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SubcommandCliSchema {
+pub(in crate::command_lint) struct SubcommandCliSchema {
     /// Binary base name matched against [`InterceptedCommand::program_base_name`].
-    pub program_name: &'static str,
-    /// Global options that consume a following value argument.
-    pub global_options_with_values: &'static [&'static str],
-    /// Top-level flags that run without a subcommand (such as `"-h"`, `"--help"`, `"--version"`).
-    pub standalone_flags: &'static [&'static str],
+    pub(in crate::command_lint) program_name: &'static str,
+    /// Option specification active before `<SUBCOMMAND>`.
+    pub(in crate::command_lint) pre_subcommand_spec: PreSubcommandSpec,
     /// Whether an initial `+toolchain` selector token (such as `cargo +nightly`) may precede flags.
-    pub allows_plus_toolchain: bool,
+    pub(in crate::command_lint) allows_plus_toolchain: bool,
 }
 
 impl SubcommandCliSchema {
     /// Finds the index of the first subcommand token at or after `start_index`, skipping leading
-    /// global options defined in `self`. Returns `None` on standalone flags, `--`, or no subcommand.
+    /// global options defined in `self.pre_subcommand_spec`. Returns `None` on standalone abort
+    /// flags, `--` before the subcommand, or no valid subcommand token.
     #[must_use]
-    pub fn find_subcommand_index(
+    pub(in crate::command_lint) fn find_subcommand_index(
         &self,
         arguments: &[CommandArg],
         start_index: usize,
     ) -> Option<usize> {
-        let mut iter = arguments.iter().enumerate().skip(start_index);
-        while let Some((index, argument)) = iter.next() {
-            let text = argument.text.as_str();
-            if text == "--" || text == "-" {
-                return None;
-            }
-            let flag_name = text.split_once('=').map_or(text, |(name, _)| name);
-            if self.standalone_flags.contains(&flag_name) {
-                return None;
-            }
-
-            if text.starts_with("--") {
-                if self.global_options_with_values.contains(&text) && iter.next()?.1.text == "--" {
-                    return None;
-                }
-                continue;
-            }
-
-            if text.starts_with('-') {
-                match classify_short_cluster(text, self) {
-                    ShortClusterStep::StandaloneExit => return None,
-                    ShortClusterStep::SingleToken => {}
-                    ShortClusterStep::ConsumesNextValue => {
-                        if iter.next()?.1.text == "--" {
-                            return None;
-                        }
-                    }
-                }
-                continue;
-            }
-
-            return (!argument.has_expansion
-                && !text.is_empty()
-                && text
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
-            .then_some(index);
+        let slice = arguments.get(start_index..)?;
+        let parsed = self.pre_subcommand_spec.parse(slice)?;
+        if parsed.has_double_dash_before_first_positional() {
+            return None;
         }
-        None
+        let first_positional = *parsed.positionals().first()?;
+        if !is_valid_subcommand_token(first_positional) {
+            return None;
+        }
+        slice
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, first_positional))
+            .map(|offset| start_index + offset)
     }
 }
 
 /// Result of looking up the last CLI occurrence of one or more option flag aliases.
 // TODO: Isn't there a more ricr/standar way to do things like memoization?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LastOptionValue<'a> {
+pub(in crate::command_lint) enum LastOptionValue<'a> {
     /// None of the queried flag aliases appeared in the command arguments.
     Absent,
     /// A queried flag appeared without a value operand (for example, dangling before `--` or EOF).
@@ -103,9 +234,9 @@ pub enum LastOptionValue<'a> {
 
 /// Parsed command-line positional arguments and option flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedArgs {
+pub(in crate::command_lint) struct ParsedArgs {
     /// Positional arguments in order (e.g. `["edit", "@-"]`), excluding options and their values.
-    pub positionals: Vec<String>,
+    pub(in crate::command_lint) positionals: Vec<String>,
     options: HashMap<String, Vec<String>>,
     occurrences: Vec<OptionOccurrence>,
 }
@@ -113,19 +244,22 @@ pub struct ParsedArgs {
 impl ParsedArgs {
     /// Parses `arguments` according to `schema`.
     #[must_use]
-    pub fn parse(arguments: &[CommandArg], schema: &ProgramCliSchema) -> Self {
+    pub(in crate::command_lint) fn parse(
+        arguments: &[CommandArg],
+        schema: &ProgramCliSchema,
+    ) -> Self {
         ArgParser::new(arguments, schema.options_with_values).parse()
     }
 
     /// Returns `true` if a boolean or key-value option flag was provided.
     #[must_use]
-    pub fn has_flag(&self, flag: &str) -> bool {
+    pub(in crate::command_lint) fn has_flag(&self, flag: &str) -> bool {
         self.options.contains_key(flag)
     }
 
     /// Returns the first value associated with `option`, if present.
     #[must_use]
-    pub fn get_option(&self, option: &str) -> Option<&str> {
+    pub(in crate::command_lint) fn get_option(&self, option: &str) -> Option<&str> {
         self.options
             .get(option)
             .and_then(|values| values.first())
@@ -134,14 +268,14 @@ impl ParsedArgs {
 
     /// Returns all values associated with `option` in the order they were provided.
     #[must_use]
-    pub fn option_values(&self, option: &str) -> &[String] {
+    pub(in crate::command_lint) fn option_values(&self, option: &str) -> &[String] {
         self.options.get(option).map_or(&[], Vec::as_slice)
     }
 
     /// Returns the last occurrence across `flags` in command-line order, preserving missing-value
     /// and shell-expansion state.
     #[must_use]
-    pub fn last_option_value(&self, flags: &[&str]) -> LastOptionValue<'_> {
+    pub(in crate::command_lint) fn last_option_value(&self, flags: &[&str]) -> LastOptionValue<'_> {
         let Some(occurrence) = self
             .occurrences
             .iter()
@@ -165,18 +299,18 @@ impl ParsedArgs {
 impl InterceptedCommand {
     /// Classifies `self.arguments` into positional arguments and option key-values using `schema`.
     #[must_use]
-    pub fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
+    pub(in crate::command_lint) fn parse_args(&self, schema: &ProgramCliSchema) -> ParsedArgs {
         ParsedArgs::parse(&self.arguments, schema)
     }
 }
 
 /// Leading global option arguments placed before a CLI subcommand.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LeadingGlobalFlags {
+pub(in crate::command_lint) struct LeadingGlobalFlags {
     /// The first leading flag token (e.g. `"--no-pager"` or `"-R"`).
-    pub first_flag: String,
+    pub(in crate::command_lint) first_flag: String,
     /// The subcommand name that followed the leading flags (e.g. `"log"` or `"test"`).
-    pub subcommand: String,
+    pub(in crate::command_lint) subcommand: String,
     flags_span: SourceSpan,
     subcommand_span: SourceSpan,
 }
@@ -186,7 +320,11 @@ impl LeadingGlobalFlags {
     /// leading global flags, preserving any leading program/toolchain prefix and interspersed
     /// redirections.
     #[must_use]
-    pub fn reorder_subcommand_first(&self, command: &InterceptedCommand, source: &str) -> String {
+    pub(in crate::command_lint) fn reorder_subcommand_first(
+        &self,
+        command: &InterceptedCommand,
+        source: &str,
+    ) -> String {
         let prefix_slice = &source[command.span.start..self.flags_span.start];
         let flags_slice = &source[self.flags_span.start..self.flags_span.end];
         let between_slice = source[self.flags_span.end..self.subcommand_span.start].trim();
@@ -204,7 +342,7 @@ impl LeadingGlobalFlags {
 /// Extracts leading global flags placed before a subcommand on `clap`-style subcommand CLIs
 /// matched against `schemas`.
 #[must_use]
-pub fn extract_leading_global_flags(
+pub(in crate::command_lint) fn extract_leading_global_flags(
     command: &InterceptedCommand,
     schemas: &[SubcommandCliSchema],
 ) -> Option<LeadingGlobalFlags> {
@@ -215,9 +353,11 @@ pub fn extract_leading_global_flags(
     let prefix_start = usize::from(
         schema.allows_plus_toolchain
             && arguments.first().is_some_and(|arg| {
-                arg.text
-                    .strip_prefix('+')
-                    .is_some_and(|rest| !rest.is_empty())
+                !arg.is_dynamic()
+                    && arg
+                        .text
+                        .strip_prefix('+')
+                        .is_some_and(|rest| !rest.is_empty())
             }),
     );
     let subcommand_index = schema.find_subcommand_index(arguments, prefix_start)?;
@@ -382,28 +522,30 @@ struct OptionValue {
     has_expansion: bool,
 }
 
-enum ShortClusterStep {
-    SingleToken,
-    ConsumesNextValue,
-    StandaloneExit,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CliOptionOutcome {
+    Continue,
+    StopAsPositional,
 }
 
-fn classify_short_cluster(argument: &str, schema: &SubcommandCliSchema) -> ShortClusterStep {
-    let mut chars = argument.chars().skip(1).peekable();
-    while let Some(character) = chars.next() {
-        let flag = format!("-{character}");
-        if schema.standalone_flags.contains(&flag.as_str()) {
-            return ShortClusterStep::StandaloneExit;
-        }
-        if schema.global_options_with_values.contains(&flag.as_str()) {
-            return if chars.peek().is_some() {
-                ShortClusterStep::SingleToken
-            } else {
-                ShortClusterStep::ConsumesNextValue
-            };
-        }
+fn skip_next_value_token(iter: &mut Iter<'_, CommandArg>) {
+    let next_is_value = iter
+        .as_slice()
+        .first()
+        .is_some_and(|next_arg| next_arg.is_dynamic() || next_arg.text != OPTION_TERMINATOR);
+    if next_is_value {
+        let _ = iter.next();
     }
-    ShortClusterStep::SingleToken
+}
+
+fn is_valid_subcommand_token(argument: &CommandArg) -> bool {
+    let text = argument.text.as_str();
+    !argument.is_dynamic()
+        && !text.is_empty()
+        && !text.starts_with('-')
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 #[cfg(test)]
@@ -427,17 +569,39 @@ mod tests {
     const TEST_SUBCOMMAND_SCHEMAS: &[SubcommandCliSchema] = &[
         SubcommandCliSchema {
             program_name: "tool",
-            global_options_with_values: &["-C", "--directory", "--config"],
-            standalone_flags: &["-h", "--help", "-V", "--version"],
+            pre_subcommand_spec: PreSubcommandSpec {
+                short_values: "C",
+                long_values: &["directory", "config"],
+                abort_shorts: "hV",
+                abort_longs: &["help", "version"],
+            },
             allows_plus_toolchain: false,
         },
         SubcommandCliSchema {
             program_name: "cargo",
-            global_options_with_values: &["-C", "--color", "--config", "-Z"],
-            standalone_flags: &["-h", "--help", "-V", "--version", "--list", "--explain"],
+            pre_subcommand_spec: PreSubcommandSpec {
+                short_values: "CZ",
+                long_values: &["color", "config"],
+                abort_shorts: "hV",
+                abort_longs: &["help", "version", "list", "explain"],
+            },
             allows_plus_toolchain: true,
         },
     ];
+
+    #[test]
+    fn test_find_subcommand_index_stops_before_subcommand_help_flag() {
+        let schema = SubcommandCliSchema {
+            program_name: "tool",
+            pre_subcommand_spec: PreSubcommandSpec {
+                abort_longs: &["help"],
+                ..PreSubcommandSpec::DEFAULT
+            },
+            allows_plus_toolchain: false,
+        };
+        let cmd = InterceptedCommand::parse_all("tool log --help").remove(0);
+        assert_eq!(schema.find_subcommand_index(&cmd.arguments, 0), Some(0));
+    }
 
     #[test]
     fn test_parse_args_basic() {
@@ -612,6 +776,12 @@ mod tests {
     )]
     #[case::subcommand_first_allowed("tool list --quiet -n 5", None)]
     #[case::cargo_plus_toolchain_then_subcommand_allowed("cargo +nightly test --locked", None)]
+    #[case::cargo_dynamic_plus_toolchain_ignored("cargo +$TC --locked test", None)]
+    #[case::malformed_equals_before_subcommand_ignored("tool --=foo list", None)]
+    #[case::dynamic_long_flag_before_subcommand_ignored(r#"tool --directory"$SUFFIX" list"#, None)]
+    #[case::dynamic_short_flag_before_subcommand_ignored(r#"tool -q"$VAR" list"#, None)]
+    #[case::dynamic_lone_dash_flag_before_subcommand_ignored(r#"tool -"$FLAG" list"#, None)]
+    #[case::dynamic_double_dash_before_subcommand_ignored(r#"tool --"$FLAG" list"#, None)]
     #[case::cargo_bare_plus_ignored("cargo + --locked test", None)]
     #[case::non_toolchain_plus_arg_not_treated_as_toolchain("tool +nightly --quiet list", None)]
     #[case::cargo_misplaced_plus_toolchain_after_flag_ignored("cargo --locked +nightly test", None)]
@@ -653,5 +823,21 @@ mod tests {
                 )
             });
         assert_eq!(actual_tuple, expected, "script: `{script}`");
+    }
+
+    #[test]
+    fn test_pre_subcommand_spec_keeps_dynamic_lone_dash_as_positional() {
+        let cmd = InterceptedCommand::parse_all(r#"tool -"$FLAG" target"#).remove(0);
+        let actual: Option<Vec<&str>> =
+            PreSubcommandSpec::DEFAULT
+                .parse(&cmd.arguments)
+                .map(|parsed| {
+                    parsed
+                        .positionals()
+                        .iter()
+                        .map(|arg| arg.text.as_str())
+                        .collect()
+                });
+        assert_eq!(actual.as_deref(), Some(&["-$FLAG", "target"][..]));
     }
 }

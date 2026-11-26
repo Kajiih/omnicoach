@@ -76,11 +76,29 @@ pub struct CommandArg {
     pub text: String,
     /// UTF-8 byte span in [`crate::command_lint::command::ParsedCommand::source`].
     pub span: SourceSpan,
-    /// `true` if the word contains dynamic expansions (`$VAR`, `$(...)`, `$((...))`).
+    /// `true` if the word contains dynamic shell expansions (`$VAR`, `$(...)`, `$((...))`, `~`,
+    /// or `<(...)` / `>(...)` process substitutions).
     pub has_expansion: bool,
+    /// Byte length of the leading prefix of [`Self::text`] that precedes any dynamic expansion.
+    pub(super) static_prefix_len: usize,
 }
 
 impl CommandArg {
+    /// Returns `true` if this word contains dynamic shell expansions (`$VAR`, `$(...)`, `$((...))`,
+    /// `~`, or `<(...)` / `>(...)` process substitutions).
+    #[must_use]
+    pub const fn is_dynamic(&self) -> bool {
+        self.has_expansion
+    }
+
+    /// Leading prefix of [`Self::text`] that precedes any dynamic expansion.
+    #[must_use]
+    pub(super) fn static_prefix(&self) -> &str {
+        self.text
+            .get(..self.static_prefix_len)
+            .unwrap_or(&self.text)
+    }
+
     /// Base executable file name of [`Self::text`] (e.g. `"jj"` for `"/usr/bin/jj"`).
     #[must_use]
     fn executable_base_name(&self) -> &str {
@@ -236,11 +254,13 @@ mod tests {
             text: String::from("jj"),
             span: SourceSpan::new(0, 2),
             has_expansion: false,
+            static_prefix_len: 2,
         };
         let qualified = CommandArg {
             text: String::from("/usr/bin/jj"),
             span: SourceSpan::new(0, 11),
             has_expansion: false,
+            static_prefix_len: 11,
         };
         assert_eq!(bare.executable_base_name(), "jj");
         assert_eq!(qualified.executable_base_name(), "jj");

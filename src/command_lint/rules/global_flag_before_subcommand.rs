@@ -1,7 +1,7 @@
 //! Validation checks for global CLI flags placed before a subcommand.
 
 use crate::command_lint::command::{
-    ParsedCommand, SubcommandCliSchema, extract_leading_global_flags,
+    ParsedCommand, PreSubcommandSpec, SubcommandCliSchema, extract_leading_global_flags,
 };
 use crate::command_lint::contract::{CommandEnv, CommandRule};
 use crate::command_lint::vcs::JJ_SUBCOMMAND_CLI_SCHEMA;
@@ -72,24 +72,32 @@ const SUBCOMMAND_CLI_SCHEMAS: &[SubcommandCliSchema] = &[
     JJ_SUBCOMMAND_CLI_SCHEMA,
     SubcommandCliSchema {
         program_name: "cargo",
-        global_options_with_values: &["-C", "--color", "--config", "-Z"],
-        standalone_flags: &["-h", "--help", "-V", "--version", "--list", "--explain"],
+        pre_subcommand_spec: PreSubcommandSpec {
+            short_values: "CZ",
+            long_values: &["color", "config"],
+            abort_shorts: "hV",
+            abort_longs: &["help", "version", "list", "explain"],
+        },
         allows_plus_toolchain: true,
     },
     SubcommandCliSchema {
         program_name: "uv",
-        global_options_with_values: &[
-            "--color",
-            "--directory",
-            "--project",
-            "--config-file",
-            "--cache-dir",
-            "--python",
-            "--python-preference",
-            "--python-fetch",
-            "--allow-insecure-host",
-        ],
-        standalone_flags: &["-h", "--help", "-V", "--version"],
+        pre_subcommand_spec: PreSubcommandSpec {
+            long_values: &[
+                "color",
+                "directory",
+                "project",
+                "config-file",
+                "cache-dir",
+                "python",
+                "python-preference",
+                "python-fetch",
+                "allow-insecure-host",
+            ],
+            abort_shorts: "hV",
+            abort_longs: &["help", "version"],
+            ..PreSubcommandSpec::DEFAULT
+        },
         allows_plus_toolchain: false,
     },
 ];
@@ -142,6 +150,8 @@ crate::test_utils::command_rule_test!(
             standalone_cargo_short_version_cluster => "cargo -qV test",
             cargo_z_script_spaced => "cargo +nightly -Z script foo.rs",
             cargo_z_script_glued => "cargo +nightly -Zscript foo.rs",
+            cargo_z_script_short_equals => "cargo +nightly -Z=script foo.rs",
+            cargo_flags_only_long_value => "cargo --color never",
             uv_short_c_does_not_consume_directory_value => "uv -C /tmp/app run pytest",
             flags_without_subcommand => "jj -R /tmp/ws --no-pager",
             double_dash_terminator => "jj --no-pager -- log",

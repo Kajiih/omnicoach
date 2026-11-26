@@ -478,10 +478,24 @@ impl ScriptWalker<'_> {
                         }
                         AssignmentValue::Array(_) => {
                             let assigned = self.parse_assignment(assignment, full_word, sink);
+                            let static_prefix_len = if assigned.value.is_dynamic() {
+                                full_word
+                                    .value
+                                    .get(assigned.name.len()..)
+                                    .and_then(|after_name| {
+                                        after_name
+                                            .find('=')
+                                            .map(|eq_index| assigned.name.len() + eq_index + 1)
+                                    })
+                                    .unwrap_or(0)
+                            } else {
+                                full_word.value.len()
+                            };
                             arguments.push(CommandArg {
                                 text: full_word.value.clone(),
                                 span: assigned.span,
-                                has_expansion: assigned.value.has_expansion,
+                                has_expansion: assigned.value.is_dynamic(),
+                                static_prefix_len,
                             });
                         }
                     },
@@ -501,6 +515,7 @@ impl ScriptWalker<'_> {
                     text: String::new(),
                     span,
                     has_expansion: true,
+                    static_prefix_len: 0,
                 });
                 let pushed = push_unique_scope(sink.scopes, ShellScope::ProcessSubstitution);
                 let mut proc_cwd = sink.cwd.clone();
@@ -586,7 +601,7 @@ impl ScriptWalker<'_> {
                     Token::Word(word_text, _) if depth == 1 => {
                         has_expansion |= self
                             .parse_word_at_span(word_text, token_span, sink)
-                            .has_expansion;
+                            .is_dynamic();
                     }
                     _ => {}
                 }
@@ -596,6 +611,7 @@ impl ScriptWalker<'_> {
             text: String::new(),
             span: value_span,
             has_expansion,
+            static_prefix_len: 0,
         }
     }
 
@@ -757,33 +773,20 @@ impl ScriptWalker<'_> {
                 text: raw.to_owned(),
                 span,
                 has_expansion: false,
+                static_prefix_len: raw.len(),
             };
         };
 
-        let mut unquoted = String::with_capacity(raw.len());
-        let mut has_expansion = false;
-        Self::collect_word_pieces(
-            &pieces,
-            span.start,
-            raw,
-            &mut unquoted,
-            &mut has_expansion,
-            sink,
-        );
-
-        CommandArg {
-            text: unquoted,
-            span,
-            has_expansion,
-        }
+        let mut builder = WordBuilder::with_capacity(raw.len());
+        Self::collect_word_pieces(&pieces, span.start, raw, &mut builder, sink);
+        builder.finish(span)
     }
 
     fn collect_word_pieces(
         pieces: &[WordPieceWithSource],
         word_byte_start: usize,
         raw_word: &str,
-        unquoted: &mut String,
-        has_expansion: &mut bool,
+        builder: &mut WordBuilder,
         sink: &mut NestedSink<'_>,
     ) {
         for piece_with_source in pieces {
@@ -791,29 +794,21 @@ impl ScriptWalker<'_> {
                 WordPiece::Text(text)
                 | WordPiece::SingleQuotedText(text)
                 | WordPiece::AnsiCQuotedText(text) => {
-                    unquoted.push_str(text);
+                    builder.push_static(text);
                 }
                 WordPiece::EscapeSequence(seq) => {
-                    unquoted.push_str(seq.strip_prefix('\\').unwrap_or(seq));
+                    builder.push_static(seq.strip_prefix('\\').unwrap_or(seq));
                 }
                 WordPiece::DoubleQuotedSequence(inner)
                 | WordPiece::GettextDoubleQuotedSequence(inner) => {
-                    Self::collect_word_pieces(
-                        inner,
-                        word_byte_start,
-                        raw_word,
-                        unquoted,
-                        has_expansion,
-                        sink,
-                    );
+                    Self::collect_word_pieces(inner, word_byte_start, raw_word, builder, sink);
                 }
                 WordPiece::CommandSubstitution(inner_script) => {
-                    *has_expansion = true;
-                    if let Some(raw_slice) =
-                        raw_word.get(piece_with_source.start_index..piece_with_source.end_index)
-                    {
-                        unquoted.push_str(raw_slice);
-                    }
+                    builder.push_expansion(
+                        raw_word,
+                        piece_with_source.start_index,
+                        piece_with_source.end_index,
+                    );
                     // `$(` is 2 ASCII bytes before `inner_script`.
                     let inner_base = word_byte_start + piece_with_source.start_index + 2;
                     let pushed = push_unique_scope(sink.scopes, ShellScope::CommandSubstitution);
@@ -829,12 +824,11 @@ impl ScriptWalker<'_> {
                     }
                 }
                 WordPiece::BackquotedCommandSubstitution(inner_script) => {
-                    *has_expansion = true;
-                    if let Some(raw_slice) =
-                        raw_word.get(piece_with_source.start_index..piece_with_source.end_index)
-                    {
-                        unquoted.push_str(raw_slice);
-                    }
+                    builder.push_expansion(
+                        raw_word,
+                        piece_with_source.start_index,
+                        piece_with_source.end_index,
+                    );
                     // `` ` `` is 1 ASCII byte before `inner_script`.
                     let inner_base = word_byte_start + piece_with_source.start_index + 1;
                     let pushed = push_unique_scope(sink.scopes, ShellScope::CommandSubstitution);
@@ -852,12 +846,11 @@ impl ScriptWalker<'_> {
                 WordPiece::ParameterExpansion(_)
                 | WordPiece::ArithmeticExpression(_)
                 | WordPiece::TildeExpansion(_) => {
-                    *has_expansion = true;
-                    if let Some(raw_slice) =
-                        raw_word.get(piece_with_source.start_index..piece_with_source.end_index)
-                    {
-                        unquoted.push_str(raw_slice);
-                    }
+                    builder.push_expansion(
+                        raw_word,
+                        piece_with_source.start_index,
+                        piece_with_source.end_index,
+                    );
                 }
             }
         }
@@ -868,6 +861,42 @@ impl ScriptWalker<'_> {
             || SourceSpan::new(0, 0),
             |loc| self.context.char_offsets.map_span(&loc),
         )
+    }
+}
+
+struct WordBuilder {
+    text: String,
+    first_expansion_offset: Option<usize>,
+}
+
+impl WordBuilder {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            text: String::with_capacity(capacity),
+            first_expansion_offset: None,
+        }
+    }
+
+    fn push_static(&mut self, piece: &str) {
+        self.text.push_str(piece);
+    }
+
+    fn push_expansion(&mut self, raw_word: &str, start_index: usize, end_index: usize) {
+        self.first_expansion_offset.get_or_insert(self.text.len());
+        if let Some(raw_slice) = raw_word.get(start_index..end_index) {
+            self.text.push_str(raw_slice);
+        }
+    }
+
+    fn finish(self, span: SourceSpan) -> CommandArg {
+        let has_expansion = self.first_expansion_offset.is_some();
+        let static_prefix_len = self.first_expansion_offset.unwrap_or(self.text.len());
+        CommandArg {
+            text: self.text,
+            span,
+            has_expansion,
+            static_prefix_len,
+        }
     }
 }
 
@@ -939,14 +968,14 @@ fn classify_cd_effect(program: &CommandArg, arguments: &[CommandArg]) -> CdEffec
     let mut target: Option<&CommandArg> = None;
     for arg in cd_args {
         if !options_done {
-            if arg.text == "--" && !arg.has_expansion {
+            if arg.text == "--" && !arg.is_dynamic() {
                 options_done = true;
                 continue;
             }
             if arg.text == "-" {
                 return CdEffect::Unknown;
             }
-            if !arg.has_expansion && arg.text.starts_with('-') {
+            if !arg.is_dynamic() && arg.text.starts_with('-') {
                 let valid_flags = arg.text[1..]
                     .chars()
                     .all(|flag| matches!(flag, 'L' | 'P' | 'e' | '@'));
@@ -966,7 +995,7 @@ fn classify_cd_effect(program: &CommandArg, arguments: &[CommandArg]) -> CdEffec
     let Some(chosen) = target else {
         return CdEffect::Unknown;
     };
-    if chosen.has_expansion || chosen.text.is_empty() || chosen.text == "-" {
+    if chosen.is_dynamic() || chosen.text.is_empty() || chosen.text == "-" {
         CdEffect::Unknown
     } else {
         CdEffect::Static(chosen.text.clone())
@@ -982,19 +1011,19 @@ fn unwrap_builtin_wrapper<'a>(
     program: &'a CommandArg,
     arguments: &'a [CommandArg],
 ) -> Option<EffectiveCommand<'a>> {
-    if program.has_expansion {
+    if program.is_dynamic() {
         return None;
     }
     if matches!(program.text.as_str(), "builtin" | "command") {
         let mut rest = arguments;
         if rest
             .first()
-            .is_some_and(|arg| !arg.has_expansion && arg.text == "--")
+            .is_some_and(|arg| !arg.is_dynamic() && arg.text == "--")
         {
             rest = &rest[1..];
         }
         let (first, tail) = rest.split_first()?;
-        (!first.has_expansion).then_some(EffectiveCommand {
+        (!first.is_dynamic()).then_some(EffectiveCommand {
             program: first.text.as_str(),
             arguments: tail,
         })

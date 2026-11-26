@@ -7,10 +7,11 @@ use super::revset::{
     intersect_revset_with_mutable, is_bounded_jj_revset, join_revset_union,
 };
 use crate::command_lint::command::{
-    InterceptedCommand, LastOptionValue, ParsedArgs, ProgramCliSchema, SubcommandCliSchema,
+    InterceptedCommand, LastOptionValue, ParsedArgs, PreSubcommandSpec, ProgramCliSchema,
+    SubcommandCliSchema,
 };
 
-// TODO: Should we add some abstraction for these? 
+// TODO: Should we add some abstraction for these?
 // TODO: at least something like an enum or maybe something better designed that we can generalize to other tools too?
 const JJ_PROGRAM: &str = "jj";
 const SUBCOMMAND_GIT: &str = "git";
@@ -106,9 +107,6 @@ macro_rules! jj_options_with_values {
     };
 }
 
-/// Global Jujutsu CLI options that consume a following value argument.
-const JJ_GLOBAL_OPTIONS_WITH_VALUES: &[&str] = jj_options_with_values!();
-
 /// Standalone top-level flags on `jj` that print help or version without running a subcommand.
 const JJ_STANDALONE_FLAGS: &[&str] = &[
     FLAG_HELP_SHORT,
@@ -120,8 +118,20 @@ const JJ_STANDALONE_FLAGS: &[&str] = &[
 /// Leading-flag schema for `jj` subcommands (`clap` global options).
 pub const JJ_SUBCOMMAND_CLI_SCHEMA: SubcommandCliSchema = SubcommandCliSchema {
     program_name: JJ_PROGRAM,
-    global_options_with_values: JJ_GLOBAL_OPTIONS_WITH_VALUES,
-    standalone_flags: JJ_STANDALONE_FLAGS,
+    pre_subcommand_spec: PreSubcommandSpec {
+        short_values: "R",
+        long_values: &[
+            "repository",
+            "at-operation",
+            "at-op",
+            "color",
+            "config",
+            "config-toml",
+            "config-file",
+        ],
+        abort_shorts: "hV",
+        abort_longs: &["help", "version"],
+    },
     allows_plus_toolchain: false,
 };
 
