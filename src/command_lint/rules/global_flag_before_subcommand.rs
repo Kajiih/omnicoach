@@ -79,7 +79,6 @@ const SUBCOMMAND_CLI_SCHEMAS: &[SubcommandCliSchema] = &[
     SubcommandCliSchema {
         program_name: "uv",
         global_options_with_values: &[
-            "-C",
             "--color",
             "--directory",
             "--project",
@@ -143,6 +142,7 @@ crate::test_utils::command_rule_test!(
             standalone_cargo_short_version_cluster => "cargo -qV test",
             cargo_z_script_spaced => "cargo +nightly -Z script foo.rs",
             cargo_z_script_glued => "cargo +nightly -Zscript foo.rs",
+            uv_short_c_does_not_consume_directory_value => "uv -C /tmp/app run pytest",
             flags_without_subcommand => "jj -R /tmp/ws --no-pager",
             double_dash_terminator => "jj --no-pager -- log",
         ],
@@ -160,7 +160,7 @@ crate::test_utils::command_rule_test!(
             cargo_leading_short_cluster => "cargo -vC /tmp/crate check",
             uv_leading_boolean_flag => "uv --offline sync",
             uv_leading_option_with_value => "uv --directory /tmp/app run pytest",
-            uv_leading_short_directory_option => "uv -C /tmp/app run pytest",
+            uv_leading_short_quiet_flag => "uv -q run pytest",
             uv_leading_allow_insecure_host => "uv --allow-insecure-host example.com run pytest",
             inside_pipeline => "jj --no-pager log -n 5 | head" => "jj --no-pager log -n 5",
             inside_command_substitution => r#"echo "$(cargo --quiet check)""# => "cargo --quiet check",
