@@ -19,18 +19,29 @@ impl ParsedCommand {
     /// and `$(...)` / `` `...` `` command substitutions).
     #[must_use]
     pub fn new(raw_command: &str) -> Self {
-        let mut commands = Vec::new();
-        let has_syntax_error = !parse_script_into(
-            raw_command,
-            0,
-            &mut Vec::new(),
-            &WorkingDirState::Known(PathBuf::new()),
-            &mut commands,
-        );
-        Self {
-            source: raw_command.to_string(),
-            has_syntax_error,
-            commands,
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            let mut commands = Vec::new();
+            let has_syntax_error = !brush_backend::parse_script_into(
+                raw_command,
+                0,
+                &mut Vec::new(),
+                &WorkingDirState::initial(),
+                &mut commands,
+            );
+            Self {
+                source: raw_command.to_string(),
+                has_syntax_error,
+                commands,
+            }
+        }
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            Self {
+                source: raw_command.to_string(),
+                has_syntax_error: true,
+                commands: Vec::new(),
+            }
         }
     }
 
@@ -122,9 +133,7 @@ impl InterceptedCommand {
                 return Some(normalize_path_lexically(target));
             }
         }
-        let WorkingDirState::Known(offset) = &self.working_dir else {
-            return None;
-        };
+        let offset = self.working_dir.known_offset()?;
         let after_cd = if offset.as_os_str().is_empty() {
             base_dir.to_path_buf()
         } else {
@@ -247,41 +256,37 @@ pub enum ShellScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum WorkingDirState {
-    Known(PathBuf),
-    Unknown,
-}
+pub(super) struct WorkingDirState(Option<PathBuf>);
 
 impl WorkingDirState {
+    fn known_offset(&self) -> Option<&Path> {
+        self.0.as_deref()
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+impl WorkingDirState {
+    pub(super) const fn initial() -> Self {
+        Self(Some(PathBuf::new()))
+    }
+
+    pub(super) const fn unknown() -> Self {
+        Self(None)
+    }
+
     pub(super) fn apply_static_cd(&mut self, target: &Path) {
         if is_rooted_path(target) {
-            *self = Self::Known(target.to_path_buf());
-        } else if let Self::Known(current) = self {
+            self.0 = Some(target.to_path_buf());
+        } else if let Some(current) = &mut self.0 {
             *current = join_anchored_path(current, target);
         }
     }
 
     pub(super) fn merge(&mut self, other: &Self) {
         if self != other {
-            *self = Self::Unknown;
+            self.0 = None;
         }
     }
-}
-
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-use self::brush_backend::parse_script_into;
-
-/// Stub shell parser on browser `wasm32-unknown-unknown` builds where `brush-parser` is omitted
-/// so `omnicoach_playground.wasm` links with zero `wasm-bindgen` host imports.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-const fn parse_script_into(
-    _source: &str,
-    _base_byte_offset: usize,
-    _scopes: &mut Vec<ShellScope>,
-    _initial_cwd: &WorkingDirState,
-    _out: &mut Vec<InterceptedCommand>,
-) -> bool {
-    false
 }
 
 fn join_anchored_path(base: &Path, child: &Path) -> PathBuf {

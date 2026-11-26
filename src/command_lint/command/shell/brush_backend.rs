@@ -440,7 +440,7 @@ impl ScriptWalker<'_> {
             match cd_effect {
                 CdEffect::None => {}
                 CdEffect::Static(target) => cwd.apply_static_cd(Path::new(&target)),
-                CdEffect::Unknown => *cwd = WorkingDirState::Unknown,
+                CdEffect::Unknown => *cwd = WorkingDirState::unknown(),
             }
         }
 
