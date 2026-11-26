@@ -200,7 +200,8 @@ define_architecture! {
     CommandLintCommand  => [Diagnostic, Paths] (owns_external: ["brush_parser"]) (modules: {
         model => [],
         cli_args => [model],
-        shell => [model] (modules: {
+        wrappers => [model, cli_args],
+        shell => [model, wrappers] (modules: {
             span_projection => [],
             lowering => [span_projection],
         }),

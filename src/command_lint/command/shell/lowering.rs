@@ -18,6 +18,7 @@ use super::super::model::{
     CommandArg, CommandRedirect, EnvAssignment, InterceptedCommand, RedirectKind, RedirectTarget,
     ShellScope, WorkingDirState,
 };
+use super::super::wrappers::{CdEffect, classify_cd_effect};
 use super::span_projection::{CharToByteMap, hull_span, trim_trailing_newline};
 use crate::diagnostic::SourceSpan;
 
@@ -948,99 +949,6 @@ struct NestedSink<'a> {
 enum AssignmentSink<'a> {
     Env(&'a mut Vec<EnvAssignment>),
     SuffixArg,
-}
-
-enum CdEffect {
-    None,
-    Static(String),
-    Unknown,
-}
-
-/// Classifies the working-directory effect of a shell command (`cd`, `builtin cd`, `command cd`,
-/// `pushd`, or `popd`).
-///
-/// Environment-dependent directory jumps (bare `cd`, `cd -`, `cd old new`, `cd "$DIR"`,
-/// `cd ~/ws`, `pushd`, `popd`) return [`CdEffect::Unknown`] so later commands never inherit a
-/// stale previous directory.
-fn classify_cd_effect(program: &CommandArg, arguments: &[CommandArg]) -> CdEffect {
-    let Some(effective) = unwrap_builtin_wrapper(program, arguments) else {
-        return CdEffect::None;
-    };
-    let cd_args = match effective.program {
-        "cd" => effective.arguments,
-        "pushd" | "popd" => return CdEffect::Unknown,
-        _ => return CdEffect::None,
-    };
-
-    let mut options_done = false;
-    let mut target: Option<&CommandArg> = None;
-    for arg in cd_args {
-        if !options_done {
-            if arg.text == "--" && !arg.is_dynamic() {
-                options_done = true;
-                continue;
-            }
-            if arg.text == "-" {
-                return CdEffect::Unknown;
-            }
-            if !arg.is_dynamic() && arg.text.starts_with('-') {
-                let valid_flags = arg.text[1..]
-                    .chars()
-                    .all(|flag| matches!(flag, 'L' | 'P' | 'e' | '@'));
-                if valid_flags {
-                    continue;
-                }
-                return CdEffect::Unknown;
-            }
-            options_done = true;
-        }
-        if target.is_some() {
-            return CdEffect::Unknown;
-        }
-        target = Some(arg);
-    }
-
-    let Some(chosen) = target else {
-        return CdEffect::Unknown;
-    };
-    if chosen.is_dynamic() || chosen.text.is_empty() || chosen.text == "-" {
-        CdEffect::Unknown
-    } else {
-        CdEffect::Static(chosen.text.clone())
-    }
-}
-
-struct EffectiveCommand<'a> {
-    program: &'a str,
-    arguments: &'a [CommandArg],
-}
-
-fn unwrap_builtin_wrapper<'a>(
-    program: &'a CommandArg,
-    arguments: &'a [CommandArg],
-) -> Option<EffectiveCommand<'a>> {
-    if program.is_dynamic() {
-        return None;
-    }
-    if matches!(program.text.as_str(), "builtin" | "command") {
-        let mut rest = arguments;
-        if rest
-            .first()
-            .is_some_and(|arg| !arg.is_dynamic() && arg.text == "--")
-        {
-            rest = &rest[1..];
-        }
-        let (first, tail) = rest.split_first()?;
-        (!first.is_dynamic()).then_some(EffectiveCommand {
-            program: first.text.as_str(),
-            arguments: tail,
-        })
-    } else {
-        Some(EffectiveCommand {
-            program: program.text.as_str(),
-            arguments,
-        })
-    }
 }
 
 /// Pushes `scope` onto `scopes` if it is not already the innermost scope, returning `true` when pushed.

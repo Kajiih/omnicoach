@@ -56,25 +56,31 @@ impl CliSpec {
         arguments: &'a [CommandArg],
     ) -> Option<ParsedCli<'a>> {
         let mut positionals = Vec::new();
+        let mut positional_indices = Vec::new();
         let mut occurrences = Vec::new();
         let mut double_dash_positional_index = None;
-        let mut iter = arguments.iter();
+        let mut iter = arguments.iter().enumerate();
 
-        while let Some(argument) = iter.next() {
+        while let Some((arg_index, argument)) = iter.next() {
             let static_prefix = argument.static_prefix();
             let full_text = argument.text.as_str();
 
             if !argument.is_dynamic() && full_text == OPTION_TERMINATOR {
                 double_dash_positional_index = Some(positionals.len());
-                positionals.extend(iter.by_ref());
+                push_iter_positionals(&mut iter, &mut positionals, &mut positional_indices);
                 break;
             }
 
             if let Some(after_dashes) = static_prefix.strip_prefix(OPTION_TERMINATOR) {
                 if after_dashes.is_empty() || after_dashes.starts_with('=') {
                     if self.order == OptionOrder::StopAtFirstPositional {
-                        positionals.push(argument);
-                        positionals.extend(iter.by_ref());
+                        push_remaining_positionals(
+                            arg_index,
+                            argument,
+                            &mut iter,
+                            &mut positionals,
+                            &mut positional_indices,
+                        );
                         break;
                     }
                     continue;
@@ -82,8 +88,13 @@ impl CliSpec {
                 if self.parse_long_option(argument, after_dashes, &mut iter, &mut occurrences)?
                     == CliOptionOutcome::StopAsPositional
                 {
-                    positionals.push(argument);
-                    positionals.extend(iter.by_ref());
+                    push_remaining_positionals(
+                        arg_index,
+                        argument,
+                        &mut iter,
+                        &mut positionals,
+                        &mut positional_indices,
+                    );
                     break;
                 }
                 continue;
@@ -95,22 +106,35 @@ impl CliSpec {
                 if self.parse_short_cluster(argument, short_prefix, &mut iter, &mut occurrences)?
                     == CliOptionOutcome::StopAsPositional
                 {
-                    positionals.push(argument);
-                    positionals.extend(iter.by_ref());
+                    push_remaining_positionals(
+                        arg_index,
+                        argument,
+                        &mut iter,
+                        &mut positionals,
+                        &mut positional_indices,
+                    );
                     break;
                 }
                 continue;
             }
 
-            positionals.push(argument);
             if self.order == OptionOrder::StopAtFirstPositional {
-                positionals.extend(iter.by_ref());
+                push_remaining_positionals(
+                    arg_index,
+                    argument,
+                    &mut iter,
+                    &mut positionals,
+                    &mut positional_indices,
+                );
                 break;
             }
+            positionals.push(argument);
+            positional_indices.push(arg_index);
         }
 
         Some(ParsedCli {
             positionals,
+            positional_indices,
             occurrences,
             double_dash_positional_index,
         })
@@ -120,7 +144,7 @@ impl CliSpec {
         &self,
         argument: &'a CommandArg,
         after_dashes: &'a str,
-        iter: &mut std::slice::Iter<'a, CommandArg>,
+        iter: &mut std::iter::Enumerate<std::slice::Iter<'a, CommandArg>>,
         occurrences: &mut Vec<OptionOccurrence<'a>>,
     ) -> Option<CliOptionOutcome> {
         if let Some((long_name, _)) = after_dashes.split_once('=') {
@@ -168,7 +192,7 @@ impl CliSpec {
         &self,
         argument: &'a CommandArg,
         short_prefix: &'a str,
-        iter: &mut std::slice::Iter<'a, CommandArg>,
+        iter: &mut std::iter::Enumerate<std::slice::Iter<'a, CommandArg>>,
         occurrences: &mut Vec<OptionOccurrence<'a>>,
     ) -> Option<CliOptionOutcome> {
         let full_text = argument.text.as_str();
@@ -281,6 +305,7 @@ pub(in crate::command_lint) enum FlagName<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::command_lint) struct ParsedCli<'a> {
     positionals: Vec<&'a CommandArg>,
+    positional_indices: Vec<usize>,
     occurrences: Vec<OptionOccurrence<'a>>,
     double_dash_positional_index: Option<usize>,
 }
@@ -290,6 +315,20 @@ impl<'a> ParsedCli<'a> {
     #[must_use]
     pub(in crate::command_lint) fn positionals(&self) -> &[&'a CommandArg] {
         &self.positionals
+    }
+
+    /// Original index into the input `arguments` slice for the `positional_ordinal`-th positional
+    /// operand, if present.
+    #[must_use]
+    pub(super) fn positional_arg_index(&self, positional_ordinal: usize) -> Option<usize> {
+        self.positional_indices.get(positional_ordinal).copied()
+    }
+
+    /// Parsed option occurrences in command-line order.
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    #[must_use]
+    pub(super) fn occurrences(&self) -> &[OptionOccurrence<'a>] {
+        &self.occurrences
     }
 
     /// Returns `true` if `flag` (such as `FlagName::Short('u')` or `FlagName::Long("no-edit")`)
@@ -351,8 +390,11 @@ impl<'a> ParsedCli<'a> {
             })
     }
 
-    const fn has_double_dash_before_first_positional(&self) -> bool {
-        matches!(self.double_dash_positional_index, Some(0))
+    /// Returns `true` if `--` preceded or appeared at the `positional_ordinal`-th positional operand.
+    #[must_use]
+    pub(super) fn has_double_dash_before_positional(&self, positional_ordinal: usize) -> bool {
+        self.double_dash_positional_index
+            .is_some_and(|dd| positional_ordinal >= dd)
     }
 }
 
@@ -384,17 +426,12 @@ impl SubcommandCliSchema {
     ) -> Option<usize> {
         let slice = arguments.get(start_index..)?;
         let parsed = self.pre_subcommand_spec.into_cli_spec().parse(slice)?;
-        if parsed.has_double_dash_before_first_positional() {
+        if parsed.has_double_dash_before_positional(0) {
             return None;
         }
-        let first_positional = *parsed.positionals().first()?;
-        if !is_valid_subcommand_token(first_positional) {
-            return None;
-        }
-        slice
-            .iter()
-            .position(|candidate| std::ptr::eq(candidate, first_positional))
-            .map(|offset| start_index + offset)
+        let offset = parsed.positional_arg_index(0)?;
+        let first_positional = &slice[offset];
+        is_valid_subcommand_token(first_positional).then_some(start_index + offset)
     }
 }
 
@@ -472,8 +509,8 @@ pub(in crate::command_lint) fn extract_leading_global_flags(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct OptionOccurrence<'a> {
-    flag: FlagName<'a>,
+pub(super) struct OptionOccurrence<'a> {
+    pub(super) flag: FlagName<'a>,
     value: Option<OptValue<'a>>,
 }
 
@@ -493,17 +530,40 @@ struct OptValue<'a> {
     is_dynamic: bool,
 }
 
+fn push_remaining_positionals<'a>(
+    first_index: usize,
+    first_arg: &'a CommandArg,
+    iter: &mut std::iter::Enumerate<std::slice::Iter<'a, CommandArg>>,
+    positionals: &mut Vec<&'a CommandArg>,
+    positional_indices: &mut Vec<usize>,
+) {
+    positionals.push(first_arg);
+    positional_indices.push(first_index);
+    push_iter_positionals(iter, positionals, positional_indices);
+}
+
+fn push_iter_positionals<'a>(
+    iter: &mut std::iter::Enumerate<std::slice::Iter<'a, CommandArg>>,
+    positionals: &mut Vec<&'a CommandArg>,
+    positional_indices: &mut Vec<usize>,
+) {
+    for (rem_index, rem_arg) in iter.by_ref() {
+        positionals.push(rem_arg);
+        positional_indices.push(rem_index);
+    }
+}
+
 fn consume_next_value_token<'a>(
-    iter: &mut std::slice::Iter<'a, CommandArg>,
+    iter: &mut std::iter::Enumerate<std::slice::Iter<'a, CommandArg>>,
 ) -> Option<OptValue<'a>> {
     let next_is_value = iter
-        .as_slice()
-        .first()
-        .is_some_and(|next_arg| next_arg.is_dynamic() || next_arg.text != OPTION_TERMINATOR);
+        .clone()
+        .next()
+        .is_some_and(|(_, next_arg)| next_arg.is_dynamic() || next_arg.text != OPTION_TERMINATOR);
     if !next_is_value {
         return None;
     }
-    let next_arg = iter.next()?;
+    let (_, next_arg) = iter.next()?;
     Some(OptValue {
         text: &next_arg.text,
         is_dynamic: next_arg.is_dynamic(),
