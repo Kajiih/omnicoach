@@ -2,6 +2,8 @@
 
 This guide outlines principles for designing high-signal, actionable lint rules in Omni. It focuses on the design philosophy of rules—not engine implementation details. When designing a new rule or re-evaluating an existing one, start from the method in §7.
 
+Command rules additionally follow [ADR 015](decisions/015_command_coaching_scope.md), which bounds how deeply a rule may interpret a shell command.
+
 ---
 
 ## 1. Rule Granularity: 1 Rule = 1 Antipattern
