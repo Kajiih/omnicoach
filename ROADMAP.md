@@ -6,6 +6,12 @@ Items here represent design areas and technical directions to evaluate rather th
 
 ## Adhoc
 
+- Investigate enforcing test rules depending on what code they can use
+  - "sanity check" unit tests that are allowed (or have to?) use complex internal/private code/path to test it and ensure it works as expected
+  - "public interface" unit tests, that use only the public interface
+  - integration, end to end, etc
+  - each should have different rules about what they test and how
+- letting agent rm in `/tmp/` or `/tmp/<sesion>_name` and force it to write here?
 - Per file ignores/configs should be defined colocatedly within the file (and/or should use the declared components to ignore/config across the declared components rather than just modules)
 - --include-tests on omnicoach graph slice: slice currently excludes tests/** callers, forcing a second rg call whenever finding which unit tests exercise a symbol before editing.
 - Add stmt, ann, assign, to banned abbreviations.
