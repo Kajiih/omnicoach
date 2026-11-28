@@ -1,6 +1,6 @@
 # Rule Design Guide & Best Practices
 
-This guide outlines principles for designing high-signal, actionable lint rules in Omni. It focuses on the design philosophy of rules—not engine implementation details.
+This guide outlines principles for designing high-signal, actionable lint rules in Omni. It focuses on the design philosophy of rules—not engine implementation details. When designing a new rule or re-evaluating an existing one, start from the method in §7.
 
 ---
 
@@ -76,7 +76,21 @@ The field-by-field contract is `RuleDoc` (`src/rule_declaration/documentation.rs
 
 ---
 
-## 7. Where the Mechanics Live
+## 7. Design from First Principles; Exceptions Are Signals
+
+Design a new rule, or re-evaluate an existing one, by answering these questions in order:
+
+1. **Intent**: What was the author (developer or agent) trying to do when writing the flagged construct?
+2. **Pit of success**: Which single proper tool or idiom serves that intent, and is it available wherever the rule runs? If none exists, the rule has nothing to suggest (§2).
+3. **Abstraction**: Which concept does the rule key on, and does it match the intent, or only a surface syntax that happens to correlate with it?
+4. **Exceptions as evidence**: For every exemption, and every known false positive or false negative, which assumption does it expose?
+5. **Redesign**: Correct the abstraction first, then weigh the exceptions that remain.
+
+An exception is a design signal, not only a cost. Before adding one, check that the rule is still RICR (robust, idiomatic, coherent, readable) and that it rests on the right abstraction and assumptions. If either fails, fix the rule instead. Only when both hold, balance the complexity the exception adds against the expressiveness it buys. Exceptions that survive are documented as §6 describes.
+
+---
+
+## 8. Where the Mechanics Live
 
 This guide is about *why*. For the steps to add a rule, follow [adding_a_rule.md](adding_a_rule.md). The contracts live next to the code, so they cannot drift from it:
 
